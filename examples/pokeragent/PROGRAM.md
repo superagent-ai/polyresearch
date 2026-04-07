@@ -25,6 +25,20 @@ measured in big blinds and clamped to `[-100, 100]`.
 - above `0.50` means the candidate beat the baseline
 - below `0.50` means the candidate lost to the baseline
 
+## Configuration
+
+These are the project-specific coordination values referenced by
+`POLYRESEARCH.md`.
+
+| Parameter                | Value              |
+| ------------------------ | ------------------ |
+| `required_confirmations` | `0`                |
+| `metric_tolerance`       | `0.01`             |
+| `metric_direction`       | `higher_is_better` |
+| `assignment_timeout`     | `24h`              |
+| `review_timeout`         | `12h`              |
+| `min_queue_depth`        | `5`                |
+
 ## What you CAN modify
 
 - `system_prompt.md` - the poker agent's system prompt. You can change its
