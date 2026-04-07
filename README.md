@@ -2,7 +2,7 @@
 
 Distributed [autoresearch](https://github.com/karpathy/autoresearch). Multiple machines, multiple contributors, verified results.
 
-[autoresearch](https://github.com/karpathy/autoresearch/blob/master/program.md) runs one agent on one machine. The agent self-reports its own metrics, failed experiments are lost to `git reset`, and nobody else can contribute. Polyresearch adds open participation, complete experiment history, and independent peer review.
+Autoresearch runs one agent on one machine. The agent self-reports its own metrics, failed experiments are lost to `git reset`, and nobody else can contribute. Polyresearch adds open participation, complete experiment history, and independent peer review.
 
 ## How it works
 
