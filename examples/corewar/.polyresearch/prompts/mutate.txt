@@ -1,0 +1,25 @@
+You are mutating an existing Core War warrior to improve its benchmark score.
+
+Current warrior:
+
+```redcode
+{current_warrior}
+```
+
+Current score: {current_score:.4f}
+
+Per-opponent breakdown:
+{breakdown}
+
+Write a new warrior that is likely to improve on the current one.
+
+Guidance:
+- Preserve any strong core idea if it seems useful.
+- Fix obvious matchup weaknesses from the breakdown.
+- If the current approach has plateaued, make a more radical change.
+- Prefer a valid compact warrior over an ambitious but brittle one.
+- If the warrior is weak against papers, consider scanners, SPL bombs, or faster clears.
+- If it is weak against bombers, consider smaller code, decoys, replication, or mobility.
+- If it is weak against imp-like behavior, consider gates, clears, or anti-imp traps.
+
+Return only the new Redcode warrior in triple backticks. No prose outside the code block.

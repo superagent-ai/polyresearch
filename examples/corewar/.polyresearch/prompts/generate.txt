@@ -1,0 +1,6 @@
+Create a new Core War warrior in Redcode for the fixed benchmark gauntlet.
+
+The warrior should aim to be strong across bombers, papers, scanners, imp
+gates, and hybrids. Favor compact, practical strategies over flashy gimmicks.
+
+Return only the Redcode warrior in triple backticks. No prose outside the code block.
