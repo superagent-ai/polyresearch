@@ -25,6 +25,7 @@ This table defines the protocol parameters. Put the concrete values for your pro
 | `metric_direction`       | `lower_is_better` or `higher_is_better`.                                                                                                                |
 | `assignment_timeout`     | Time before an uncompleted claim expires and the thesis returns to the queue. Default: `24h`.                                                           |
 | `review_timeout`         | Time before an incomplete review claim expires. Default: `12h`.                                                                                         |
+| `min_queue_depth`        | Minimum number of unclaimed approved theses the lead should keep available. If the queue drops below this, the lead generates enough new theses to refill it. Default: `5`. |
 
 
 The parameter definitions live here. Concrete project values live in `PROGRAM.md`.
@@ -46,7 +47,7 @@ The parameter definitions live here. Concrete project values live in `PROGRAM.md
 When you start, before doing anything else:
 
 1. Read POLYRESEARCH.md (this file), PROGRAM.md, and PREPARE.md.
-2. Read results.tsv to understand experiment history and avoid repeating dead ends.
+2. Read results.tsv to understand experiment history and avoid repeating dead ends. If you are the lead and results.tsv is empty or missing rows for theses that have already been resolved, check closed issues with `gh issue list --label thesis --state closed`, update the ledger, and only then enter the main loop. A stale results.tsv will cause duplicate thesis generation.
 3. Run `git log --oneline -20` on `main` to see recent state.
 4. If `.polyresearch/` exists, run its setup. Otherwise follow PREPARE.md setup instructions.
 5. Check your GitHub identity. Run `gh api user --jq '.login'` to see which GitHub account you are operating as. If your instructions specify a particular GitHub user (for example, "contribute as user X"), verify the result matches. If it does not, stop and report the mismatch before proceeding. If your instructions do not specify a user, proceed with whatever account `gh` is currently authenticated as.
@@ -98,15 +99,56 @@ If there are no theses to claim and no PRs to review, wait briefly and check aga
 
 Everything in the contributor loop, plus these additional responsibilities. Run them as part of the same loop.
 
+### Maintain results.tsv
+
+You are the sole writer. This step runs first on every lead-loop iteration. Do not generate theses, run policy checks, or decide PRs until results.tsv is current.
+
+1. Run `gh issue list --label thesis --state closed` and read the comment trails. For every resolved thesis, check whether each `polyresearch:attempt` comment already has a corresponding row in results.tsv.
+2. If any attempts are missing, append them now and commit the updated results.tsv on `main`.
+3. Check open theses for discarded attempts that should already be logged, for example a contributor posted `polyresearch:attempt` and later `polyresearch:release` but the issue is still open. Add those rows too.
+
+Only after results.tsv accounts for every known attempt may you proceed to the rest of the lead loop.
+
+After any new thesis resolution later in the same iteration, append those rows before the next iteration begins.
+
+The event table below defines what to log:
+
+
+| Event                                 | Data source                                              | Action                                               |
+| ------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------- |
+| PR merged (`accepted`)                | `polyresearch:review` records on the PR                  | Append row with verified metric                      |
+| PR closed (any non-accepted outcome)  | `polyresearch:review` records + `polyresearch:decision`  | Append row with observed metric and decision outcome |
+| Attempt discarded (never became a PR) | `polyresearch:attempt` comments on thesis issue          | Append row with self-reported metric                 |
+| Thesis closed without any candidate   | `polyresearch:release` + `polyresearch:attempt` comments | Append rows for all logged attempts                  |
+
 ### Generate theses
 
-Read results.tsv and PROGRAM.md. Identify patterns: what worked, what failed, what hasn't been tried. Spot trends ("all learning rate increases above 0.06 regressed," "architectural changes yielded more than hyperparameter tuning"). Open new GitHub Issues with the `thesis` label. Auto-approve them by posting a `polyresearch:approval` comment.
+Complete all of these before opening any new thesis issue:
+
+1. Confirm results.tsv is current. The maintain step above must be done first.
+2. Read results.tsv and PROGRAM.md. Identify patterns in what worked, what failed, and what has not been tried yet.
+3. Run `gh issue list --label thesis --state all` and read every existing thesis title and body, open and closed.
+
+Queue depth check:
+
+- Count the number of open theses that are approved and unclaimed, using [Deriving state](#deriving-state).
+- If that count is already at or above `min_queue_depth`, do not open new theses this iteration.
+- If that count is below `min_queue_depth`, open only enough new theses to bring the queue back to `min_queue_depth`.
+
+Deduplication:
+
+- Before opening each new thesis, verify it does not duplicate an existing open or closed thesis.
+- Two theses are duplicates if they test substantially the same hypothesis, even if the wording differs.
+- If an idea already failed, do not re-propose it unless you can point to a concrete reason the new attempt is materially different. State that reason in the thesis body.
+- If an idea was already merged, do not re-propose it.
+
+Open new GitHub Issues with the `thesis` label. Auto-approve them by posting a `polyresearch:approval` comment.
 
 Guard against path dependence. If recent accepted theses share the same approach, generate at least one thesis that tries a fundamentally different direction from the current baseline.
 
 ### Policy check
 
-When a candidate PR is opened, diff it against the editable surface in PROGRAM.md. Check every file the PR touches — it must match a pattern in the CAN list. If any file is outside the editable surface, post a `polyresearch:decision` with `outcome: policy_rejection` and close the PR. No evaluation runs.
+When a candidate PR is opened, diff it against the editable surface in PROGRAM.md. Check every file the PR touches - it must match a pattern in the CAN list. If any file is outside the editable surface, post a `polyresearch:decision` with `outcome: policy_rejection` and close the PR. No evaluation runs.
 
 If the candidate passes, post a `polyresearch:policy-pass` comment. The PR is now eligible for peer review.
 
@@ -128,20 +170,6 @@ If `required_confirmations` is `0`, skip peer review. The lead decides using thi
 4. If the PR cannot merge cleanly, resolve the merge conflict and then merge or close based on the metric rules above. Do not close a PR solely because it has a merge conflict.
 
 Do not use `outcome: stale` when `required_confirmations` is `0`. In that mode there are no review records, so there is no `base_sha` evidence to compare.
-
-### Maintain results.tsv
-
-You are the sole writer. Contributors never edit this file directly. They report metrics through structured comments. You transcribe them into the canonical log.
-
-After any thesis resolution, append rows to results.tsv on `main` for every attempt logged on the thesis:
-
-
-| Event                                 | Data source                                              | Action                                               |
-| ------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------- |
-| PR merged (`accepted`)                | `polyresearch:review` records on the PR                  | Append row with verified metric                      |
-| PR closed (any non-accepted outcome)  | `polyresearch:review` records + `polyresearch:decision`  | Append row with observed metric and decision outcome |
-| Attempt discarded (never became a PR) | `polyresearch:attempt` comments on thesis issue          | Append row with self-reported metric                 |
-| Thesis closed without any candidate   | `polyresearch:release` + `polyresearch:attempt` comments | Append rows for all logged attempts                  |
 
 
 ---
