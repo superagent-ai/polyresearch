@@ -2,7 +2,7 @@
 
 This is the coordination protocol for polyresearch. It defines how agents find work, run experiments, submit candidates, and verify each other's results using `gh` and `git`. All coordination happens through GitHub Issues, PRs, and structured comments. No external services.
 
-Drop this file into your repository. Fill in the configuration section below with your project's values. Do not modify the protocol sections.
+Drop this file into your repository unchanged. Put project-specific coordination values in `PROGRAM.md`. Do not modify the protocol sections.
 
 **Companion files.** This file works alongside two project-specific files and an optional directory:
 
@@ -15,7 +15,7 @@ Drop this file into your repository. Fill in the configuration section below wit
 
 ## Configuration
 
-Fill in these values for your project. Agents read them to govern coordination.
+This table defines the protocol parameters. Put the concrete values for your project in a `## Configuration` section in `PROGRAM.md`. Agents read those values from `PROGRAM.md`.
 
 
 | Parameter                | Description                                                                                                                                             |
@@ -27,7 +27,7 @@ Fill in these values for your project. Agents read them to govern coordination.
 | `review_timeout`         | Time before an incomplete review claim expires. Default: `12h`.                                                                                         |
 
 
-Values live in this section. Agents parse them from the table above.
+The parameter definitions live here. Concrete project values live in `PROGRAM.md`.
 
 ---
 
@@ -49,8 +49,9 @@ When you start, before doing anything else:
 2. Read results.tsv to understand experiment history and avoid repeating dead ends.
 3. Run `git log --oneline -20` on `main` to see recent state.
 4. If `.polyresearch/` exists, run its setup. Otherwise follow PREPARE.md setup instructions.
-5. Generate your node identifier if you don't have one. Use your machine's hostname or a short ID (e.g. `node-7f83`). Keep it consistent across sessions.
-6. Identify your role. If your instructions say "you are the lead," follow the lead loop. Otherwise, follow the contributor loop.
+5. Check your GitHub identity. Run `gh api user --jq '.login'` to see which GitHub account you are operating as. If your instructions specify a particular GitHub user (for example, "contribute as user X"), verify the result matches. If it does not, stop and report the mismatch before proceeding. If your instructions do not specify a user, proceed with whatever account `gh` is currently authenticated as.
+6. Generate your node identifier if you don't have one. Use your machine's hostname or a short ID (e.g. `node-7f83`). Keep it consistent across sessions.
+7. Identify your role. If your instructions say "you are the lead," follow the lead loop. Otherwise, follow the contributor loop.
 
 ---
 
@@ -119,7 +120,14 @@ When `required_confirmations` review records have been posted on a PR, evaluate 
 - The `base_sha` in any review record does not match current `main` HEAD: post `outcome: stale`, **close** the PR. The thesis returns to the queue.
 - All or most reviewers reported `crashed` or `infra_failure`: post `outcome: infra_failure`, **close** the PR. The thesis returns to the queue.
 
-If `required_confirmations` is `0`, skip peer review entirely. Decide based on the candidate's self-reported metric and the policy check alone.
+If `required_confirmations` is `0`, skip peer review. The lead decides using this procedure:
+
+1. Run the normal policy check. Reject anything outside the editable surface.
+2. The candidate's self-reported metric must beat the frozen evaluator baseline beyond `metric_tolerance`.
+3. The candidate's self-reported metric must also meet or exceed the best accepted metric currently recorded in `results.tsv` on `main`. If it beats the frozen baseline but regresses the current best, close the PR with `outcome: non_improvement` and leave the thesis open for a fresh attempt.
+4. If the PR cannot merge cleanly, resolve the merge conflict and then merge or close based on the metric rules above. Do not close a PR solely because it has a merge conflict.
+
+Do not use `outcome: stale` when `required_confirmations` is `0`. In that mode there are no review records, so there is no `base_sha` evidence to compare.
 
 ### Maintain results.tsv
 
@@ -189,20 +197,22 @@ main
 
 ## Structured comments
 
-All protocol state transitions happen through structured HTML comments on GitHub Issues and PRs. Comments are append-only, attributed, and auditable.
+All protocol state transitions happen through structured comments on GitHub Issues and PRs. Each structured comment has a human-readable summary line followed by an HTML metadata block. Comments are append-only, attributed, and auditable.
 
 One label remains: `thesis` on issues, for discovery via `gh issue list --label thesis`. Everything else is a structured comment.
 
 ### Format
 
 ```
+Visible summary line for humans.
+
 <!-- polyresearch:<type>
 key: value
 key: value
 -->
 ```
 
-HTML comments are hidden in GitHub's rendered view but visible in raw source and accessible via `gh api`. Agents parse them from comment bodies.
+The visible summary line is required so humans can understand the protocol state in GitHub's rendered UI. Agents parse only the HTML block. Keep the summary short and include the comment type and the most important fields.
 
 ### On thesis issues
 
@@ -217,6 +227,8 @@ The maintainer comments `/approve` on the issue. Agents match on the exact strin
 **Approval** (lead auto-approval):
 
 ```
+Polyresearch approval: thesis #12.
+
 <!-- polyresearch:approval
 thesis: 12
 -->
@@ -227,6 +239,8 @@ Both forms are valid approval signals. The protocol recognizes either.
 **Claim** (contributor claims a thesis):
 
 ```
+Polyresearch claim: thesis #12 by node `node-7f83`.
+
 <!-- polyresearch:claim
 thesis: 12
 node: node-7f83
@@ -236,6 +250,8 @@ node: node-7f83
 **Release** (contributor releases a claim without submitting a candidate):
 
 ```
+Polyresearch release: thesis #12 by node `node-7f83` (`reason: no_improvement`).
+
 <!-- polyresearch:release
 thesis: 12
 node: node-7f83
@@ -246,6 +262,8 @@ reason: no_improvement | timeout | infra_failure
 **Attempt** (contributor records a completed experiment):
 
 ```
+Polyresearch attempt: thesis #12, branch `thesis/12-rmsnorm-attempt-1`, metric `1.0050`, observation `no_improvement`.
+
 <!-- polyresearch:attempt
 thesis: 12
 branch: thesis/12-rmsnorm-attempt-1
@@ -261,6 +279,8 @@ summary: Switched to GeLU activation, regression on val_bpb
 **Policy pass** (lead confirms candidate is within editable surface):
 
 ```
+Polyresearch policy pass: thesis #12, candidate `a1b2c3d`.
+
 <!-- polyresearch:policy-pass
 thesis: 12
 candidate_sha: a1b2c3d
@@ -270,6 +290,8 @@ candidate_sha: a1b2c3d
 **Review claim** (reviewer signals they are starting evaluation):
 
 ```
+Polyresearch review claim: thesis #12 by node `node-3e91`.
+
 <!-- polyresearch:review-claim
 thesis: 12
 node: node-3e91
@@ -279,6 +301,8 @@ node: node-3e91
 **Review record** (reviewer posts evaluation results):
 
 ```
+Polyresearch review: thesis #12 by node `node-3e91`, candidate `0.9934`, baseline `0.9979`, observation `improved`.
+
 <!-- polyresearch:review
 thesis: 12
 candidate_sha: a1b2c3d
@@ -299,6 +323,8 @@ The `env_sha` is the hash of `.polyresearch/` contents, or `none` if the directo
 **Decision** (lead resolves the PR):
 
 ```
+Polyresearch decision: thesis #12, candidate `a1b2c3d`, outcome `accepted`.
+
 <!-- polyresearch:decision
 thesis: 12
 candidate_sha: a1b2c3d
