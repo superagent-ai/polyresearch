@@ -28,7 +28,7 @@ See [PREPARE.md](PREPARE.md) for full evaluation details and [PROGRAM.md](PROGRA
 
 We ran polyresearch on this example for 107 experiments using a single lead agent. The chart below shows every experiment plotted by score, with the 9 accepted improvements highlighted in green and the running best drawn as a step function.
 
-Poker agent progress over 107 experiments
+![Poker agent progress over 107 experiments](progress.png)
 
 The full experiment log is in [results.tsv](results.tsv).
 
