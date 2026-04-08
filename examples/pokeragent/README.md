@@ -4,27 +4,7 @@ Build a heads-up no-limit Texas Hold'em agent by writing a system prompt and opt
 
 This is a toy example. The agent is a bare LLM that picks poker actions from a system prompt, optionally calling into small Python tools. Nobody would build a competitive poker bot this way -- serious solvers use counterfactual regret minimization or deep RL with billions of self-play hands. The point is not to solve poker. It's to demonstrate how polyresearch coordinates a search over a two-dimensional editable surface (prompt + tools) using structured experiments, automated evaluation, and a monotonically improving baseline.
 
-## Why this is a good polyresearch example
-
-**Two-dimensional search space.** Unlike the other examples where the editable surface is a single file, this one has two independent axes: the prompt and the tool suite. One contributor might focus entirely on prompt engineering -- better bet-sizing rules, clearer position awareness, tighter preflop discipline. Another might ignore the prompt and build a hand equity calculator or pot odds tool. A third might do both. These are different research directions that benefit from parallel exploration.
-
-**Game-theoretic depth resists simple hill-climbing.** Poker is not a metric you can improve monotonically by tweaking one parameter. A strategy that exploits the baseline's weaknesses might itself be exploitable. Bet sizing, bluff frequency, and value extraction interact in ways that are hard to reason about from a prompt alone. Contributors with different intuitions about poker strategy will explore different parts of this space.
-
-**Duplicate deals cancel luck.** Each deal is played twice with seats swapped, so the metric reflects decision quality rather than card distribution. Two reviewers evaluating the same candidate will see nearly identical results. This is what makes peer review meaningful -- you are comparing strategies, not comparing who got dealt pocket aces more often.
-
-**The tool surface is open-ended.** The evaluator loads any `.json` + `.py` pair it finds in `tools/`. Contributors can add hand equity calculators, board texture classifiers, preflop lookup tables, pot odds helpers, or anything else that fits in pure Python under 50 KB. The constraint is lightweight but the design space is wide. Different contributors will build different toolsets and the experiment history will show which tools actually help.
-
-## Getting started
-
-```bash
-.polyresearch/setup.sh
-python .polyresearch/evaluate.py > run.log 2>&1
-grep "^poker_score:" run.log
-```
-
-See [PREPARE.md](PREPARE.md) for full evaluation details and [PROGRAM.md](PROGRAM.md) for the research playbook.
-
-## Demo run: 107 experiments, 0.50 to 0.64
+## Demo run: 28% improvement over 107 experiments
 
 We ran polyresearch on this example for 107 experiments using a single lead agent. The chart below shows every experiment plotted by score, with the 9 accepted improvements highlighted in green and the running best drawn as a step function.
 
@@ -55,3 +35,23 @@ From there, improvements came through iterative refinement of the exploit strate
 - *Tools mostly failed.* Pot odds calculators, equity estimators, and hand strength classifiers all underperformed a well-tuned prompt. The LLM already has decent poker intuition; giving it calculators added latency and confusion without improving decisions.
 - *Prompt compression helped.* Shorter prompts that stated clear rules outperformed longer prompts with nuanced guidance. The streamlined 367-token prompt beat the comprehensive strategy guide.
 - *Most experiments fail, and that's fine.* Only 9 of 107 experiments were accepted. The 98 discarded runs are still useful data: they narrow the search space and confirm which directions are dead ends.
+
+## Getting started
+
+```bash
+.polyresearch/setup.sh
+python .polyresearch/evaluate.py > run.log 2>&1
+grep "^poker_score:" run.log
+```
+
+See [PREPARE.md](PREPARE.md) for full evaluation details and [PROGRAM.md](PROGRAM.md) for the research playbook.
+
+## Why this is a good polyresearch example
+
+**Two-dimensional search space.** Unlike the other examples where the editable surface is a single file, this one has two independent axes: the prompt and the tool suite. One contributor might focus entirely on prompt engineering -- better bet-sizing rules, clearer position awareness, tighter preflop discipline. Another might ignore the prompt and build a hand equity calculator or pot odds tool. A third might do both. These are different research directions that benefit from parallel exploration.
+
+**Game-theoretic depth resists simple hill-climbing.** Poker is not a metric you can improve monotonically by tweaking one parameter. A strategy that exploits the baseline's weaknesses might itself be exploitable. Bet sizing, bluff frequency, and value extraction interact in ways that are hard to reason about from a prompt alone. Contributors with different intuitions about poker strategy will explore different parts of this space.
+
+**Duplicate deals cancel luck.** Each deal is played twice with seats swapped, so the metric reflects decision quality rather than card distribution. Two reviewers evaluating the same candidate will see nearly identical results. This is what makes peer review meaningful -- you are comparing strategies, not comparing who got dealt pocket aces more often.
+
+**The tool surface is open-ended.** The evaluator loads any `.json` + `.py` pair it finds in `tools/`. Contributors can add hand equity calculators, board texture classifiers, preflop lookup tables, pot odds helpers, or anything else that fits in pure Python under 50 KB. The constraint is lightweight but the design space is wide. Different contributors will build different toolsets and the experiment history will show which tools actually help.
