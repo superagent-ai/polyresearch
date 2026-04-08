@@ -15,9 +15,9 @@ struct PolicyCheckOutput {
     violating_files: Vec<String>,
 }
 
-pub fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
+pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
     ensure_lead(ctx)?;
-    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)?;
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
     ensure_clean_audit(&repo_state, "policy-check PRs")?;
     let pr = ctx.github.get_pull_request(args.pr)?;
     let thesis_number = parse_thesis_number_from_branch(&pr.head_ref_name);

@@ -18,18 +18,18 @@ enum AdminOutput {
     ReopenThesis { issue: u64 },
 }
 
-pub fn run(ctx: &AppContext, args: &AdminArgs) -> Result<()> {
+pub async fn run(ctx: &AppContext, args: &AdminArgs) -> Result<()> {
     ensure_lead(ctx)?;
     match &args.command {
-        AdminCommands::ReleaseClaim(args) => release_claim(ctx, args),
-        AdminCommands::AcknowledgeInvalid(args) => acknowledge_invalid(ctx, args),
-        AdminCommands::ReopenThesis(args) => reopen_thesis(ctx, args),
-        AdminCommands::ReconcileLedger => crate::commands::sync::run(ctx),
+        AdminCommands::ReleaseClaim(args) => release_claim(ctx, args).await,
+        AdminCommands::AcknowledgeInvalid(args) => acknowledge_invalid(ctx, args).await,
+        AdminCommands::ReopenThesis(args) => reopen_thesis(ctx, args).await,
+        AdminCommands::ReconcileLedger => crate::commands::sync::run(ctx).await,
     }
 }
 
-fn release_claim(ctx: &AppContext, args: &AdminReleaseClaimArgs) -> Result<()> {
-    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)?;
+async fn release_claim(ctx: &AppContext, args: &AdminReleaseClaimArgs) -> Result<()> {
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
     let thesis = find_thesis(&repo_state, args.issue)?;
     if !thesis
         .active_claims
@@ -72,8 +72,8 @@ fn release_claim(ctx: &AppContext, args: &AdminReleaseClaimArgs) -> Result<()> {
     })
 }
 
-fn acknowledge_invalid(ctx: &AppContext, args: &AdminAcknowledgeInvalidArgs) -> Result<()> {
-    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)?;
+async fn acknowledge_invalid(ctx: &AppContext, args: &AdminAcknowledgeInvalidArgs) -> Result<()> {
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
     let finding = repo_state
         .audit_findings
         .iter()
@@ -116,7 +116,7 @@ fn acknowledge_invalid(ctx: &AppContext, args: &AdminAcknowledgeInvalidArgs) -> 
     })
 }
 
-fn reopen_thesis(ctx: &AppContext, args: &AdminReopenThesisArgs) -> Result<()> {
+async fn reopen_thesis(ctx: &AppContext, args: &AdminReopenThesisArgs) -> Result<()> {
     if !ctx.cli.dry_run {
         ctx.github.reopen_issue(args.issue)?;
         let note = ProtocolComment::AdminNote {

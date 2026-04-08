@@ -17,40 +17,41 @@ pub mod sync;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 
 use color_eyre::eyre::{Context, Result, eyre};
 use serde::Serialize;
 
 use crate::cli::{Cli, Commands};
 use crate::config::{ProgramSpec, ProtocolConfig};
-use crate::github::{GitHubClient, RepoRef};
+use crate::github::{GitHubApi, RepoRef};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AppContext {
     pub cli: Cli,
     pub repo_root: PathBuf,
     pub repo: RepoRef,
-    pub github: GitHubClient,
+    pub github: Arc<dyn GitHubApi>,
     pub config: ProtocolConfig,
     pub program: ProgramSpec,
 }
 
 pub async fn run(ctx: AppContext) -> Result<()> {
     match &ctx.cli.command {
-        Commands::Init(args) => init::run(&ctx, args),
-        Commands::Status(args) => status::run(&ctx, args),
-        Commands::Claim(args) => claim::run(&ctx, args),
-        Commands::Attempt(args) => attempt::run(&ctx, args),
-        Commands::Release(args) => release::run(&ctx, args),
-        Commands::Submit(args) => submit::run(&ctx, args),
-        Commands::ReviewClaim(args) => review_claim::run(&ctx, args),
-        Commands::Review(args) => review::run(&ctx, args),
-        Commands::Audit => audit::run(&ctx),
-        Commands::Admin(args) => admin::run(&ctx, args),
-        Commands::Sync => sync::run(&ctx),
-        Commands::Generate(args) => generate::run(&ctx, args),
-        Commands::PolicyCheck(args) => policy_check::run(&ctx, args),
-        Commands::Decide(args) => decide::run(&ctx, args),
+        Commands::Init(args) => init::run(&ctx, args).await,
+        Commands::Status(args) => status::run(&ctx, args).await,
+        Commands::Claim(args) => claim::run(&ctx, args).await,
+        Commands::Attempt(args) => attempt::run(&ctx, args).await,
+        Commands::Release(args) => release::run(&ctx, args).await,
+        Commands::Submit(args) => submit::run(&ctx, args).await,
+        Commands::ReviewClaim(args) => review_claim::run(&ctx, args).await,
+        Commands::Review(args) => review::run(&ctx, args).await,
+        Commands::Audit => audit::run(&ctx).await,
+        Commands::Admin(args) => admin::run(&ctx, args).await,
+        Commands::Sync => sync::run(&ctx).await,
+        Commands::Generate(args) => generate::run(&ctx, args).await,
+        Commands::PolicyCheck(args) => policy_check::run(&ctx, args).await,
+        Commands::Decide(args) => decide::run(&ctx, args).await,
     }
 }
 

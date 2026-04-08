@@ -57,7 +57,10 @@ impl DashboardApp {
     }
 
     pub fn refresh(&mut self, ctx: &AppContext) -> color_eyre::eyre::Result<()> {
-        self.repo_state = RepositoryState::derive(&ctx.github, &ctx.config)?;
+        self.repo_state = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(RepositoryState::derive(&ctx.github, &ctx.config))
+        })?;
         self.ledger = Ledger::load(&ctx.repo_root)?;
         if self.repo_state.theses.is_empty() {
             self.table_state.select(None);

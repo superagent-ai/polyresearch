@@ -1,23 +1,14 @@
-mod cli;
-mod commands;
-mod comments;
-mod config;
-mod github;
-mod ledger;
-mod state;
-mod tui;
-mod validation;
-
 use std::env;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::Parser;
 use color_eyre::eyre::{Context, Result};
-
-use crate::cli::Cli;
-use crate::commands::AppContext;
-use crate::config::{ProgramSpec, ProtocolConfig};
-use crate::github::{GitHubClient, RepoRef};
+use polyresearch_cli::cli::Cli;
+use polyresearch_cli::commands;
+use polyresearch_cli::commands::AppContext;
+use polyresearch_cli::config::{ProgramSpec, ProtocolConfig};
+use polyresearch_cli::github::{GitHubApi, GitHubClient, RepoRef};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -27,7 +18,7 @@ async fn main() -> Result<()> {
     let cwd = env::current_dir().wrap_err("failed to determine current working directory")?;
     let repo_root = discover_repo_root(&cwd)?;
     let repo = RepoRef::discover(cli.repo.as_deref(), &repo_root)?;
-    let github = GitHubClient::new(repo.clone());
+    let github: Arc<dyn GitHubApi> = Arc::new(GitHubClient::new(repo.clone()));
     let config = ProtocolConfig::load(&repo_root)?;
     let program = ProgramSpec::load(&repo_root, &config)?;
 

@@ -16,9 +16,9 @@ struct GenerateOutput {
     warned_below_min_queue_depth: bool,
 }
 
-pub fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
+pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
     ensure_lead(ctx)?;
-    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)?;
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
     ensure_clean_audit(&repo_state, "generate theses")?;
     let ledger = Ledger::load(&ctx.repo_root)?;
     if !ledger.is_current(&repo_state) {

@@ -1,0 +1,509 @@
+use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use color_eyre::eyre::{Result, eyre};
+use polyresearch_cli::cli::{
+    AttemptArgs, Cli, Commands, GenerateArgs, InitArgs, IssueArgs, StatusArgs,
+};
+use polyresearch_cli::commands;
+use polyresearch_cli::comments::Observation;
+use polyresearch_cli::config::{MetricDirection, ProgramSpec, ProtocolConfig};
+use polyresearch_cli::github::{
+    GitHubApi, Issue, IssueComment, IssueListState, PullRequest, PullRequestFile,
+    PullRequestListState, RepoRef,
+};
+use polyresearch_cli::state::RepositoryState;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IssueFixture {
+    lead_github_login: String,
+    issue: Issue,
+    comments: Vec<IssueComment>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PullRequestFixture {
+    pr: PullRequest,
+    comments: Vec<IssueComment>,
+}
+
+#[derive(Default)]
+struct MockGitHubClient {
+    current_login: String,
+    issues: Vec<Issue>,
+    issue_comments: HashMap<u64, Vec<IssueComment>>,
+    pull_requests: Vec<PullRequest>,
+    pr_comments: HashMap<u64, Vec<IssueComment>>,
+    posted_issue_comments: Mutex<Vec<(u64, String)>>,
+}
+
+impl MockGitHubClient {
+    fn new(
+        current_login: impl Into<String>,
+        issues: Vec<Issue>,
+        issue_comments: HashMap<u64, Vec<IssueComment>>,
+        pull_requests: Vec<PullRequest>,
+        pr_comments: HashMap<u64, Vec<IssueComment>>,
+    ) -> Self {
+        Self {
+            current_login: current_login.into(),
+            issues,
+            issue_comments,
+            pull_requests,
+            pr_comments,
+            posted_issue_comments: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl GitHubApi for MockGitHubClient {
+    fn current_login(&self) -> Result<String> {
+        Ok(self.current_login.clone())
+    }
+
+    fn auth_status(&self) -> Result<String> {
+        Ok("logged in".to_string())
+    }
+
+    fn auth_token(&self) -> Result<String> {
+        Ok("test-token".to_string())
+    }
+
+    fn list_thesis_issues(&self, _state: IssueListState) -> Result<Vec<Issue>> {
+        Ok(self.issues.clone())
+    }
+
+    fn list_issue_comments(&self, issue_number: u64) -> Result<Vec<IssueComment>> {
+        Ok(self
+            .issue_comments
+            .get(&issue_number)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn create_issue(&self, _title: &str, _body: &str, _labels: &[&str]) -> Result<Issue> {
+        Err(eyre!("unexpected create_issue call in test"))
+    }
+
+    fn post_issue_comment(&self, issue_number: u64, body: &str) -> Result<IssueComment> {
+        self.posted_issue_comments
+            .lock()
+            .unwrap()
+            .push((issue_number, body.to_string()));
+        Ok(IssueComment {
+            id: 9999,
+            body: body.to_string(),
+            user: polyresearch_cli::github::CommentUser {
+                login: self.current_login.clone(),
+            },
+            created_at: chrono::Utc::now(),
+            updated_at: None,
+        })
+    }
+
+    fn close_issue(&self, _issue_number: u64) -> Result<Issue> {
+        Err(eyre!("unexpected close_issue call in test"))
+    }
+
+    fn reopen_issue(&self, _issue_number: u64) -> Result<Issue> {
+        Err(eyre!("unexpected reopen_issue call in test"))
+    }
+
+    fn list_pull_requests(&self, _state: PullRequestListState) -> Result<Vec<PullRequest>> {
+        Ok(self.pull_requests.clone())
+    }
+
+    fn get_pull_request(&self, pr_number: u64) -> Result<PullRequest> {
+        self.pull_requests
+            .iter()
+            .find(|pr| pr.number == pr_number)
+            .cloned()
+            .ok_or_else(|| eyre!("mock PR #{} not found", pr_number))
+    }
+
+    fn list_pull_request_comments(&self, pr_number: u64) -> Result<Vec<IssueComment>> {
+        Ok(self
+            .pr_comments
+            .get(&pr_number)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn list_pull_request_files(&self, _pr_number: u64) -> Result<Vec<PullRequestFile>> {
+        Ok(Vec::new())
+    }
+
+    fn create_pull_request(
+        &self,
+        _branch: &str,
+        _title: &str,
+        _body: &str,
+        _base: &str,
+    ) -> Result<PullRequest> {
+        Err(eyre!("unexpected create_pull_request call in test"))
+    }
+
+    fn close_pull_request(&self, _pr_number: u64) -> Result<serde_json::Value> {
+        Err(eyre!("unexpected close_pull_request call in test"))
+    }
+
+    fn merge_pull_request(&self, _pr_number: u64) -> Result<serde_json::Value> {
+        Err(eyre!("unexpected merge_pull_request call in test"))
+    }
+}
+
+struct TestRepo {
+    path: PathBuf,
+}
+
+impl TestRepo {
+    fn new(name: &str) -> Self {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("polyresearch-{name}-{unique}"));
+        fs::create_dir_all(&path).unwrap();
+        Self { path }
+    }
+}
+
+impl Drop for TestRepo {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+#[tokio::test]
+async fn init_writes_node_identity() {
+    let repo = TestRepo::new("init");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead",
+        false,
+        Commands::Init(InitArgs {
+            node: Some("test-node".to_string()),
+        }),
+    );
+
+    commands::init::run(
+        &ctx,
+        &InitArgs {
+            node: Some("test-node".to_string()),
+        },
+    )
+    .await
+    .unwrap();
+
+    let node_file = repo.path.join(".polyresearch-node");
+    assert_eq!(fs::read_to_string(node_file).unwrap(), "test-node\n");
+}
+
+#[tokio::test]
+async fn status_and_audit_succeed_on_fixture_snapshot() {
+    let repo = TestRepo::new("status-audit");
+    let issue_fixture = load_issue_fixture("duplicate_claim_issue.json");
+    let pr_fixture = load_pr_fixture("non_lead_decision_pr.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue_fixture.issue.clone()],
+        HashMap::from([(issue_fixture.issue.number, issue_fixture.comments.clone())]),
+        vec![pr_fixture.pr.clone()],
+        HashMap::from([(pr_fixture.pr.number, pr_fixture.comments.clone())]),
+    ));
+
+    let status_ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &issue_fixture.lead_github_login,
+        false,
+        Commands::Status(StatusArgs { tui: false }),
+    );
+    commands::status::run(&status_ctx, &StatusArgs { tui: false })
+        .await
+        .unwrap();
+
+    let audit_ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &issue_fixture.lead_github_login,
+        false,
+        Commands::Audit,
+    );
+    commands::audit::run(&audit_ctx).await.unwrap();
+
+    let repo_state = RepositoryState::derive(&status_ctx.github, &status_ctx.config)
+        .await
+        .unwrap();
+    assert_eq!(repo_state.theses.len(), 1);
+    assert_eq!(repo_state.active_nodes, vec!["node-a".to_string()]);
+    assert_eq!(repo_state.audit_findings.len(), 2);
+}
+
+#[tokio::test]
+async fn claim_rejects_already_claimed_thesis() {
+    let repo = TestRepo::new("claim-reject");
+    let fixture = load_issue_fixture("duplicate_claim_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        false,
+        Commands::Claim(IssueArgs {
+            issue: fixture.issue.number,
+        }),
+    );
+    commands::write_node_id(&repo.path, "node-b").unwrap();
+
+    let error = commands::claim::run(
+        &ctx,
+        &IssueArgs {
+            issue: fixture.issue.number,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("not claimable"));
+}
+
+#[tokio::test]
+async fn claim_rejects_closed_thesis() {
+    let repo = TestRepo::new("claim-closed");
+    let fixture = load_issue_fixture("attempt_after_closure_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        false,
+        Commands::Claim(IssueArgs {
+            issue: fixture.issue.number,
+        }),
+    );
+    commands::write_node_id(&repo.path, "server").unwrap();
+
+    let error = commands::claim::run(
+        &ctx,
+        &IssueArgs {
+            issue: fixture.issue.number,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("is not open"));
+}
+
+#[tokio::test]
+async fn attempt_rejects_node_without_canonical_claim() {
+    let repo = TestRepo::new("attempt-reject");
+    let fixture = load_issue_fixture("duplicate_claim_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        false,
+        Commands::Attempt(AttemptArgs {
+            issue: fixture.issue.number,
+            metric: 0.51,
+            baseline: 0.50,
+            observation: Observation::Improved,
+            summary: "test".to_string(),
+        }),
+    );
+    commands::write_node_id(&repo.path, "node-b").unwrap();
+
+    let error = commands::attempt::run(
+        &ctx,
+        &AttemptArgs {
+            issue: fixture.issue.number,
+            metric: 0.51,
+            baseline: 0.50,
+            observation: Observation::Improved,
+            summary: "test".to_string(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("not currently claimed"));
+}
+
+#[tokio::test]
+async fn generate_is_blocked_by_dirty_audit() {
+    let repo = TestRepo::new("generate-dirty");
+    let fixture = load_issue_fixture("duplicate_claim_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        true,
+        Commands::Generate(GenerateArgs {
+            title: "Test".to_string(),
+            body: "Body".to_string(),
+        }),
+    );
+
+    let error = commands::generate::run(
+        &ctx,
+        &GenerateArgs {
+            title: "Test".to_string(),
+            body: "Body".to_string(),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("cannot generate theses while audit findings are present")
+    );
+}
+
+#[tokio::test]
+async fn lead_only_command_rejects_non_lead_login() {
+    let repo = TestRepo::new("non-lead");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", true, Commands::Sync);
+
+    let error = commands::sync::run(&ctx).await.unwrap_err();
+    assert!(error.to_string().contains("lead-only"));
+}
+
+#[tokio::test]
+async fn valid_claim_succeeds_in_dry_run_without_writing() {
+    let repo = TestRepo::new("valid-claim");
+    let fixture = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture.lead_github_login,
+        true,
+        Commands::Claim(IssueArgs {
+            issue: fixture.issue.number,
+        }),
+    );
+    commands::write_node_id(&repo.path, "node-a").unwrap();
+
+    commands::claim::run(
+        &ctx,
+        &IssueArgs {
+            issue: fixture.issue.number,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(mock.posted_issue_comments.lock().unwrap().is_empty());
+}
+
+fn make_ctx(
+    repo_root: PathBuf,
+    github: Arc<dyn GitHubApi>,
+    lead_github_login: &str,
+    dry_run: bool,
+    command: Commands,
+) -> commands::AppContext {
+    commands::AppContext {
+        cli: Cli {
+            repo: None,
+            json: false,
+            dry_run,
+            command,
+        },
+        repo_root,
+        repo: RepoRef {
+            owner: "test-owner".to_string(),
+            name: "test-repo".to_string(),
+        },
+        github,
+        config: ProtocolConfig {
+            required_confirmations: 0,
+            metric_tolerance: Some(0.01),
+            metric_direction: MetricDirection::HigherIsBetter,
+            lead_github_login: Some(lead_github_login.to_string()),
+            assignment_timeout: Duration::from_secs(24 * 60 * 60),
+            review_timeout: Duration::from_secs(12 * 60 * 60),
+            min_queue_depth: 5,
+            max_queue_depth: Some(10),
+        },
+        program: ProgramSpec {
+            can_modify: vec!["system_prompt.md".to_string()],
+            cannot_modify: vec!["PREPARE.md".to_string()],
+        },
+    }
+}
+
+fn load_issue_fixture(name: &str) -> IssueFixture {
+    serde_json::from_str(include_str_fixture(name)).unwrap()
+}
+
+fn load_pr_fixture(name: &str) -> PullRequestFixture {
+    serde_json::from_str(include_str_fixture(name)).unwrap()
+}
+
+fn include_str_fixture(name: &str) -> &'static str {
+    match name {
+        "duplicate_claim_issue.json" => include_str!("fixtures/duplicate_claim_issue.json"),
+        "non_lead_decision_pr.json" => include_str!("fixtures/non_lead_decision_pr.json"),
+        "attempt_after_closure_issue.json" => {
+            include_str!("fixtures/attempt_after_closure_issue.json")
+        }
+        "acknowledged_invalid_issue.json" => {
+            include_str!("fixtures/acknowledged_invalid_issue.json")
+        }
+        other => panic!("unknown fixture: {other}"),
+    }
+}

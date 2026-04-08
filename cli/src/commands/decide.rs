@@ -18,9 +18,9 @@ struct DecideOutput {
     confirmations: u64,
 }
 
-pub fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
+pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
     ensure_lead(ctx)?;
-    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)?;
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
     ensure_clean_audit(&repo_state, "decide PRs")?;
     let ledger = Ledger::load(&ctx.repo_root)?;
     let (thesis, pr_state) = require_decidable_pr(&repo_state, args.pr)?;

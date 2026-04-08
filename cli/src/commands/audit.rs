@@ -15,8 +15,8 @@ struct AuditOutput {
     findings: Vec<crate::validation::AuditFinding>,
 }
 
-pub fn run(ctx: &AppContext) -> Result<()> {
-    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)?;
+pub async fn run(ctx: &AppContext) -> Result<()> {
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
     let ledger = Ledger::load(&ctx.repo_root)?;
     let ledger_current = ledger.is_current(&repo_state);
     let mut findings = repo_state.audit_findings.clone();

@@ -14,7 +14,7 @@ struct InitOutput {
     github_login: String,
 }
 
-pub fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
+pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
     let node = args.node.clone().unwrap_or_else(default_node_id);
     let login = ctx.github.current_login()?;
     let _ = ctx.github.auth_status()?;

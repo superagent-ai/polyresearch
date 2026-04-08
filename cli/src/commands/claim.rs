@@ -3,7 +3,7 @@ use serde::Serialize;
 
 use crate::cli::IssueArgs;
 use crate::commands::guards::require_claimable_thesis;
-use crate::commands::{AppContext, create_thesis_branch, print_value, read_node_id};
+use crate::commands::{AppContext, create_thesis_branch, print_value, read_node_id, slugify};
 use crate::comments::ProtocolComment;
 use crate::state::RepositoryState;
 
@@ -14,9 +14,9 @@ struct ClaimOutput {
     branch: String,
 }
 
-pub fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
+pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
     let node = read_node_id(&ctx.repo_root)?;
-    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)?;
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
     let thesis = require_claimable_thesis(&repo_state, args.issue)?;
     if !thesis.active_claims.is_empty() {
         let nodes = thesis
@@ -32,7 +32,15 @@ pub fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
         ));
     }
 
-    let branch = create_thesis_branch(&ctx.repo_root, thesis.issue.number, &thesis.issue.title)?;
+    let branch = if ctx.cli.dry_run {
+        format!(
+            "thesis/{}-{}",
+            thesis.issue.number,
+            slugify(&thesis.issue.title)
+        )
+    } else {
+        create_thesis_branch(&ctx.repo_root, thesis.issue.number, &thesis.issue.title)?
+    };
 
     let comment = ProtocolComment::Claim {
         thesis: thesis.issue.number,
