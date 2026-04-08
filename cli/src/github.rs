@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Context, Result, eyre};
@@ -65,6 +67,31 @@ impl RepoRef {
 #[derive(Debug, Clone)]
 pub struct GitHubClient {
     repo: RepoRef,
+}
+
+pub trait GitHubApi: Send + Sync {
+    fn current_login(&self) -> Result<String>;
+    fn auth_status(&self) -> Result<String>;
+    fn auth_token(&self) -> Result<String>;
+    fn list_thesis_issues(&self, state: IssueListState) -> Result<Vec<Issue>>;
+    fn list_issue_comments(&self, issue_number: u64) -> Result<Vec<IssueComment>>;
+    fn create_issue(&self, title: &str, body: &str, labels: &[&str]) -> Result<Issue>;
+    fn post_issue_comment(&self, issue_number: u64, body: &str) -> Result<IssueComment>;
+    fn close_issue(&self, issue_number: u64) -> Result<Issue>;
+    fn reopen_issue(&self, issue_number: u64) -> Result<Issue>;
+    fn list_pull_requests(&self, state: PullRequestListState) -> Result<Vec<PullRequest>>;
+    fn get_pull_request(&self, pr_number: u64) -> Result<PullRequest>;
+    fn list_pull_request_comments(&self, pr_number: u64) -> Result<Vec<IssueComment>>;
+    fn list_pull_request_files(&self, pr_number: u64) -> Result<Vec<PullRequestFile>>;
+    fn create_pull_request(
+        &self,
+        branch: &str,
+        title: &str,
+        body: &str,
+        base: &str,
+    ) -> Result<PullRequest>;
+    fn close_pull_request(&self, pr_number: u64) -> Result<serde_json::Value>;
+    fn merge_pull_request(&self, pr_number: u64) -> Result<serde_json::Value>;
 }
 
 impl GitHubClient {
@@ -331,6 +358,143 @@ impl GitHubClient {
         command.args(args);
         run_text_command(command)
     }
+}
+
+impl GitHubApi for GitHubClient {
+    fn current_login(&self) -> Result<String> {
+        GitHubClient::current_login(self)
+    }
+
+    fn auth_status(&self) -> Result<String> {
+        GitHubClient::auth_status(self)
+    }
+
+    fn auth_token(&self) -> Result<String> {
+        GitHubClient::auth_token(self)
+    }
+
+    fn list_thesis_issues(&self, state: IssueListState) -> Result<Vec<Issue>> {
+        GitHubClient::list_thesis_issues(self, state)
+    }
+
+    fn list_issue_comments(&self, issue_number: u64) -> Result<Vec<IssueComment>> {
+        GitHubClient::list_issue_comments(self, issue_number)
+    }
+
+    fn create_issue(&self, title: &str, body: &str, labels: &[&str]) -> Result<Issue> {
+        GitHubClient::create_issue(self, title, body, labels)
+    }
+
+    fn post_issue_comment(&self, issue_number: u64, body: &str) -> Result<IssueComment> {
+        GitHubClient::post_issue_comment(self, issue_number, body)
+    }
+
+    fn close_issue(&self, issue_number: u64) -> Result<Issue> {
+        GitHubClient::close_issue(self, issue_number)
+    }
+
+    fn reopen_issue(&self, issue_number: u64) -> Result<Issue> {
+        GitHubClient::reopen_issue(self, issue_number)
+    }
+
+    fn list_pull_requests(&self, state: PullRequestListState) -> Result<Vec<PullRequest>> {
+        GitHubClient::list_pull_requests(self, state)
+    }
+
+    fn get_pull_request(&self, pr_number: u64) -> Result<PullRequest> {
+        GitHubClient::get_pull_request(self, pr_number)
+    }
+
+    fn list_pull_request_comments(&self, pr_number: u64) -> Result<Vec<IssueComment>> {
+        GitHubClient::list_pull_request_comments(self, pr_number)
+    }
+
+    fn list_pull_request_files(&self, pr_number: u64) -> Result<Vec<PullRequestFile>> {
+        GitHubClient::list_pull_request_files(self, pr_number)
+    }
+
+    fn create_pull_request(
+        &self,
+        branch: &str,
+        title: &str,
+        body: &str,
+        base: &str,
+    ) -> Result<PullRequest> {
+        GitHubClient::create_pull_request(self, branch, title, body, base)
+    }
+
+    fn close_pull_request(&self, pr_number: u64) -> Result<serde_json::Value> {
+        GitHubClient::close_pull_request(self, pr_number)
+    }
+
+    fn merge_pull_request(&self, pr_number: u64) -> Result<serde_json::Value> {
+        GitHubClient::merge_pull_request(self, pr_number)
+    }
+}
+
+pub async fn fetch_lists(github: Arc<dyn GitHubApi>) -> Result<(Vec<Issue>, Vec<PullRequest>)> {
+    let github_for_issues = Arc::clone(&github);
+    let github_for_prs = Arc::clone(&github);
+
+    tokio::try_join!(
+        run_blocking(move || github_for_issues.list_thesis_issues(IssueListState::All)),
+        run_blocking(move || github_for_prs.list_pull_requests(PullRequestListState::All)),
+    )
+}
+
+pub async fn fetch_all_comments(
+    github: Arc<dyn GitHubApi>,
+    issue_numbers: &[u64],
+    pr_numbers: &[u64],
+) -> Result<(
+    HashMap<u64, Vec<IssueComment>>,
+    HashMap<u64, Vec<IssueComment>>,
+)> {
+    let mut issue_tasks = tokio::task::JoinSet::new();
+    for issue_number in issue_numbers.iter().copied() {
+        let github = Arc::clone(&github);
+        issue_tasks.spawn_blocking(move || {
+            github
+                .list_issue_comments(issue_number)
+                .map(|comments| (issue_number, comments))
+        });
+    }
+
+    let mut pr_tasks = tokio::task::JoinSet::new();
+    for pr_number in pr_numbers.iter().copied() {
+        let github = Arc::clone(&github);
+        pr_tasks.spawn_blocking(move || {
+            github
+                .list_pull_request_comments(pr_number)
+                .map(|comments| (pr_number, comments))
+        });
+    }
+
+    let mut issue_comments = HashMap::new();
+    while let Some(result) = issue_tasks.join_next().await {
+        let (issue_number, comments) =
+            result.map_err(|err| eyre!("issue comment fetch task failed: {err}"))??;
+        issue_comments.insert(issue_number, comments);
+    }
+
+    let mut pr_comments = HashMap::new();
+    while let Some(result) = pr_tasks.join_next().await {
+        let (pr_number, comments) =
+            result.map_err(|err| eyre!("pull request comment fetch task failed: {err}"))??;
+        pr_comments.insert(pr_number, comments);
+    }
+
+    Ok((issue_comments, pr_comments))
+}
+
+async fn run_blocking<T, F>(operation: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|err| eyre!("blocking GitHub operation failed: {err}"))?
 }
 
 #[derive(Debug, Clone, Copy)]

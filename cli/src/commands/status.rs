@@ -21,8 +21,8 @@ struct StatusOutput {
     theses: Vec<crate::state::ThesisState>,
 }
 
-pub fn run(ctx: &AppContext, args: &StatusArgs) -> Result<()> {
-    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)?;
+pub async fn run(ctx: &AppContext, args: &StatusArgs) -> Result<()> {
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
     let ledger = Ledger::load(&ctx.repo_root)?;
     if args.tui {
         return crate::tui::run_dashboard(ctx, repo_state, ledger);

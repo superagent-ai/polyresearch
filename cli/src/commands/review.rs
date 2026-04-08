@@ -23,9 +23,9 @@ struct ReviewOutput {
     env_sha: Option<String>,
 }
 
-pub fn run(ctx: &AppContext, args: &ReviewArgs) -> Result<()> {
+pub async fn run(ctx: &AppContext, args: &ReviewArgs) -> Result<()> {
     let node = read_node_id(&ctx.repo_root)?;
-    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)?;
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
     let (thesis, pr_state) = require_claimed_review_pr(&repo_state, args.pr, &node)?;
 
     let candidate_sha = pr_state

@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::Result;
@@ -6,7 +7,7 @@ use serde::Serialize;
 
 use crate::comments::{Observation, Outcome, ReleaseReason};
 use crate::config::{MetricDirection, ProtocolConfig};
-use crate::github::{GitHubClient, Issue, IssueListState, PullRequest, PullRequestListState};
+use crate::github::{GitHubApi, Issue, IssueComment, PullRequest, fetch_all_comments, fetch_lists};
 use crate::validation::{AuditFinding, ProtocolEnvelope, validate_issue, validate_pull_request};
 
 #[derive(Debug, Clone, Serialize)]
@@ -116,17 +117,26 @@ pub struct ActivityEvent {
 }
 
 impl RepositoryState {
-    pub fn derive(github: &GitHubClient, config: &ProtocolConfig) -> Result<Self> {
-        let issues = github.list_thesis_issues(IssueListState::All)?;
-        let prs = github.list_pull_requests(PullRequestListState::All)?;
+    pub async fn derive(github: &Arc<dyn GitHubApi>, config: &ProtocolConfig) -> Result<Self> {
+        let (issues, prs) = fetch_lists(Arc::clone(github)).await?;
+        let issue_numbers = issues.iter().map(|issue| issue.number).collect::<Vec<_>>();
+        let pr_numbers = prs.iter().map(|pr| pr.number).collect::<Vec<_>>();
+        let (mut issue_comments, mut pr_comments) =
+            fetch_all_comments(Arc::clone(github), &issue_numbers, &pr_numbers).await?;
         let pr_states = prs
             .into_iter()
-            .map(|pr| PullRequestState::derive(github, pr, config))
+            .map(|pr| {
+                let comments = pr_comments.remove(&pr.number).unwrap_or_default();
+                PullRequestState::derive(pr, comments, config)
+            })
             .collect::<Result<Vec<_>>>()?;
 
         let mut theses = issues
             .into_iter()
-            .map(|issue| ThesisState::derive(github, issue, &pr_states, config))
+            .map(|issue| {
+                let comments = issue_comments.remove(&issue.number).unwrap_or_default();
+                ThesisState::derive(issue, comments, &pr_states, config)
+            })
             .collect::<Result<Vec<_>>>()?;
 
         theses.sort_by_key(|thesis| thesis.issue.number);
@@ -199,13 +209,12 @@ impl RepositoryState {
 
 impl ThesisState {
     fn derive(
-        github: &GitHubClient,
         issue: Issue,
+        comments: Vec<IssueComment>,
         pr_states: &[PullRequestState],
         config: &ProtocolConfig,
     ) -> Result<Self> {
-        let comments = github
-            .list_issue_comments(issue.number)?
+        let comments = comments
             .into_iter()
             .map(ProtocolEnvelope::from_issue_comment)
             .collect::<Result<Vec<_>>>()?;
@@ -367,9 +376,12 @@ impl ThesisState {
 }
 
 impl PullRequestState {
-    fn derive(github: &GitHubClient, pr: PullRequest, config: &ProtocolConfig) -> Result<Self> {
-        let comments = github
-            .list_pull_request_comments(pr.number)?
+    fn derive(
+        pr: PullRequest,
+        comments: Vec<IssueComment>,
+        config: &ProtocolConfig,
+    ) -> Result<Self> {
+        let comments = comments
             .into_iter()
             .map(ProtocolEnvelope::from_issue_comment)
             .collect::<Result<Vec<_>>>()?;

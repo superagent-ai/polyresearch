@@ -16,9 +16,9 @@ struct AttemptOutput {
     attempt_number: usize,
 }
 
-pub fn run(ctx: &AppContext, args: &AttemptArgs) -> Result<()> {
+pub async fn run(ctx: &AppContext, args: &AttemptArgs) -> Result<()> {
     let node = read_node_id(&ctx.repo_root)?;
-    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)?;
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
     let thesis = require_claimed_thesis(&repo_state, args.issue, &node)?;
 
     let branch = current_branch(&ctx.repo_root)?;

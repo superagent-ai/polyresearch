@@ -14,10 +14,10 @@ struct ReviewClaimOutput {
     node: String,
 }
 
-pub fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
+pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
     let node = read_node_id(&ctx.repo_root)?;
     let login = ctx.github.current_login()?;
-    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)?;
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
     let (thesis, _pr_state) = require_reviewable_pr(&repo_state, args.pr, &login)?;
 
     let comment = ProtocolComment::ReviewClaim {

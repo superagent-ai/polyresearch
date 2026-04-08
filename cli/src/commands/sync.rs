@@ -12,9 +12,9 @@ struct SyncOutput {
     attempts: Vec<String>,
 }
 
-pub fn run(ctx: &AppContext) -> Result<()> {
+pub async fn run(ctx: &AppContext) -> Result<()> {
     ensure_lead(ctx)?;
-    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)?;
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
     let mut ledger = Ledger::load(&ctx.repo_root)?;
     let missing_rows = ledger.missing_rows(&repo_state);
 
