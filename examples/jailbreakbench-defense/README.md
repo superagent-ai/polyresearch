@@ -21,4 +21,6 @@ python .polyresearch/evaluate.py > run.log 2>&1
 grep "^safety_score:" run.log
 ```
 
+The canonical protocol file for this repo is [../../POLYRESEARCH.md](../../POLYRESEARCH.md). This example relies on the root copy rather than shipping its own duplicate.
+
 See [PREPARE.md](PREPARE.md) for full evaluation details and [PROGRAM.md](PROGRAM.md) for the research playbook.

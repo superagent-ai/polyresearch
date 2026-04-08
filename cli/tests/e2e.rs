@@ -12,7 +12,7 @@ use polyresearch_cli::commands;
 use polyresearch_cli::comments::Observation;
 use polyresearch_cli::config::{MetricDirection, ProgramSpec, ProtocolConfig};
 use polyresearch_cli::github::{
-    GitHubApi, Issue, IssueComment, IssueListState, PullRequest, PullRequestFile,
+    CommentUser, GitHubApi, Issue, IssueComment, IssueListState, PullRequest, PullRequestFile,
     PullRequestListState, RepoRef,
 };
 use polyresearch_cli::state::RepositoryState;
@@ -99,7 +99,7 @@ impl GitHubApi for MockGitHubClient {
         Ok(IssueComment {
             id: 9999,
             body: body.to_string(),
-            user: polyresearch_cli::github::CommentUser {
+            user: CommentUser {
                 login: self.current_login.clone(),
             },
             created_at: chrono::Utc::now(),
@@ -487,14 +487,14 @@ fn make_ctx(
 }
 
 fn load_issue_fixture(name: &str) -> IssueFixture {
-    serde_json::from_str(include_str_fixture(name)).unwrap()
+    serde_json::from_str(include_fixture(name)).unwrap()
 }
 
 fn load_pr_fixture(name: &str) -> PullRequestFixture {
-    serde_json::from_str(include_str_fixture(name)).unwrap()
+    serde_json::from_str(include_fixture(name)).unwrap()
 }
 
-fn include_str_fixture(name: &str) -> &'static str {
+fn include_fixture(name: &str) -> &'static str {
     match name {
         "duplicate_claim_issue.json" => include_str!("fixtures/duplicate_claim_issue.json"),
         "non_lead_decision_pr.json" => include_str!("fixtures/non_lead_decision_pr.json"),
