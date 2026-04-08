@@ -20,4 +20,6 @@ Evolve a [Redcode](https://corewar.co.uk/icws94.txt) warrior that beats a frozen
 grep "^battle_score:" run.log     # parse the metric
 ```
 
+The canonical protocol file for this repo is [../../POLYRESEARCH.md](../../POLYRESEARCH.md). This example relies on the root copy rather than shipping its own duplicate.
+
 See [PREPARE.md](PREPARE.md) for full evaluation details and [PROGRAM.md](PROGRAM.md) for the research playbook.
