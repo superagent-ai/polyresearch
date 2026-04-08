@@ -18,16 +18,16 @@ Drop this file into your repository unchanged. Put project-specific coordination
 This table defines the protocol parameters. Put the concrete values for your project in a `## Configuration` section in `PROGRAM.md`. Agents read those values from `PROGRAM.md`.
 
 
-| Parameter                | Description                                                                                                                                             |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `required_confirmations` | Number of independent review records needed before the lead decides a PR. `0` means the lead decides without peer review. Default: `0`.                 |
-| `metric_tolerance`       | Maximum allowed divergence between reviewer metrics for agreement. No default — the maintainer must set this based on the domain and hardware variance. |
-| `metric_direction`       | `lower_is_better` or `higher_is_better`.                                                                                                                |
-| `lead_github_login`      | GitHub login that is authorized to perform lead-only actions such as approval, sync, policy checks, decisions, and admin repairs.                          |
-| `assignment_timeout`     | Time before an uncompleted claim expires and the thesis returns to the queue. Default: `24h`.                                                           |
-| `review_timeout`         | Time before an incomplete review claim expires. Default: `12h`.                                                                                         |
+| Parameter                | Description                                                                                                                                                                 |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `required_confirmations` | Number of independent review records needed before the lead decides a PR. `0` means the lead decides without peer review. Default: `0`.                                     |
+| `metric_tolerance`       | Maximum allowed divergence between reviewer metrics for agreement. No default — the maintainer must set this based on the domain and hardware variance.                     |
+| `metric_direction`       | `lower_is_better` or `higher_is_better`.                                                                                                                                    |
+| `lead_github_login`      | GitHub login that is authorized to perform lead-only actions such as approval, sync, policy checks, decisions, and admin repairs.                                           |
+| `assignment_timeout`     | Time before an uncompleted claim expires and the thesis returns to the queue. Default: `24h`.                                                                               |
+| `review_timeout`         | Time before an incomplete review claim expires. Default: `12h`.                                                                                                             |
 | `min_queue_depth`        | Minimum number of unclaimed approved theses the lead should keep available. If the queue drops below this, the lead generates enough new theses to refill it. Default: `5`. |
-| `max_queue_depth`        | Maximum number of unclaimed approved theses the lead should allow in the queue at once. When omitted, there is no upper bound.                         |
+| `max_queue_depth`        | Maximum number of unclaimed approved theses the lead should allow in the queue at once. When omitted, there is no upper bound.                                              |
 
 
 The parameter definitions live here. Concrete project values live in `PROGRAM.md`.
@@ -131,6 +131,7 @@ The event table below defines what to log:
 | Attempt discarded (never became a PR) | `polyresearch:attempt` comments on thesis issue          | Append row with self-reported metric                 |
 | Thesis closed without any candidate   | `polyresearch:release` + `polyresearch:attempt` comments | Append rows for all logged attempts                  |
 
+
 ### Generate theses
 
 Complete all of these before opening any new thesis issue:
@@ -181,7 +182,6 @@ If `required_confirmations` is `0`, skip peer review. The lead decides using thi
 4. If the PR cannot merge cleanly, resolve the merge conflict and then merge or close based on the metric rules above. Do not close a PR solely because it has a merge conflict.
 
 Do not use `outcome: stale` when `required_confirmations` is `0`. In that mode there are no review records, so there is no `base_sha` evidence to compare.
-
 
 ---
 
