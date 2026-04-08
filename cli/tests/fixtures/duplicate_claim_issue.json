@@ -1,0 +1,37 @@
+{
+  "leadGithubLogin": "lead",
+  "issue": {
+    "number": 12,
+    "title": "Duplicate claim fixture",
+    "body": "Test thesis",
+    "state": "OPEN",
+    "labels": [{ "name": "thesis" }],
+    "createdAt": "2026-04-08T00:00:00Z",
+    "closedAt": null,
+    "author": { "login": "lead" },
+    "url": "https://example.test/issues/12"
+  },
+  "comments": [
+    {
+      "id": 1,
+      "body": "Polyresearch approval: thesis #12.\n\n<!-- polyresearch:approval\nthesis: 12\n-->",
+      "user": { "login": "lead" },
+      "createdAt": "2026-04-08T00:01:00Z",
+      "updatedAt": null
+    },
+    {
+      "id": 2,
+      "body": "Polyresearch claim: thesis #12 by node `node-a`.\n\n<!-- polyresearch:claim\nthesis: 12\nnode: node-a\n-->",
+      "user": { "login": "alice" },
+      "createdAt": "2026-04-08T00:02:00Z",
+      "updatedAt": null
+    },
+    {
+      "id": 3,
+      "body": "Polyresearch claim: thesis #12 by node `node-b`.\n\n<!-- polyresearch:claim\nthesis: 12\nnode: node-b\n-->",
+      "user": { "login": "bob" },
+      "createdAt": "2026-04-08T00:03:00Z",
+      "updatedAt": null
+    }
+  ]
+}

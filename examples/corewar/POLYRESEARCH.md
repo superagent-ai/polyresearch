@@ -1,6 +1,6 @@
 # Polyresearch protocol
 
-This is the coordination protocol for polyresearch. It defines how agents find work, run experiments, submit candidates, and verify each other's results using `gh` and `git`. All coordination happens through GitHub Issues, PRs, and structured comments. No external services.
+This is the coordination protocol for polyresearch. It defines how agents find work, run experiments, submit candidates, and verify each other's results using the `polyresearch` CLI together with `gh` and `git`. GitHub Issues, PRs, branches, and structured comments remain the shared activity log. No external services.
 
 Drop this file into your repository unchanged. Put project-specific coordination values in `PROGRAM.md`. Do not modify the protocol sections.
 
@@ -23,9 +23,11 @@ This table defines the protocol parameters. Put the concrete values for your pro
 | `required_confirmations` | Number of independent review records needed before the lead decides a PR. `0` means the lead decides without peer review. Default: `0`.                 |
 | `metric_tolerance`       | Maximum allowed divergence between reviewer metrics for agreement. No default — the maintainer must set this based on the domain and hardware variance. |
 | `metric_direction`       | `lower_is_better` or `higher_is_better`.                                                                                                                |
+| `lead_github_login`      | GitHub login that is authorized to perform lead-only actions such as approval, sync, policy checks, decisions, and admin repairs.                          |
 | `assignment_timeout`     | Time before an uncompleted claim expires and the thesis returns to the queue. Default: `24h`.                                                           |
 | `review_timeout`         | Time before an incomplete review claim expires. Default: `12h`.                                                                                         |
 | `min_queue_depth`        | Minimum number of unclaimed approved theses the lead should keep available. If the queue drops below this, the lead generates enough new theses to refill it. Default: `5`. |
+| `max_queue_depth`        | Maximum number of unclaimed approved theses the lead should allow in the queue at once. When omitted, there is no upper bound.                         |
 
 
 The parameter definitions live here. Concrete project values live in `PROGRAM.md`.
@@ -56,14 +58,22 @@ When you start, before doing anything else:
 
 ---
 
+## Mandatory CLI
+
+Use `polyresearch` for every protocol mutation: claiming theses, posting attempts, releasing claims, submitting candidates, syncing `results.tsv`, policy checks, decisions, and any repair actions.
+
+GitHub remains the visible event log, and the CLI emits the same human-readable structured comments described below. Manual raw GitHub edits are non-canonical and may be ignored by the lead and the tooling. Exceptional recovery goes through explicit CLI admin or repair commands.
+
+---
+
 ## The contributor loop
 
 LOOP FOREVER:
 
-1. **Check for theses.** Run `gh issue list --label thesis --state open`. For each issue, read comments to determine state (see [Deriving state](#deriving-state)). Look for theses that are **approved and unclaimed**.
+1. **Check for theses.** Run `polyresearch status` and look for theses that are **approved and unclaimed**. The CLI derives canonical state from the comment trail and ignores invalid raw events.
 2. **If a claimable thesis exists:**
-  a. Post a `polyresearch:claim` comment on the issue.
-   b. Create a branch from `main`: `thesis/<issue-number>-<slug>`.
+  a. Run `polyresearch claim <issue-number>`.
+   b. The CLI posts the `polyresearch:claim` comment and creates the thesis branch from `main`: `thesis/<issue-number>-<slug>`.
    c. Read PROGRAM.md for direction and constraints.
    d. Run experiments. Each attempt on its own sub-branch: `thesis/<issue-number>-<slug>-attempt-<n>`.
    e. For each attempt:
@@ -71,18 +81,18 @@ LOOP FOREVER:
       - Commit your changes.
       - Run the experiment per PREPARE.md. Redirect output: `<run-command> > run.log 2>&1`.
       - Parse the metric per PREPARE.md.
-      - Post a `polyresearch:attempt` comment on the thesis issue with the metric, baseline, observation, and summary.
-   f. **If you find an improvement:** push the best attempt's sub-branch and open a candidate PR from it to `main`. Reference the thesis issue in the PR body.
-   g. **If no improvement after exhausting ideas:** post a `polyresearch:release` comment. The thesis returns to the queue for another contributor.
-3. **Check for review work.** Run `gh pr list`. For each PR, read comments. Look for PRs with a `polyresearch:policy-pass` comment and **no** `polyresearch:decision` comment. These need peer review. Skip PRs you authored.
+      - Run `polyresearch attempt <issue-number> --metric <value> --baseline <value> --observation <observation> --summary "<summary>"`.
+   f. **If you find an improvement:** run `polyresearch submit <issue-number>`. The CLI pushes the best attempt branch and opens the candidate PR to `main`.
+   g. **If no improvement after exhausting ideas:** run `polyresearch release <issue-number> --reason <reason>`. The thesis returns to the queue for another contributor.
+3. **Check for review work.** Run `polyresearch status` and look for PRs with a `polyresearch:policy-pass` comment and **no** `polyresearch:decision` comment. These need peer review. Skip PRs you authored.
 4. **If a reviewable PR exists:**
-  a. Post a `polyresearch:review-claim` comment on the PR.
+  a. Run `polyresearch review-claim <pr-number>`.
    b. Check out the **candidate SHA** (the PR head).
    c. Run the evaluation per PREPARE.md. Record the candidate metric.
    d. Check out the **base SHA** (the PR's merge base on `main`).
    e. Run the same evaluation. Record the baseline metric.
    f. If `.polyresearch/` exists, compute its content hash: `find .polyresearch/ -type f | sort | xargs sha256sum | sha256sum`.
-   g. Post a `polyresearch:review` comment with all fields. Your `baseline_metric` is your own measurement. Do not copy it from results.tsv or the candidate's self-report.
+   g. Run `polyresearch review <pr-number> --metric <candidate> --baseline <baseline> --observation <observation>`. Your `baseline_metric` is your own measurement. Do not copy it from results.tsv or the candidate's self-report.
 5. Repeat from step 1.
 
 If there are no theses to claim and no PRs to review, wait briefly and check again.
@@ -103,9 +113,9 @@ Everything in the contributor loop, plus these additional responsibilities. Run 
 
 You are the sole writer. This step runs first on every lead-loop iteration. Do not generate theses, run policy checks, or decide PRs until results.tsv is current.
 
-1. Run `gh issue list --label thesis --state closed` and read the comment trails. For every resolved thesis, check whether each `polyresearch:attempt` comment already has a corresponding row in results.tsv.
-2. If any attempts are missing, append them now and commit the updated results.tsv on `main`.
-3. Check open theses for discarded attempts that should already be logged, for example a contributor posted `polyresearch:attempt` and later `polyresearch:release` but the issue is still open. Add those rows too.
+1. Run `polyresearch sync`.
+2. The CLI reconciles canonical attempt history against `results.tsv`, appends any missing rows, and commits the updated results.tsv on `main`.
+3. Canonical history may ignore invalid raw GitHub events. Resolve any audit findings through CLI admin or repair commands before continuing.
 
 Only after results.tsv accounts for every known attempt may you proceed to the rest of the lead loop.
 
@@ -125,13 +135,14 @@ The event table below defines what to log:
 
 Complete all of these before opening any new thesis issue:
 
-1. Confirm results.tsv is current. The maintain step above must be done first.
+1. Confirm `polyresearch audit` is clean and `results.tsv` is current. The maintain step above must be done first.
 2. Read results.tsv and PROGRAM.md. Identify patterns in what worked, what failed, and what has not been tried yet.
-3. Run `gh issue list --label thesis --state all` and read every existing thesis title and body, open and closed.
+3. Run `polyresearch status` and read every existing thesis title and body, open and closed.
 
 Queue depth check:
 
 - Count the number of open theses that are approved and unclaimed, using [Deriving state](#deriving-state).
+- If `max_queue_depth` is set and that count is already at or above `max_queue_depth`, do not open new theses this iteration.
 - If that count is already at or above `min_queue_depth`, do not open new theses this iteration.
 - If that count is below `min_queue_depth`, open only enough new theses to bring the queue back to `min_queue_depth`.
 
@@ -142,19 +153,19 @@ Deduplication:
 - If an idea already failed, do not re-propose it unless you can point to a concrete reason the new attempt is materially different. State that reason in the thesis body.
 - If an idea was already merged, do not re-propose it.
 
-Open new GitHub Issues with the `thesis` label. Auto-approve them by posting a `polyresearch:approval` comment.
+Open new GitHub Issues with the `thesis` label by running `polyresearch generate --title "<title>" --body "<body>"`. The CLI auto-approves them by posting a `polyresearch:approval` comment.
 
 Guard against path dependence. If recent accepted theses share the same approach, generate at least one thesis that tries a fundamentally different direction from the current baseline.
 
 ### Policy check
 
-When a candidate PR is opened, diff it against the editable surface in PROGRAM.md. Check every file the PR touches - it must match a pattern in the CAN list. If any file is outside the editable surface, post a `polyresearch:decision` with `outcome: policy_rejection` and close the PR. No evaluation runs.
+When a candidate PR is opened, run `polyresearch policy-check <pr-number>`. The CLI diffs it against the editable surface in PROGRAM.md. If any file is outside the editable surface, it posts a `polyresearch:decision` with `outcome: policy_rejection` and closes the PR. No evaluation runs.
 
-If the candidate passes, post a `polyresearch:policy-pass` comment. The PR is now eligible for peer review.
+If the candidate passes, the CLI posts a `polyresearch:policy-pass` comment. The PR is now eligible for peer review.
 
 ### Decide PRs
 
-When `required_confirmations` review records have been posted on a PR, evaluate the results:
+When `required_confirmations` review records have been posted on a PR, run `polyresearch decide <pr-number>`:
 
 - All reviewers observed `improved` and their metrics agree within `metric_tolerance`: post `outcome: accepted`, **merge** the PR, close the thesis issue.
 - All reviewers observed `no_improvement` and agree: post `outcome: non_improvement`, **close** the PR, close the thesis issue.
@@ -228,6 +239,8 @@ main
 All protocol state transitions happen through structured comments on GitHub Issues and PRs. Each structured comment has a human-readable summary line followed by an HTML metadata block. Comments are append-only, attributed, and auditable.
 
 One label remains: `thesis` on issues, for discovery via `gh issue list --label thesis`. Everything else is a structured comment.
+
+Only structured comments emitted by `polyresearch` are canonical. Raw manual comments that resemble protocol events may still be visible on GitHub, but the lead and the tooling may ignore them if they do not pass validation.
 
 ### Format
 

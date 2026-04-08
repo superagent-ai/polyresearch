@@ -4,3 +4,5 @@ __pycache__/
 .env
 .venv/
 node_modules/
+.polyresearch-node
+cli/target/
