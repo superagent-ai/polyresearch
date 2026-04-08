@@ -16,22 +16,22 @@
       "id": 20,
       "body": "Polyresearch approval: thesis #88.\n\n<!-- polyresearch:approval\nthesis: 88\n-->",
       "user": { "login": "lead" },
-      "createdAt": "2026-04-08T00:01:00Z",
-      "updatedAt": null
+      "created_at": "2026-04-08T00:01:00Z",
+      "updated_at": null
     },
     {
       "id": 21,
       "body": "Polyresearch claim: thesis #88 by node `server`.\n\n<!-- polyresearch:claim\nthesis: 88\nnode: server\n-->",
       "user": { "login": "alice" },
-      "createdAt": "2026-04-08T00:02:00Z",
-      "updatedAt": null
+      "created_at": "2026-04-08T00:02:00Z",
+      "updated_at": null
     },
     {
       "id": 22,
       "body": "Polyresearch attempt: thesis #88, branch `thesis/88-river-opt-attempt-5`, metric `0.5885`, observation `no_improvement`.\n\n<!-- polyresearch:attempt\nthesis: 88\nbranch: thesis/88-river-opt-attempt-5\nmetric: 0.5885\nbaseline_metric: 0.5000\nobservation: no_improvement\nsummary: 200% pot river overbet\n-->",
       "user": { "login": "alice" },
-      "createdAt": "2026-04-08T00:04:00Z",
-      "updatedAt": null
+      "created_at": "2026-04-08T00:04:00Z",
+      "updated_at": null
     }
   ]
 }

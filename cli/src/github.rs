@@ -389,7 +389,6 @@ pub struct Author {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct IssueComment {
     pub id: u64,
     pub body: String,

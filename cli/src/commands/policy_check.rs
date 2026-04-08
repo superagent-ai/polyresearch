@@ -30,10 +30,14 @@ pub fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
     let files = ctx.github.list_pull_request_files(args.pr)?;
     let violations = files
         .into_iter()
-        .filter_map(|file| match ctx.program.is_editable(&file.filename) {
-            Ok(true) if !ctx.program.is_protected(&file.filename) => None,
-            Ok(_) => Some(file.filename),
-            Err(_) => Some(file.filename),
+        .filter_map(|file| {
+            let editable = ctx.program.is_editable(&file.filename).unwrap_or(false);
+            let protected = ctx.program.is_protected(&file.filename);
+            if editable && !protected {
+                None
+            } else {
+                Some(file.filename)
+            }
         })
         .collect::<Vec<_>>();
 

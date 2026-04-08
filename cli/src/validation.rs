@@ -7,6 +7,7 @@ use serde::Serialize;
 use crate::comments::{Observation, Outcome, ProtocolComment, ReleaseReason};
 use crate::config::ProtocolConfig;
 use crate::github::{Issue, IssueComment, PullRequest};
+use crate::state::parse_thesis_number_from_branch;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -604,12 +605,6 @@ pub fn validate_issue(
         attempts,
         findings,
     }
-}
-
-fn parse_thesis_number_from_branch(branch: &str) -> Option<u64> {
-    let suffix = branch.strip_prefix("thesis/")?;
-    let (number, _) = suffix.split_once('-')?;
-    number.parse::<u64>().ok()
 }
 
 fn is_lead_actor(author: &str, config: &ProtocolConfig) -> bool {

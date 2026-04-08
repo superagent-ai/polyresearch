@@ -16,22 +16,22 @@
       "id": 1,
       "body": "Polyresearch approval: thesis #12.\n\n<!-- polyresearch:approval\nthesis: 12\n-->",
       "user": { "login": "lead" },
-      "createdAt": "2026-04-08T00:01:00Z",
-      "updatedAt": null
+      "created_at": "2026-04-08T00:01:00Z",
+      "updated_at": null
     },
     {
       "id": 2,
       "body": "Polyresearch claim: thesis #12 by node `node-a`.\n\n<!-- polyresearch:claim\nthesis: 12\nnode: node-a\n-->",
       "user": { "login": "alice" },
-      "createdAt": "2026-04-08T00:02:00Z",
-      "updatedAt": null
+      "created_at": "2026-04-08T00:02:00Z",
+      "updated_at": null
     },
     {
       "id": 3,
       "body": "Polyresearch claim: thesis #12 by node `node-b`.\n\n<!-- polyresearch:claim\nthesis: 12\nnode: node-b\n-->",
       "user": { "login": "bob" },
-      "createdAt": "2026-04-08T00:03:00Z",
-      "updatedAt": null
+      "created_at": "2026-04-08T00:03:00Z",
+      "updated_at": null
     }
   ]
 }
