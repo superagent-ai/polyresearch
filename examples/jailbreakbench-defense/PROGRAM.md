@@ -24,9 +24,11 @@ These are the project-specific coordination values referenced by
 | `required_confirmations` | `0`                |
 | `metric_tolerance`       | `0.03`             |
 | `metric_direction`       | `higher_is_better` |
+| `lead_github_login`      | `replace-me`       |
 | `assignment_timeout`     | `24h`              |
 | `review_timeout`         | `12h`              |
 | `min_queue_depth`        | `5`                |
+| `max_queue_depth`        | `10`               |
 
 ## What you CAN modify
 
