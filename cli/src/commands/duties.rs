@@ -22,16 +22,12 @@ pub struct DutyReport {
 
 pub fn check(ctx: &AppContext, repo_state: &RepositoryState) -> Result<DutyReport> {
     let node_id = read_node_id(&ctx.repo_root).unwrap_or_default();
+    let login = ctx.github.current_login().unwrap_or_default();
     let is_lead = ctx
         .config
         .lead_github_login
         .as_deref()
-        .map(|lead| {
-            ctx.github
-                .current_login()
-                .map(|login| login == lead)
-                .unwrap_or(false)
-        })
+        .map(|lead| lead == login)
         .unwrap_or(false);
 
     let mut blocking = Vec::new();
@@ -95,7 +91,7 @@ pub fn check(ctx: &AppContext, repo_state: &RepositoryState) -> Result<DutyRepor
         check_lead_duties(ctx, repo_state, &mut blocking, &mut advisory)?;
     }
 
-    check_review_opportunities(ctx, repo_state, &node_id, &mut advisory);
+    check_review_opportunities(repo_state, &node_id, &login, &mut advisory);
 
     let clean = blocking.is_empty();
     Ok(DutyReport {
@@ -170,12 +166,11 @@ fn check_lead_duties(
 }
 
 fn check_review_opportunities(
-    _ctx: &AppContext,
     repo_state: &RepositoryState,
     node_id: &str,
+    login: &str,
     advisory: &mut Vec<DutyItem>,
 ) {
-    let login = _ctx.github.current_login().unwrap_or_default();
 
     for thesis in &repo_state.theses {
         if !matches!(thesis.phase, ThesisPhase::InReview) {

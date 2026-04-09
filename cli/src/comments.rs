@@ -150,6 +150,14 @@ impl ProtocolComment {
             return Ok(None);
         };
 
+        let full_match = captures.get(0).unwrap();
+        let before_match = &body[..full_match.start()];
+        if let Some(last_line) = before_match.rsplit('\n').next() {
+            if last_line.trim_start().starts_with('>') {
+                return Ok(None);
+            }
+        }
+
         let comment_type = captures
             .get(1)
             .ok_or_else(|| eyre!("missing polyresearch comment type"))?
@@ -374,7 +382,7 @@ fn parse_fields(payload: &str) -> BTreeMap<String, String> {
     payload
         .lines()
         .filter_map(|line| {
-            let trimmed = line.trim().trim_start_matches('>').trim();
+            let trimmed = line.trim();
             if trimmed.is_empty() {
                 return None;
             }

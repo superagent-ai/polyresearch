@@ -524,8 +524,8 @@ fn comment_parser_skips_email_quoted_blocks() {
 
     let result = ProtocolComment::parse(quoted_body).unwrap();
     assert!(
-        result.is_none() || matches!(result, Some(ProtocolComment::Claim { .. })),
-        "should either skip or parse the quoted block gracefully"
+        result.is_none(),
+        "email-quoted protocol blocks should be skipped entirely"
     );
 }
 
@@ -533,9 +533,12 @@ fn comment_parser_skips_email_quoted_blocks() {
 fn comment_parser_handles_malformed_fields_gracefully() {
     use polyresearch_cli::comments::ProtocolComment;
 
-    let body = "<!-- polyresearch:claim\n> thesis: 12\n> node: test\n-->";
+    let body = "<!-- polyresearch:claim\ngarbage line with no colon\n-->";
     let result = ProtocolComment::parse(body).unwrap();
-    assert!(result.is_some() || result.is_none());
+    assert!(
+        result.is_none(),
+        "malformed fields should cause parse_typed to fail and return None"
+    );
 }
 
 // --- B2: snake_case CLI flag values ---
