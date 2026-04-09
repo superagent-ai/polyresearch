@@ -66,10 +66,26 @@ GitHub remains the visible event log, and the CLI emits the same human-readable 
 
 ---
 
+## Duties
+
+Run `polyresearch duties` at the start of every loop iteration and after completing any experiment. If it reports blocking items, resolve them before starting new work. The CLI also enforces this: `claim` and `generate` will refuse to proceed if blocking duties exist.
+
+Blocking duties exist when:
+
+- A node has an active claim with no posted attempts.
+- A node has an improved attempt with no submit or release.
+- (Lead) Decidable PRs have not been decided.
+- (Lead) Open PRs have not been policy-checked.
+
+This mechanism exists because GitHub visibility is a shared resource. Other contributors, the lead, and the maintainer cannot see local-only work. A node that runs experiments without posting results is invisible to the project.
+
+---
+
 ## The contributor loop
 
 LOOP FOREVER:
 
+0. **Check duties.** Run `polyresearch duties`. If any blocking items are reported, resolve each one before continuing. The CLI will also block `claim` if duties are outstanding.
 1. **Check for theses.** Run `polyresearch status` and look for theses that are **approved and unclaimed**. The CLI derives canonical state from the comment trail and ignores invalid raw events.
 2. **If a claimable thesis exists:**
   a. Run `polyresearch claim <issue-number>`.
@@ -108,6 +124,16 @@ If there are no theses to claim and no PRs to review, wait briefly and check aga
 ## The lead loop
 
 Everything in the contributor loop, plus these additional responsibilities. Run them as part of the same loop.
+
+**Priority order within each iteration.** GitHub-visible duties run first, in this order:
+
+0. `polyresearch duties` — resolve any blocking items (decidable PRs, stale results.tsv, etc.).
+1. `polyresearch sync` (always before other lead actions).
+2. Process open PRs: `policy-check` and `decide` any that are ready.
+3. Check queue depth; `generate` if below `min_queue_depth`.
+4. Only then proceed to local experiments.
+
+Between experiment batches (or while waiting for evaluations), re-run steps 0–3. The lead must never have GitHub stale while the server is working. Post `polyresearch attempt` results immediately after each evaluation completes, not in batches.
 
 ### Maintain results.tsv
 
@@ -181,7 +207,9 @@ If `required_confirmations` is `0`, skip peer review. The lead decides using thi
 3. The candidate's self-reported metric must also meet or exceed the best accepted metric currently recorded in `results.tsv` on `main`. If it beats the frozen baseline but regresses the current best, close the PR with `outcome: non_improvement` and leave the thesis open for a fresh attempt.
 4. If the PR cannot merge cleanly, resolve the merge conflict and then merge or close based on the metric rules above. Do not close a PR solely because it has a merge conflict.
 
-Do not use `outcome: stale` when `required_confirmations` is `0`. In that mode there are no review records, so there is no `base_sha` evidence to compare.
+Do not use `outcome: stale` when `required_confirmations` is `0`. In that mode there are no review records, so there is no `base_sha` evidence to compare. If the candidate was evaluated before a newer prompt was merged to `main`, the self-reported baseline may be stale. Rule 3 above (must meet or exceed the best accepted metric in `results.tsv`) serves as the staleness guard in zero-confirmation mode.
+
+For `accepted` outcomes, the merge must succeed before the decision comment is posted. If the PR has a merge conflict, resolve it before deciding. Do not post an irrevocable `accepted` decision on an unmergeable PR.
 
 ---
 
@@ -421,6 +449,12 @@ The `outcome` field in the `polyresearch:decision` comment. One per PR.
 
 
 On `stale` and `infra_failure`, the thesis is not permanently closed. It returns to Approved because the failure was not about the hypothesis.
+
+### Evaluation variance
+
+When evaluation produces noisy metrics (variance greater than 10% of `metric_tolerance`), contributors should run the evaluator multiple times and report the mean. The `summary` field in `polyresearch attempt` should note the number of runs and the range.
+
+The lead should consider a candidate that consistently scores higher across multiple runs as `improved`, even if no single run exceeds `metric_tolerance`. When `required_confirmations` is `0`, the lead may accept a candidate whose average metric across N >= 3 self-reported runs exceeds the tolerance, provided the worst single run is no worse than the current baseline.
 
 ---
 

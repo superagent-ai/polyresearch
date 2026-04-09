@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Context, Result, eyre};
 use serde::Serialize;
 
 use crate::cli::PrArgs;
@@ -45,16 +45,20 @@ pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
         confirmations,
     };
     if !ctx.cli.dry_run {
-        ctx.github.post_issue_comment(args.pr, &comment.render())?;
         match outcome {
             Outcome::Accepted => {
-                ctx.github.merge_pull_request(args.pr)?;
+                ctx.github
+                    .merge_pull_request(args.pr)
+                    .wrap_err("merge failed — decision NOT posted (resolve conflict first)")?;
+                ctx.github.post_issue_comment(args.pr, &comment.render())?;
                 ctx.github.close_issue(thesis.issue.number)?;
             }
             Outcome::InfraFailure | Outcome::Stale => {
+                ctx.github.post_issue_comment(args.pr, &comment.render())?;
                 ctx.github.close_pull_request(args.pr)?;
             }
             Outcome::NonImprovement | Outcome::Disagreement | Outcome::PolicyRejection => {
+                ctx.github.post_issue_comment(args.pr, &comment.render())?;
                 ctx.github.close_pull_request(args.pr)?;
                 if ctx.config.required_confirmations > 0
                     || !matches!(outcome, Outcome::NonImprovement)

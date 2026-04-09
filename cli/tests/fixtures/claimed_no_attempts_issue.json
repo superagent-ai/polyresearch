@@ -1,0 +1,30 @@
+{
+  "leadGithubLogin": "lead",
+  "issue": {
+    "number": 20,
+    "title": "Claimed no attempts fixture",
+    "body": "Thesis with an active claim but no attempts posted",
+    "state": "OPEN",
+    "labels": [{ "name": "thesis" }],
+    "createdAt": "2026-04-08T00:00:00Z",
+    "closedAt": null,
+    "author": { "login": "lead" },
+    "url": "https://example.test/issues/20"
+  },
+  "comments": [
+    {
+      "id": 1,
+      "body": "Polyresearch approval: thesis #20.\n\n<!-- polyresearch:approval\nthesis: 20\n-->",
+      "user": { "login": "lead" },
+      "created_at": "2026-04-08T00:01:00Z",
+      "updated_at": null
+    },
+    {
+      "id": 2,
+      "body": "Polyresearch claim: thesis #20 by node `test-node`.\n\n<!-- polyresearch:claim\nthesis: 20\nnode: test-node\n-->",
+      "user": { "login": "alice" },
+      "created_at": "2026-04-08T00:02:00Z",
+      "updated_at": null
+    }
+  ]
+}

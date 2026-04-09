@@ -2,6 +2,7 @@ use color_eyre::eyre::{Result, eyre};
 use serde::Serialize;
 
 use crate::cli::GenerateArgs;
+use crate::commands::duties;
 use crate::commands::guards::{ensure_clean_audit, ensure_lead};
 use crate::commands::{AppContext, print_value};
 use crate::comments::ProtocolComment;
@@ -20,6 +21,23 @@ pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
     ensure_lead(ctx)?;
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
     ensure_clean_audit(&repo_state, "generate theses")?;
+
+    let duty_report = duties::check(ctx, &repo_state)?;
+    let lead_blocking: Vec<_> = duty_report
+        .blocking
+        .iter()
+        .filter(|d| d.category == "decide" || d.category == "policy-check")
+        .collect();
+    if !lead_blocking.is_empty() {
+        let items: Vec<String> = lead_blocking
+            .iter()
+            .map(|d| format!("  [{}] {} Run: {}", d.category, d.message, d.command))
+            .collect();
+        return Err(eyre!(
+            "cannot generate theses while PRs need processing:\n{}",
+            items.join("\n")
+        ));
+    }
     let ledger = Ledger::load(&ctx.repo_root)?;
     if !ledger.is_current(&repo_state) {
         return Err(eyre!(
@@ -47,8 +65,17 @@ pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
         let approval = ProtocolComment::Approval {
             thesis: issue.number,
         };
-        ctx.github
-            .post_issue_comment(issue.number, &approval.render())?;
+        if let Err(err) = ctx
+            .github
+            .post_issue_comment(issue.number, &approval.render())
+        {
+            eprintln!(
+                "Failed to post approval on #{}, closing orphaned issue: {err}",
+                issue.number
+            );
+            let _ = ctx.github.close_issue(issue.number);
+            return Err(err);
+        }
         Some(issue)
     };
 

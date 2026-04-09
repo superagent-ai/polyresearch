@@ -73,6 +73,7 @@ pub trait GitHubApi: Send + Sync {
     fn current_login(&self) -> Result<String>;
     fn auth_status(&self) -> Result<String>;
     fn auth_token(&self) -> Result<String>;
+    fn repo_has_issues(&self) -> Result<bool>;
     fn list_thesis_issues(&self, state: IssueListState) -> Result<Vec<Issue>>;
     fn list_issue_comments(&self, issue_number: u64) -> Result<Vec<IssueComment>>;
     fn create_issue(&self, title: &str, body: &str, labels: &[&str]) -> Result<Issue>;
@@ -131,6 +132,18 @@ impl GitHubClient {
         }
 
         Ok(String::from_utf8(output.stdout)?.trim().to_string())
+    }
+
+    pub fn repo_has_issues(&self) -> Result<bool> {
+        let value = self.gh_api_json(
+            "GET",
+            &format!("repos/{}/{}", self.repo.owner, self.repo.name),
+            &[],
+        )?;
+        Ok(value
+            .get("has_issues")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true))
     }
 
     pub fn list_thesis_issues(&self, state: IssueListState) -> Result<Vec<Issue>> {
@@ -373,6 +386,10 @@ impl GitHubApi for GitHubClient {
         GitHubClient::auth_token(self)
     }
 
+    fn repo_has_issues(&self) -> Result<bool> {
+        GitHubClient::repo_has_issues(self)
+    }
+
     fn list_thesis_issues(&self, state: IssueListState) -> Result<Vec<Issue>> {
         GitHubClient::list_thesis_issues(self, state)
     }
@@ -523,6 +540,14 @@ impl PullRequestListState {
     }
 }
 
+fn deserialize_uppercase_state<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    Ok(s.to_uppercase())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Issue {
@@ -530,11 +555,13 @@ pub struct Issue {
     pub title: String,
     #[serde(default)]
     pub body: Option<String>,
+    #[serde(deserialize_with = "deserialize_uppercase_state")]
     pub state: String,
     #[serde(default)]
     pub labels: Vec<Label>,
+    #[serde(alias = "created_at")]
     pub created_at: DateTime<Utc>,
-    #[serde(default)]
+    #[serde(default, alias = "closed_at")]
     pub closed_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub author: Option<Author>,
@@ -574,16 +601,19 @@ pub struct PullRequest {
     pub title: String,
     #[serde(default)]
     pub body: Option<String>,
+    #[serde(deserialize_with = "deserialize_uppercase_state")]
     pub state: String,
+    #[serde(alias = "head_ref_name")]
     pub head_ref_name: String,
-    #[serde(default)]
+    #[serde(default, alias = "head_ref_oid")]
     pub head_ref_oid: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "base_ref_name")]
     pub base_ref_name: Option<String>,
+    #[serde(alias = "created_at")]
     pub created_at: DateTime<Utc>,
-    #[serde(default)]
+    #[serde(default, alias = "closed_at")]
     pub closed_at: Option<DateTime<Utc>>,
-    #[serde(default)]
+    #[serde(default, alias = "merged_at")]
     pub merged_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub author: Option<Author>,

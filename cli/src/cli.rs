@@ -29,6 +29,7 @@ pub enum Commands {
     Submit(IssueArgs),
     ReviewClaim(PrArgs),
     Review(ReviewArgs),
+    Duties,
     Audit,
     Admin(AdminArgs),
     Sync,

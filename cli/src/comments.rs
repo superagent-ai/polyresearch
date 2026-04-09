@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ValueEnum, Hash,
 )]
+#[clap(rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum Observation {
     Improved,
@@ -33,6 +34,7 @@ impl fmt::Display for Observation {
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ValueEnum, Hash,
 )]
+#[clap(rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum ReleaseReason {
     NoImprovement,
@@ -54,6 +56,7 @@ impl fmt::Display for ReleaseReason {
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ValueEnum, Hash,
 )]
+#[clap(rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
     Accepted,
@@ -158,62 +161,69 @@ impl ProtocolComment {
             .as_str();
         let fields = parse_fields(payload);
 
+        match Self::parse_typed(comment_type, &fields) {
+            Ok(comment) => Ok(Some(comment)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    fn parse_typed(comment_type: &str, fields: &BTreeMap<String, String>) -> Result<Self> {
         let comment = match comment_type {
             "approval" => Self::Approval {
-                thesis: parse_u64(&fields, "thesis")?,
+                thesis: parse_u64(fields, "thesis")?,
             },
             "claim" => Self::Claim {
-                thesis: parse_u64(&fields, "thesis")?,
-                node: parse_string(&fields, "node")?,
+                thesis: parse_u64(fields, "thesis")?,
+                node: parse_string(fields, "node")?,
             },
             "release" => Self::Release {
-                thesis: parse_u64(&fields, "thesis")?,
-                node: parse_string(&fields, "node")?,
-                reason: parse_release_reason(&fields, "reason")?,
+                thesis: parse_u64(fields, "thesis")?,
+                node: parse_string(fields, "node")?,
+                reason: parse_release_reason(fields, "reason")?,
             },
             "attempt" => Self::Attempt {
-                thesis: parse_u64(&fields, "thesis")?,
-                branch: parse_string(&fields, "branch")?,
-                metric: parse_f64(&fields, "metric")?,
-                baseline_metric: parse_f64(&fields, "baseline_metric")?,
-                observation: parse_observation(&fields, "observation")?,
-                summary: parse_string(&fields, "summary")?,
+                thesis: parse_u64(fields, "thesis")?,
+                branch: parse_string(fields, "branch")?,
+                metric: parse_f64(fields, "metric")?,
+                baseline_metric: parse_f64(fields, "baseline_metric")?,
+                observation: parse_observation(fields, "observation")?,
+                summary: parse_string(fields, "summary")?,
             },
             "policy-pass" => Self::PolicyPass {
-                thesis: parse_u64(&fields, "thesis")?,
-                candidate_sha: parse_string(&fields, "candidate_sha")?,
+                thesis: parse_u64(fields, "thesis")?,
+                candidate_sha: parse_string(fields, "candidate_sha")?,
             },
             "review-claim" => Self::ReviewClaim {
-                thesis: parse_u64(&fields, "thesis")?,
-                node: parse_string(&fields, "node")?,
+                thesis: parse_u64(fields, "thesis")?,
+                node: parse_string(fields, "node")?,
             },
             "review" => Self::Review {
-                thesis: parse_u64(&fields, "thesis")?,
-                candidate_sha: parse_string(&fields, "candidate_sha")?,
-                base_sha: parse_string(&fields, "base_sha")?,
-                node: parse_string(&fields, "node")?,
-                metric: parse_f64(&fields, "metric")?,
-                baseline_metric: parse_f64(&fields, "baseline_metric")?,
-                observation: parse_observation(&fields, "observation")?,
-                env_sha: parse_optional_string(&fields, "env_sha")?,
-                timestamp: parse_timestamp(&fields, "timestamp")?,
+                thesis: parse_u64(fields, "thesis")?,
+                candidate_sha: parse_string(fields, "candidate_sha")?,
+                base_sha: parse_string(fields, "base_sha")?,
+                node: parse_string(fields, "node")?,
+                metric: parse_f64(fields, "metric")?,
+                baseline_metric: parse_f64(fields, "baseline_metric")?,
+                observation: parse_observation(fields, "observation")?,
+                env_sha: parse_optional_string(fields, "env_sha")?,
+                timestamp: parse_timestamp(fields, "timestamp")?,
             },
             "decision" => Self::Decision {
-                thesis: parse_u64(&fields, "thesis")?,
-                candidate_sha: parse_string(&fields, "candidate_sha")?,
-                outcome: parse_outcome(&fields, "outcome")?,
-                confirmations: parse_u64(&fields, "confirmations")?,
+                thesis: parse_u64(fields, "thesis")?,
+                candidate_sha: parse_string(fields, "candidate_sha")?,
+                outcome: parse_outcome(fields, "outcome")?,
+                confirmations: parse_u64(fields, "confirmations")?,
             },
             "admin-note" => Self::AdminNote {
-                action: parse_string(&fields, "action")?,
-                target: parse_string(&fields, "target")?,
-                note: parse_string(&fields, "note")?,
-                related_comment_id: parse_optional_u64(&fields, "related_comment_id")?,
+                action: parse_string(fields, "action")?,
+                target: parse_string(fields, "target")?,
+                note: parse_string(fields, "note")?,
+                related_comment_id: parse_optional_u64(fields, "related_comment_id")?,
             },
             other => return Err(eyre!("unknown polyresearch comment type `{other}`")),
         };
 
-        Ok(Some(comment))
+        Ok(comment)
     }
 
     pub fn render(&self) -> String {
@@ -364,7 +374,7 @@ fn parse_fields(payload: &str) -> BTreeMap<String, String> {
     payload
         .lines()
         .filter_map(|line| {
-            let trimmed = line.trim();
+            let trimmed = line.trim().trim_start_matches('>').trim();
             if trimmed.is_empty() {
                 return None;
             }

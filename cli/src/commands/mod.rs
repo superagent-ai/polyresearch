@@ -3,6 +3,7 @@ pub mod attempt;
 pub mod audit;
 pub mod claim;
 pub mod decide;
+pub mod duties;
 pub mod generate;
 pub mod guards;
 pub mod init;
@@ -46,6 +47,7 @@ pub async fn run(ctx: AppContext) -> Result<()> {
         Commands::Submit(args) => submit::run(&ctx, args).await,
         Commands::ReviewClaim(args) => review_claim::run(&ctx, args).await,
         Commands::Review(args) => review::run(&ctx, args).await,
+        Commands::Duties => duties::run(&ctx).await,
         Commands::Audit => audit::run(&ctx).await,
         Commands::Admin(args) => admin::run(&ctx, args).await,
         Commands::Sync => sync::run(&ctx).await,
@@ -126,6 +128,9 @@ pub fn create_thesis_branch(repo_root: &PathBuf, issue_number: u64, title: &str)
     let slug = slugify(title);
     let branch = format!("thesis/{issue_number}-{slug}");
     run_git(repo_root, &["checkout", "main"])?;
+    if run_git(repo_root, &["rev-parse", "--verify", &branch]).is_ok() {
+        run_git(repo_root, &["branch", "-D", &branch])?;
+    }
     run_git(repo_root, &["checkout", "-b", &branch])?;
     Ok(branch)
 }
