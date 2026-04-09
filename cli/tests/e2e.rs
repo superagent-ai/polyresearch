@@ -18,6 +18,9 @@ use polyresearch_cli::github::{
 use polyresearch_cli::state::RepositoryState;
 use serde::Deserialize;
 
+#[allow(unused_imports)]
+use polyresearch_cli::commands::duties;
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct IssueFixture {
@@ -73,6 +76,10 @@ impl GitHubApi for MockGitHubClient {
 
     fn auth_token(&self) -> Result<String> {
         Ok("test-token".to_string())
+    }
+
+    fn repo_has_issues(&self) -> Result<bool> {
+        Ok(true)
     }
 
     fn list_thesis_issues(&self, _state: IssueListState) -> Result<Vec<Issue>> {
@@ -449,6 +456,234 @@ async fn valid_claim_succeeds_in_dry_run_without_writing() {
     assert!(mock.posted_issue_comments.lock().unwrap().is_empty());
 }
 
+// --- A1: Serde deserialization with snake_case (REST API) ---
+
+#[test]
+fn issue_deserializes_from_snake_case_json() {
+    let json = r#"{
+        "number": 5,
+        "title": "Snake case test",
+        "body": "test",
+        "state": "open",
+        "labels": [],
+        "created_at": "2026-04-08T00:00:00Z",
+        "closed_at": null,
+        "author": { "login": "alice" },
+        "url": "https://example.test/issues/5"
+    }"#;
+    let issue: Issue = serde_json::from_str(json).unwrap();
+    assert_eq!(issue.number, 5);
+    assert_eq!(issue.state, "OPEN");
+}
+
+#[test]
+fn issue_deserializes_from_camel_case_json() {
+    let json = r#"{
+        "number": 6,
+        "title": "Camel case test",
+        "body": "test",
+        "state": "OPEN",
+        "labels": [],
+        "createdAt": "2026-04-08T00:00:00Z",
+        "closedAt": null,
+        "author": { "login": "alice" },
+        "url": "https://example.test/issues/6"
+    }"#;
+    let issue: Issue = serde_json::from_str(json).unwrap();
+    assert_eq!(issue.number, 6);
+    assert_eq!(issue.state, "OPEN");
+}
+
+#[test]
+fn pull_request_deserializes_state_case_insensitive() {
+    let json = r#"{
+        "number": 7,
+        "title": "PR test",
+        "state": "closed",
+        "headRefName": "thesis/7-test",
+        "createdAt": "2026-04-08T00:00:00Z"
+    }"#;
+    let pr: PullRequest = serde_json::from_str(json).unwrap();
+    assert_eq!(pr.state, "CLOSED");
+}
+
+// --- A2: Comment parser email quoting ---
+
+#[test]
+fn comment_parser_skips_email_quoted_blocks() {
+    use polyresearch_cli::comments::ProtocolComment;
+
+    let quoted_body = r#"On Tue, Apr 8, 2026, Alice wrote:
+
+> Polyresearch claim: thesis #12 by node `node-a`.
+>
+> <!-- polyresearch:claim
+> thesis: 12
+> node: node-a
+> -->"#;
+
+    let result = ProtocolComment::parse(quoted_body).unwrap();
+    assert!(
+        result.is_none(),
+        "email-quoted protocol blocks should be skipped entirely"
+    );
+}
+
+#[test]
+fn comment_parser_handles_malformed_fields_gracefully() {
+    use polyresearch_cli::comments::ProtocolComment;
+
+    let body = "<!-- polyresearch:claim\ngarbage line with no colon\n-->";
+    let result = ProtocolComment::parse(body).unwrap();
+    assert!(
+        result.is_none(),
+        "malformed fields should cause parse_typed to fail and return None"
+    );
+}
+
+// --- B2: snake_case CLI flag values ---
+
+#[test]
+fn observation_value_enum_accepts_snake_case() {
+    use polyresearch_cli::comments::Observation;
+    use clap::ValueEnum;
+
+    let variants: Vec<_> = Observation::value_variants()
+        .iter()
+        .flat_map(|v| v.to_possible_value())
+        .map(|v| v.get_name().to_string())
+        .collect();
+    assert!(variants.contains(&"no_improvement".to_string()));
+    assert!(!variants.contains(&"no-improvement".to_string()));
+}
+
+// --- B5: Duties command ---
+
+#[tokio::test]
+async fn duties_reports_blocking_when_claim_has_no_attempts() {
+    let repo = TestRepo::new("duties-claim");
+    let fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        false,
+        Commands::Duties,
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await.unwrap();
+    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+    assert!(!report.clean, "should have blocking duties");
+    assert!(
+        report.blocking.iter().any(|d| d.category == "claim"),
+        "should report a claim-related blocking duty"
+    );
+}
+
+#[tokio::test]
+async fn duties_reports_blocking_when_improved_but_not_submitted() {
+    let repo = TestRepo::new("duties-submit");
+    let fixture = load_issue_fixture("improved_no_submit_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        false,
+        Commands::Duties,
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await.unwrap();
+    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+    assert!(!report.clean, "should have blocking duties");
+    assert!(
+        report.blocking.iter().any(|d| d.category == "submit"),
+        "should report a submit-related blocking duty"
+    );
+}
+
+#[tokio::test]
+async fn duties_clean_on_no_claims() {
+    let repo = TestRepo::new("duties-clean");
+    let fixture = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        false,
+        Commands::Duties,
+    );
+    commands::write_node_id(&repo.path, "node-x").unwrap();
+
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await.unwrap();
+    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+    assert!(report.clean, "should have no blocking duties");
+}
+
+// --- B6: Duty gate on claim ---
+
+#[tokio::test]
+async fn claim_blocked_by_outstanding_duties() {
+    let repo = TestRepo::new("claim-gate");
+    let fixture_claimed = load_issue_fixture("claimed_no_attempts_issue.json");
+    let fixture_open = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture_claimed.issue.clone(), fixture_open.issue.clone()],
+        HashMap::from([
+            (fixture_claimed.issue.number, fixture_claimed.comments.clone()),
+            (fixture_open.issue.number, fixture_open.comments.clone()),
+        ]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture_claimed.lead_github_login,
+        true,
+        Commands::Claim(IssueArgs {
+            issue: fixture_open.issue.number,
+        }),
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let error = commands::claim::run(
+        &ctx,
+        &IssueArgs {
+            issue: fixture_open.issue.number,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("blocking duties"),
+        "claim should be blocked by outstanding duties, got: {error}"
+    );
+}
+
 fn make_ctx(
     repo_root: PathBuf,
     github: Arc<dyn GitHubApi>,
@@ -503,6 +738,12 @@ fn include_fixture(name: &str) -> &'static str {
         }
         "acknowledged_invalid_issue.json" => {
             include_str!("fixtures/acknowledged_invalid_issue.json")
+        }
+        "claimed_no_attempts_issue.json" => {
+            include_str!("fixtures/claimed_no_attempts_issue.json")
+        }
+        "improved_no_submit_issue.json" => {
+            include_str!("fixtures/improved_no_submit_issue.json")
         }
         other => panic!("unknown fixture: {other}"),
     }

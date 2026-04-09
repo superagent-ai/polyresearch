@@ -20,6 +20,14 @@ pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
     let _ = ctx.github.auth_status()?;
     let _ = ctx.github.auth_token()?;
 
+    if let Ok(false) = ctx.github.repo_has_issues() {
+        eprintln!("Warning: Issues are disabled on this repository (common for forks).");
+        eprintln!(
+            "Enable them: gh api repos/{} --method PATCH -f has_issues=true",
+            ctx.repo.slug()
+        );
+    }
+
     if !ctx.cli.dry_run {
         write_node_id(&ctx.repo_root, &node)?;
     }

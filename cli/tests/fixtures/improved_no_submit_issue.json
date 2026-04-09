@@ -1,0 +1,37 @@
+{
+  "leadGithubLogin": "lead",
+  "issue": {
+    "number": 21,
+    "title": "Improved no submit fixture",
+    "body": "Thesis with an improved attempt but no PR",
+    "state": "OPEN",
+    "labels": [{ "name": "thesis" }],
+    "createdAt": "2099-04-08T00:00:00Z",
+    "closedAt": null,
+    "author": { "login": "lead" },
+    "url": "https://example.test/issues/21"
+  },
+  "comments": [
+    {
+      "id": 1,
+      "body": "Polyresearch approval: thesis #21.\n\n<!-- polyresearch:approval\nthesis: 21\n-->",
+      "user": { "login": "lead" },
+      "created_at": "2099-04-08T00:01:00Z",
+      "updated_at": null
+    },
+    {
+      "id": 2,
+      "body": "Polyresearch claim: thesis #21 by node `test-node`.\n\n<!-- polyresearch:claim\nthesis: 21\nnode: test-node\n-->",
+      "user": { "login": "alice" },
+      "created_at": "2099-04-08T00:02:00Z",
+      "updated_at": null
+    },
+    {
+      "id": 3,
+      "body": "Polyresearch attempt: thesis #21, branch `thesis/21-improved-attempt-1`, metric `0.9500`, observation `improved`.\n\n<!-- polyresearch:attempt\nthesis: 21\nbranch: thesis/21-improved-attempt-1\nmetric: 0.9500\nbaseline_metric: 0.9000\nobservation: improved\nsummary: Better prompt\n-->",
+      "user": { "login": "alice" },
+      "created_at": "2099-04-08T00:03:00Z",
+      "updated_at": null
+    }
+  ]
+}

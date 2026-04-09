@@ -4,7 +4,7 @@ use serde::Serialize;
 use crate::cli::AttemptArgs;
 use crate::commands::guards::require_claimed_thesis;
 use crate::commands::{AppContext, current_branch, print_value, read_node_id};
-use crate::comments::ProtocolComment;
+use crate::comments::{Observation, ProtocolComment};
 use crate::state::RepositoryState;
 
 #[derive(Debug, Serialize)]
@@ -51,9 +51,16 @@ pub async fn run(ctx: &AppContext, args: &AttemptArgs) -> Result<()> {
     };
 
     print_value(ctx, &output, |value| {
-        format!(
+        let mut msg = format!(
             "Recorded attempt {} for thesis #{} on `{}` ({:.4} vs {:.4}).",
             value.attempt_number, value.issue, value.branch, value.metric, value.baseline_metric
-        )
+        );
+        if args.observation == Observation::Improved {
+            msg.push_str(&format!(
+                "\nImproved result recorded. Run `polyresearch submit {}` to open a candidate PR.",
+                value.issue
+            ));
+        }
+        msg
     })
 }

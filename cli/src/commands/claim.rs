@@ -2,6 +2,7 @@ use color_eyre::eyre::{Result, eyre};
 use serde::Serialize;
 
 use crate::cli::IssueArgs;
+use crate::commands::duties;
 use crate::commands::guards::require_claimable_thesis;
 use crate::commands::{AppContext, create_thesis_branch, print_value, read_node_id, slugify};
 use crate::comments::ProtocolComment;
@@ -17,6 +18,19 @@ struct ClaimOutput {
 pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
     let node = read_node_id(&ctx.repo_root)?;
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
+
+    let duty_report = duties::check(ctx, &repo_state)?;
+    if !duty_report.blocking.is_empty() {
+        let items: Vec<String> = duty_report
+            .blocking
+            .iter()
+            .map(|d| format!("  [{}] {} Run: {}", d.category, d.message, d.command))
+            .collect();
+        return Err(eyre!(
+            "cannot claim while blocking duties exist:\n{}",
+            items.join("\n")
+        ));
+    }
     let thesis = require_claimable_thesis(&repo_state, args.issue)?;
     if !thesis.active_claims.is_empty() {
         let nodes = thesis
