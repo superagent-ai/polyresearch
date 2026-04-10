@@ -111,10 +111,20 @@ Lead flow:
 
 ```bash
 polyresearch sync
+polyresearch duties
 polyresearch generate --title "New thesis" --body "Hypothesis and rationale"
 polyresearch policy-check 93
 polyresearch decide 93
 polyresearch admin reconcile-ledger
+```
+
+Maintainer approval (when `auto_approve` is `false` in `PROGRAM.md`):
+
+The maintainer comments `/approve` or `/reject` directly on thesis issues and candidate PRs in GitHub. Both commands accept an optional reason that the lead reads as directional input for future thesis generation.
+
+```
+/approve focus on normalization layers
+/reject this direction already failed for architectural reasons
 ```
 
 ## Output modes
@@ -135,9 +145,10 @@ polyresearch admin reconcile-ledger
 - `polyresearch review-claim` -- claim a PR for review
 - `polyresearch review` -- post a structured review record with env hash
 - `polyresearch sync` -- reconcile `results.tsv` from the comment trail
-- `polyresearch generate` -- open and auto-approve a thesis issue
+- `polyresearch generate` -- open a thesis issue (auto-approves when `auto_approve` is `true`, otherwise assigns to maintainer)
 - `polyresearch policy-check` -- validate PR files against the editable surface
-- `polyresearch decide` -- post the lead decision and merge/close accordingly
+- `polyresearch decide` -- post the lead decision and merge/close accordingly (waits for maintainer `/approve` when `auto_approve` is `false`)
+- `polyresearch duties` -- list blocking and advisory work items for the current node
 - `polyresearch admin ...` -- lead-only repair commands for exceptional recovery
 
 ## Notes

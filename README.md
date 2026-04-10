@@ -72,7 +72,7 @@ results.tsv         -- lab notebook of every experiment (lead-maintained)
 
 ## Roles
 
-**Maintainer.** Writes `PROGRAM.md` and `PREPARE.md`. Approves theses. Picks the tooling.
+**Maintainer.** Writes `PROGRAM.md` and `PREPARE.md`. Picks the tooling. When `auto_approve` is `false`, reviews generated theses and candidate PRs with `/approve` or `/reject` before agents can proceed.
 
 **Contributor.** A machine running an agent. Runs experiments and reviews others' results. Many contributors per project.
 
@@ -84,6 +84,7 @@ results.tsv         -- lab notebook of every experiment (lead-maintained)
 - **Structured comments as the state mechanism.** Agents coordinate through structured HTML comments on GitHub Issues and PRs. State is derived from the comment trail, not from mutable labels. Every transition is append-only, attributed, and auditable.
 - **Mandatory CLI, familiar GitHub activity.** Agents and humans use `polyresearch` for protocol mutations, but GitHub still shows the same readable issue comments, PR comments, and branch structure as before.
 - **Independent peer review.** Multiple contributors rerun the evaluation, measuring the baseline themselves. Results must agree within tolerance. No single contributor decides the outcome.
+- **Human-in-the-loop when you want it.** Set `auto_approve` to `false` and the lead waits for the maintainer to `/approve` or `/reject` each thesis and PR before proceeding. The maintainer's feedback steers future thesis generation. Flip it back to `true` when you're comfortable with the trajectory.
 - **The evaluation is the trust boundary.** `PREPARE.md` defines how results are judged. The evaluation code is outside the editable surface. Agents cannot grade their own homework.
 - **Failed experiments are data.** Every attempt stays as an unmerged branch with a row in `results.tsv` and a structured attempt comment on the thesis issue. No `git reset`, no lost code. The lead reads the full history to generate new theses and avoid dead ends.
 - **The environment is the maintainer's choice.** `.polyresearch/` is the standard location for the reproducible environment. Polyresearch standardizes where it lives, not what goes in it.
