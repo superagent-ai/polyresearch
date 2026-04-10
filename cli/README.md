@@ -17,6 +17,18 @@ This CLI centralizes that logic so every machine uses the same implementation an
 
 ## Install
 
+The default install path is to download a pre-built archive from [GitHub Releases](https://github.com/superagent-ai/polyresearch/releases).
+
+| OS | Architecture | Archive |
+| --- | --- | --- |
+| macOS | Apple Silicon | `polyresearch-cli-aarch64-apple-darwin.tar.xz` |
+| macOS | Intel | `polyresearch-cli-x86_64-apple-darwin.tar.xz` |
+| Linux | x86_64 (glibc) | `polyresearch-cli-x86_64-unknown-linux-gnu.tar.xz` |
+
+Each archive expands to a directory containing `polyresearch` and `README.md`. Move `polyresearch` somewhere on your `PATH`, such as `~/.local/bin` or `/usr/local/bin`.
+
+### Build from source
+
 From the repo root:
 
 ```bash
@@ -33,6 +45,10 @@ That installs the `polyresearch` binary from [cli/Cargo.toml](cli/Cargo.toml).
 - GitHub authentication through `gh auth login`
 
 The CLI can read `GITHUB_TOKEN`, but by default it uses the existing `gh` authentication on the machine.
+
+## Releasing
+
+Release tags follow `vX.Y.Z` and must match the version in [cli/Cargo.toml](cli/Cargo.toml). Bump the crate version, push the matching tag, and GitHub Actions publishes the archives and checksums to [GitHub Releases](https://github.com/superagent-ai/polyresearch/releases).
 
 ## Basic workflow
 

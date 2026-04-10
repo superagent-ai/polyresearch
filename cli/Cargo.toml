@@ -2,6 +2,7 @@
 name = "polyresearch-cli"
 version = "0.1.0"
 edition = "2024"
+repository = "https://github.com/superagent-ai/polyresearch"
 
 [[bin]]
 name = "polyresearch"
@@ -21,3 +22,8 @@ serde_json = "1.0.149"
 sha2 = "0.11.0"
 tokio = { version = "1.51.0", features = ["full"] }
 walkdir = "2.5.0"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

@@ -1,0 +1,193 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+env:
+  DIST_VERSION: "0.31.0"
+
+jobs:
+  plan:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-v${DIST_VERSION}-installer.sh" | sh
+
+      - name: Validate dist config and release tag
+        run: dist plan --tag "${GITHUB_REF_NAME}"
+
+  build-local-artifacts:
+    name: Build ${{ matrix.target }}
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+          - runner: macos-13
+            target: x86_64-apple-darwin
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cargo-dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-v${DIST_VERSION}-installer.sh" | sh
+
+      - name: Build local archive
+        run: dist build --artifacts local --target "${{ matrix.target }}" --tag "${GITHUB_REF_NAME}"
+
+      - name: Smoke test extracted binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="target/distrib/polyresearch-cli-${{ matrix.target }}.tar.xz"
+          tmpdir="$(mktemp -d)"
+          tar -xJf "$archive" -C "$tmpdir"
+          archive_root="$tmpdir/polyresearch-cli-${{ matrix.target }}"
+
+          "$archive_root/polyresearch" --help >/dev/null
+
+          mkdir -p "$tmpdir/fake-bin"
+          cat > "$tmpdir/fake-bin/gh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [ "$#" -ge 2 ] && [ "$1" = "issue" ] && [ "$2" = "list" ]; then
+            printf '[]'
+          elif [ "$#" -ge 2 ] && [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+            printf '[]'
+          else
+            echo "unexpected gh invocation: $*" >&2
+            exit 1
+          fi
+          EOF
+          chmod +x "$tmpdir/fake-bin/gh"
+
+          PATH="$tmpdir/fake-bin:$PATH" \
+            "$archive_root/polyresearch" --repo superagent-ai/polyresearch status --json > "$tmpdir/status.json"
+
+          python3 - "$tmpdir/status.json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], "r", encoding="utf-8") as handle:
+              data = json.load(handle)
+
+          assert data["queue_depth"] == 0, data
+          assert data["thesis_count"] == 0, data
+          assert data["invalid_count"] == 0, data
+          assert data["suspicious_count"] == 0, data
+          PY
+
+      - name: Stage release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist-artifacts
+          cp "target/distrib/polyresearch-cli-${{ matrix.target }}.tar.xz" dist-artifacts/
+          cp "target/distrib/polyresearch-cli-${{ matrix.target }}.tar.xz.sha256" dist-artifacts/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist-artifacts/
+
+  build-global-artifacts:
+    name: Build global artifacts
+    needs: plan
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-v${DIST_VERSION}-installer.sh" | sh
+
+      - name: Build source bundle and checksums
+        run: dist build --artifacts global --tag "${GITHUB_REF_NAME}"
+
+      - name: Stage release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist-artifacts
+          cp target/distrib/source.tar.gz dist-artifacts/
+          cp target/distrib/source.tar.gz.sha256 dist-artifacts/
+          cp target/distrib/sha256.sum dist-artifacts/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-global
+          path: dist-artifacts/
+
+  release:
+    name: Publish GitHub Release
+    needs:
+      - build-local-artifacts
+      - build-global-artifacts
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: target/distrib
+          merge-multiple: true
+
+      - name: Show release payload
+        run: ls -al target/distrib
+
+      - name: Publish release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          prerelease_flag=()
+          case "${GITHUB_REF_NAME}" in
+            *-*) prerelease_flag+=(--prerelease) ;;
+          esac
+
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" target/distrib/* --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" target/distrib/* \
+              --verify-tag \
+              --title "${GITHUB_REF_NAME}" \
+              --generate-notes \
+              "${prerelease_flag[@]}"
+          fi

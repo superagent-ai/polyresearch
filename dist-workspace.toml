@@ -1,0 +1,18 @@
+[workspace]
+members = ["cargo:cli"]
+
+# Config for 'dist'
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.31.0"
+# CI backends to support
+ci = "github"
+# Keep release builds valid even though this repo uses a hand-trimmed workflow
+# instead of cargo-dist's generated release.yml.
+allow-dirty = ["ci"]
+# The installers to generate for each app
+installers = []
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
+# Where to host releases
+hosting = "github"

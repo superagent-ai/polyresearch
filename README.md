@@ -38,11 +38,13 @@ $EDITOR PREPARE.md
 mkdir .polyresearch/
 
 # 5. Install the mandatory CLI
-cargo install --path cli
+#    Download the matching release archive and put `polyresearch` on your PATH.
 
 # 6. Tell your agent: "You are the lead for this project."
 #    It reads the files and starts working through `polyresearch`.
 ```
+
+Release binaries live on [GitHub Releases](https://github.com/superagent-ai/polyresearch/releases). If you prefer to build from source, see [cli/README.md](cli/README.md).
 
 Share the repo. Contributors point their agents at it and join.
 
