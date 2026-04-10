@@ -24,8 +24,6 @@ A contributor picks up a thesis from the Issues queue through the `polyresearch`
 ```bash
 # 1. Install the CLI (macOS Apple Silicon shown)
 curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-cli-aarch64-apple-darwin.tar.xz
-tar -xJf polyresearch-cli-aarch64-apple-darwin.tar.xz
-sudo cp polyresearch-cli-aarch64-apple-darwin/polyresearch /usr/local/bin/
 
 # 2. Copy the protocol and templates into your repo
 cp POLYRESEARCH.md PROGRAM.md PREPARE.md your-repo/
