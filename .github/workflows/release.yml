@@ -15,7 +15,7 @@ jobs:
   plan:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -26,7 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           curl --proto '=https' --tlsv1.2 -LsSf \
-            "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-v${DIST_VERSION}-installer.sh" | sh
+            "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-installer.sh" | sh
 
       - name: Validate dist config and release tag
         run: dist plan --tag "${GITHUB_REF_NAME}"
@@ -47,7 +47,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -60,7 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           curl --proto '=https' --tlsv1.2 -LsSf \
-            "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-v${DIST_VERSION}-installer.sh" | sh
+            "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-installer.sh" | sh
 
       - name: Build local archive
         run: dist build --artifacts local --target "${{ matrix.target }}" --tag "${GITHUB_REF_NAME}"
@@ -115,7 +115,7 @@ jobs:
           cp "target/distrib/polyresearch-cli-${{ matrix.target }}.tar.xz" dist-artifacts/
           cp "target/distrib/polyresearch-cli-${{ matrix.target }}.tar.xz.sha256" dist-artifacts/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: dist-${{ matrix.target }}
           path: dist-artifacts/
@@ -125,7 +125,7 @@ jobs:
     needs: plan
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -136,7 +136,7 @@ jobs:
         run: |
           set -euo pipefail
           curl --proto '=https' --tlsv1.2 -LsSf \
-            "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-v${DIST_VERSION}-installer.sh" | sh
+            "https://github.com/axodotdev/cargo-dist/releases/download/v${DIST_VERSION}/cargo-dist-installer.sh" | sh
 
       - name: Build source bundle and checksums
         run: dist build --artifacts global --tag "${GITHUB_REF_NAME}"
@@ -150,7 +150,7 @@ jobs:
           cp target/distrib/source.tar.gz.sha256 dist-artifacts/
           cp target/distrib/sha256.sum dist-artifacts/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: dist-global
           path: dist-artifacts/
@@ -165,7 +165,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: target/distrib
           merge-multiple: true
