@@ -22,20 +22,23 @@ A contributor picks up a thesis from the Issues queue through the `polyresearch`
 **Setting up a project:**
 
 ```bash
-# 1. Drop in the protocol (same for every project)
-cp POLYRESEARCH.md your-repo/
+# 1. Install the CLI (macOS Apple Silicon shown)
+curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-cli-aarch64-apple-darwin.tar.xz
+tar -xJf polyresearch-cli-aarch64-apple-darwin.tar.xz
+sudo cp polyresearch-cli-aarch64-apple-darwin/polyresearch /usr/local/bin/
 
-# 2. Write the research playbook (goal, editable files, strategy, constraints)
+# 2. Copy the protocol and templates into your repo
+cp POLYRESEARCH.md PROGRAM.md PREPARE.md your-repo/
+cd your-repo
+
+# 3. Edit the research playbook (goal, editable files, strategy, constraints)
 $EDITOR PROGRAM.md
 
-# 3. Write the evaluation setup (how to run, how to parse the metric, ground truth)
+# 4. Edit the evaluation setup (how to run, how to parse the metric, ground truth)
 $EDITOR PREPARE.md
 
-# 4. (Optional) Add a reproducible environment
+# 5. (Optional) Add a reproducible environment
 mkdir .polyresearch/
-
-# 5. Install the mandatory CLI (macOS Apple Silicon shown)
-curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-cli-aarch64-apple-darwin.tar.xz
 
 # 6. Tell your agent: "You are the lead for this project."
 #    It reads the files and starts working through `polyresearch`.
