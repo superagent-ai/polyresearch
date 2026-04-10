@@ -24,6 +24,8 @@ This table defines the protocol parameters. Put the concrete values for your pro
 | `metric_tolerance`       | Maximum allowed divergence between reviewer metrics for agreement. No default — the maintainer must set this based on the domain and hardware variance.                     |
 | `metric_direction`       | `lower_is_better` or `higher_is_better`.                                                                                                                                    |
 | `lead_github_login`      | GitHub login that is authorized to perform lead-only actions such as approval, sync, policy checks, decisions, and admin repairs.                                          |
+| `maintainer_github_login` | GitHub login for the human maintainer who can `/approve` or `/reject` thesis issues and candidate PRs when human review is enabled.                                       |
+| `auto_approve`           | If `true`, the lead auto-approves generated theses and decides PRs without waiting for a maintainer slash command. If `false`, the maintainer must `/approve` first. Default: `true`. |
 | `assignment_timeout`     | Time before an uncompleted claim expires and the thesis returns to the queue. Default: `24h`.                                                                               |
 | `review_timeout`         | Time before an incomplete review claim expires. Default: `12h`.                                                                                                             |
 | `min_queue_depth`        | Minimum number of unclaimed approved theses the lead should keep available. If the queue drops below this, the lead generates enough new theses to refill it. Default: `5`. |
@@ -36,11 +38,13 @@ The parameter definitions live here. Concrete project values live in `PROGRAM.md
 
 ## Roles
 
-**Maintainer.** The human who owns the project. Writes PROGRAM.md and PREPARE.md. Approves theses. Picks the tooling (agent, model, sandbox). Polyresearch does not mandate any specific tooling.
+**Maintainer.** The human who owns the project. Writes PROGRAM.md and PREPARE.md. Approves or rejects theses and PRs when human review is enabled. Picks the tooling (agent, model, sandbox). Polyresearch does not mandate any specific tooling.
 
 **Contributor.** A machine running an agent. Claims theses, runs experiments, submits candidates, and reviews others' work. You are a contributor unless told otherwise.
 
 **Lead.** A contributor with additional responsibilities: generates theses from results history, runs policy checks on candidate PRs, decides PRs (merge or close), and maintains results.tsv as sole writer. One per project. If your instructions say "you are the lead," follow the lead sections in addition to the contributor sections.
+
+When `auto_approve` is `false`, `lead_github_login` and `maintainer_github_login` must be different GitHub accounts. Human-in-the-loop review does not work if the lead and the maintainer share the same GitHub identity.
 
 ---
 
@@ -129,7 +133,7 @@ Everything in the contributor loop, plus these additional responsibilities. Run 
 
 0. `polyresearch duties` — resolve any blocking items (decidable PRs, stale results.tsv, etc.).
 1. `polyresearch sync` (always before other lead actions).
-2. Process open PRs: `policy-check` and `decide` any that are ready.
+2. Process open PRs: `policy-check` and `decide` any that are ready. When `auto_approve` is `false`, assign ready PRs to `maintainer_github_login` and wait for `/approve`.
 3. Check queue depth; `generate` if below `min_queue_depth`.
 4. Only then proceed to local experiments.
 
@@ -180,7 +184,12 @@ Deduplication:
 - If an idea already failed, do not re-propose it unless you can point to a concrete reason the new attempt is materially different. State that reason in the thesis body.
 - If an idea was already merged, do not re-propose it.
 
-Open new GitHub Issues with the `thesis` label by running `polyresearch generate --title "<title>" --body "<body>"`. The CLI auto-approves them by posting a `polyresearch:approval` comment.
+Open new GitHub Issues with the `thesis` label by running `polyresearch generate --title "<title>" --body "<body>"`.
+
+- If `auto_approve` is `true`, the CLI auto-approves the thesis by posting a `polyresearch:approval` comment.
+- If `auto_approve` is `false`, the CLI leaves the thesis in `Submitted`, assigns it to `maintainer_github_login`, and waits for the maintainer to comment `/approve` or `/reject`.
+
+Before opening more theses, the lead must read maintainer `/approve` and `/reject` comments on existing theses and PRs. Treat those comments as directional input: approval reasons suggest promising directions, rejection reasons constrain future generation. This guidance does not override `PROGRAM.md`, `PREPARE.md`, or the measured results history.
 
 Guard against path dependence. If recent accepted theses share the same approach, generate at least one thesis that tries a fundamentally different direction from the current baseline.
 
@@ -192,7 +201,11 @@ If the candidate passes, the CLI posts a `polyresearch:policy-pass` comment. The
 
 ### Decide PRs
 
-When `required_confirmations` review records have been posted on a PR, run `polyresearch decide <pr-number>`:
+When `required_confirmations` review records have been posted on a PR, run `polyresearch decide <pr-number>`.
+
+If `auto_approve` is `false`, the lead assigns the PR to `maintainer_github_login` and waits for a maintainer `/approve` before posting a decision. A maintainer `/reject` means do not accept the current candidate; the lead should close or supersede that PR and use the feedback to guide the next thesis or attempt.
+
+Otherwise apply these rules:
 
 - All reviewers observed `improved` and their metrics agree within `metric_tolerance`: post `outcome: accepted`, **merge** the PR, close the thesis issue.
 - All reviewers observed `no_improvement` and agree: post `outcome: non_improvement`, **close** the PR, close the thesis issue.
@@ -245,6 +258,8 @@ No mutable labels to get out of sync. The comment trail is the truth.
 
 Exhausted theses stay open for history, but they are not claimable and do not count toward queue depth.
 
+When `auto_approve` is `false`, a generated thesis stays in **Submitted** until the maintainer comments `/approve`.
+
 ---
 
 ## Branching
@@ -271,7 +286,7 @@ All protocol state transitions happen through structured comments on GitHub Issu
 
 One label remains: `thesis` on issues, for discovery via `gh issue list --label thesis`. Everything else is a structured comment.
 
-Only structured comments emitted by `polyresearch` are canonical. Raw manual comments that resemble protocol events may still be visible on GitHub, but the lead and the tooling may ignore them if they do not pass validation.
+Structured comments emitted by `polyresearch` are canonical. Maintainer `/approve` and `/reject` slash commands are also canonical. Other raw manual comments that resemble protocol events may still be visible on GitHub, but the lead and the tooling may ignore them if they do not pass validation.
 
 ### Format
 
@@ -286,15 +301,23 @@ key: value
 
 The visible summary line is required so humans can understand the protocol state in GitHub's rendered UI. Agents parse only the HTML block. Keep the summary short and include the comment type and the most important fields.
 
+### Maintainer slash commands (issues and PRs)
+
+```
+/approve Optional reason or guidance.
+```
+
+```
+/reject Optional reason or guidance.
+```
+
+The maintainer writes `/approve` or `/reject` at the start of a comment body on a thesis issue or candidate PR. Any remaining text is free-form feedback for the lead to consider.
+
 ### On thesis issues
 
 **Approval** (maintainer, plain-text slash command):
 
-```
-/approve
-```
-
-The maintainer comments `/approve` on the issue. Agents match on the exact string `/approve` at the start of a comment body.
+`/approve` on the issue is a valid approval signal. `/reject` means the thesis should not be pursued in its current form.
 
 **Approval** (lead auto-approval):
 
@@ -347,6 +370,10 @@ summary: Switched to GeLU activation, regression on val_bpb
 ```
 
 ### On candidate PRs
+
+**Approval or rejection** (maintainer, plain-text slash command):
+
+`/approve` on the PR authorizes the lead to proceed when `auto_approve` is `false`. `/reject` means the current candidate should not be accepted in its current form.
 
 **Policy pass** (lead confirms candidate is within editable surface):
 
@@ -407,6 +434,14 @@ confirmations: 2
 
 ---
 
+## Maintainer feedback
+
+Maintainer `/approve` and `/reject` comments can include free-text guidance. The lead must read this guidance before generating new theses or deciding whether to keep pushing on the same direction.
+
+- Approval reasons indicate what the maintainer wants more of.
+- Rejection reasons indicate constraints, dead ends, or priorities the lead should avoid repeating.
+- This guidance is directional input, not a license to ignore `PROGRAM.md`, `PREPARE.md`, or the measured results in `results.tsv`.
+
 ## Peer review
 
 When `required_confirmations` is greater than 0, candidate PRs go through peer review. The sequence:
@@ -415,7 +450,8 @@ When `required_confirmations` is greater than 0, candidate PRs go through peer r
 2. **Review claiming.** Contributors (who did not author the PR) find PRs with `polyresearch:policy-pass` and no `polyresearch:decision`. They post `polyresearch:review-claim`.
 3. **Evaluation.** The reviewer checks out the candidate SHA, runs the evaluation per PREPARE.md. Then checks out the base SHA, runs the same evaluation. Both metrics are measured independently.
 4. **Review record.** The reviewer posts a `polyresearch:review` comment with both metrics, observation, environment hash, and timestamp.
-5. **Decision.** When `required_confirmations` review records are posted, the lead evaluates and posts `polyresearch:decision`. Merges or closes the PR.
+5. **Maintainer gate.** If `auto_approve` is `false`, the lead waits for a maintainer `/approve` before deciding. The PR should be assigned to `maintainer_github_login` while it is waiting.
+6. **Decision.** When the reviewer requirements are satisfied, and the maintainer gate is satisfied when enabled, the lead evaluates and posts `polyresearch:decision`. Merges or closes the PR.
 
 ---
 

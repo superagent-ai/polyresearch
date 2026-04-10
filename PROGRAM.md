@@ -14,6 +14,8 @@ Project-specific coordination values referenced by `POLYRESEARCH.md`. Replace th
 | `metric_tolerance`       | `0.01`             |
 | `metric_direction`       | `higher_is_better` |
 | `lead_github_login`      | `replace-me`       |
+| `maintainer_github_login` | `replace-me`      |
+| `auto_approve`           | `true`             |
 | `assignment_timeout`     | `24h`              |
 | `review_timeout`         | `12h`              |
 | `min_queue_depth`        | `5`                |

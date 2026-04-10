@@ -91,12 +91,18 @@ Each iteration, before any experiments:
      - For each PR without policy-check:
        polyresearch policy-check <pr>
      - For each PR with enough reviews and no decision:
+       - If `auto_approve` is `false`, wait for the maintainer to comment `/approve`.
+         The lead should assign the PR to `maintainer_github_login` while it waits.
        polyresearch decide <pr>
 
   4. Check queue depth:
      - If below min_queue_depth:
        polyresearch generate --title "<title>" --body "<body>"
+     - If `auto_approve` is `false`, generated theses are not auto-approved.
+       They stay queued for the maintainer to `/approve` or `/reject`.
      - Read results.tsv and all thesis history before generating.
+     - Read maintainer `/approve` and `/reject` comments and use them as
+       directional input for future thesis generation.
      - Deduplicate against existing open and closed theses.
 
   5. Now proceed with contributor loop (experiments, etc.)

@@ -15,6 +15,7 @@ struct GenerateOutput {
     issue_number: Option<u64>,
     issue_url: Option<String>,
     warned_below_min_queue_depth: bool,
+    awaiting_maintainer_approval: bool,
 }
 
 pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
@@ -56,25 +57,38 @@ pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
     }
 
     let warned_below_min_queue_depth = repo_state.queue_depth < ctx.config.min_queue_depth;
+    let awaiting_maintainer_approval = !ctx.config.auto_approve;
     let issue = if ctx.cli.dry_run {
         None
     } else {
         let issue = ctx
             .github
             .create_issue(&args.title, &args.body, &["thesis"])?;
-        let approval = ProtocolComment::Approval {
-            thesis: issue.number,
-        };
-        if let Err(err) = ctx
-            .github
-            .post_issue_comment(issue.number, &approval.render())
-        {
-            eprintln!(
-                "Failed to post approval on #{}, closing orphaned issue: {err}",
-                issue.number
-            );
-            let _ = ctx.github.close_issue(issue.number);
-            return Err(err);
+        if ctx.config.auto_approve {
+            let approval = ProtocolComment::Approval {
+                thesis: issue.number,
+            };
+            if let Err(err) = ctx
+                .github
+                .post_issue_comment(issue.number, &approval.render())
+            {
+                eprintln!(
+                    "Failed to post approval on #{}, closing orphaned issue: {err}",
+                    issue.number
+                );
+                let _ = ctx.github.close_issue(issue.number);
+                return Err(err);
+            }
+        } else {
+            let maintainer = ctx.config.maintainer_login()?;
+            if let Err(err) = ctx.github.add_assignees(issue.number, &[maintainer]) {
+                eprintln!(
+                    "Failed to assign maintainer on #{}, closing orphaned issue: {err}",
+                    issue.number
+                );
+                let _ = ctx.github.close_issue(issue.number);
+                return Err(err);
+            }
         }
         Some(issue)
     };
@@ -84,6 +98,7 @@ pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
         issue_number: issue.as_ref().map(|value| value.number),
         issue_url: issue.and_then(|value| value.url),
         warned_below_min_queue_depth,
+        awaiting_maintainer_approval,
     };
 
     print_value(ctx, &output, |value| {
@@ -92,6 +107,9 @@ pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
         } else {
             "Would generate a new thesis issue.".to_string()
         };
+        if value.awaiting_maintainer_approval {
+            message.push_str(" Awaiting maintainer /approve.");
+        }
         if value.warned_below_min_queue_depth {
             message.push_str(" Queue depth is below min_queue_depth.");
         }

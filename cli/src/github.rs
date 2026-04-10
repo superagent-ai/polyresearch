@@ -78,6 +78,7 @@ pub trait GitHubApi: Send + Sync {
     fn list_issue_comments(&self, issue_number: u64) -> Result<Vec<IssueComment>>;
     fn create_issue(&self, title: &str, body: &str, labels: &[&str]) -> Result<Issue>;
     fn post_issue_comment(&self, issue_number: u64, body: &str) -> Result<IssueComment>;
+    fn add_assignees(&self, issue_number: u64, assignees: &[&str]) -> Result<()>;
     fn close_issue(&self, issue_number: u64) -> Result<Issue>;
     fn reopen_issue(&self, issue_number: u64) -> Result<Issue>;
     fn list_pull_requests(&self, state: PullRequestListState) -> Result<Vec<PullRequest>>;
@@ -196,6 +197,23 @@ impl GitHubClient {
             ),
             &[("body", body)],
         )
+    }
+
+    pub fn add_assignees(&self, issue_number: u64, assignees: &[&str]) -> Result<()> {
+        let fields = assignees
+            .iter()
+            .copied()
+            .map(|assignee| ("assignees[]", assignee))
+            .collect::<Vec<_>>();
+        self.gh_api_json(
+            "POST",
+            &format!(
+                "repos/{}/{}/issues/{issue_number}/assignees",
+                self.repo.owner, self.repo.name
+            ),
+            &fields,
+        )?;
+        Ok(())
     }
 
     pub fn close_issue(&self, issue_number: u64) -> Result<Issue> {
@@ -404,6 +422,10 @@ impl GitHubApi for GitHubClient {
 
     fn post_issue_comment(&self, issue_number: u64, body: &str) -> Result<IssueComment> {
         GitHubClient::post_issue_comment(self, issue_number, body)
+    }
+
+    fn add_assignees(&self, issue_number: u64, assignees: &[&str]) -> Result<()> {
+        GitHubClient::add_assignees(self, issue_number, assignees)
     }
 
     fn close_issue(&self, issue_number: u64) -> Result<Issue> {

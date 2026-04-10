@@ -19,6 +19,8 @@ pub struct ProtocolConfig {
     pub metric_tolerance: Option<f64>,
     pub metric_direction: MetricDirection,
     pub lead_github_login: Option<String>,
+    pub maintainer_github_login: Option<String>,
+    pub auto_approve: bool,
     pub assignment_timeout: Duration,
     pub review_timeout: Duration,
     pub min_queue_depth: usize,
@@ -32,6 +34,8 @@ impl Default for ProtocolConfig {
             metric_tolerance: None,
             metric_direction: MetricDirection::HigherIsBetter,
             lead_github_login: None,
+            maintainer_github_login: None,
+            auto_approve: true,
             assignment_timeout: Duration::from_secs(24 * 60 * 60),
             review_timeout: Duration::from_secs(12 * 60 * 60),
             min_queue_depth: 5,
@@ -105,6 +109,12 @@ impl ProtocolConfig {
                         config.lead_github_login = Some(value.to_string());
                     }
                 }
+                "maintainer_github_login" => {
+                    if value != "replace-me" && !value.is_empty() {
+                        config.maintainer_github_login = Some(value.to_string());
+                    }
+                }
+                "auto_approve" => config.auto_approve = parse_bool(value)?,
                 "assignment_timeout" => config.assignment_timeout = parse_duration(value)?,
                 "review_timeout" => config.review_timeout = parse_duration(value)?,
                 "min_queue_depth" => {
@@ -134,6 +144,12 @@ impl ProtocolConfig {
         self.lead_github_login
             .as_deref()
             .ok_or_else(|| eyre!("lead_github_login is required in PROGRAM.md"))
+    }
+
+    pub fn maintainer_login(&self) -> Result<&str> {
+        self.maintainer_github_login
+            .as_deref()
+            .ok_or_else(|| eyre!("maintainer_github_login is required in PROGRAM.md"))
     }
 }
 
@@ -232,6 +248,14 @@ fn parse_duration(value: &str) -> Result<Duration> {
     Err(eyre!("unsupported duration format `{trimmed}`"))
 }
 
+fn parse_bool(value: &str) -> Result<bool> {
+    match value.trim() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(eyre!("invalid boolean value `{other}`")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,5 +285,11 @@ mod tests {
             parse_markdown_list(contents, "## What you CAN modify"),
             vec!["system_prompt.md".to_string(), "tools/**/*.py".to_string()]
         );
+    }
+
+    #[test]
+    fn parses_bool_values() {
+        assert!(parse_bool("true").unwrap());
+        assert!(!parse_bool("false").unwrap());
     }
 }
