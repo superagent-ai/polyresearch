@@ -61,6 +61,11 @@ pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
     let issue = if ctx.cli.dry_run {
         None
     } else {
+        let maintainer = if ctx.config.auto_approve {
+            None
+        } else {
+            Some(ctx.config.maintainer_login()?.to_string())
+        };
         let issue = ctx
             .github
             .create_issue(&args.title, &args.body, &["thesis"])?;
@@ -80,7 +85,9 @@ pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
                 return Err(err);
             }
         } else {
-            let maintainer = ctx.config.maintainer_login()?;
+            let maintainer = maintainer
+                .as_deref()
+                .expect("maintainer login validated before issue creation");
             if let Err(err) = ctx.github.add_assignees(issue.number, &[maintainer]) {
                 eprintln!(
                     "Failed to assign maintainer on #{}, closing orphaned issue: {err}",

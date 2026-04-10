@@ -492,7 +492,9 @@ fn count_queue_depth(theses: &[ThesisState], auto_approve: bool) -> usize {
         .filter(|thesis| {
             thesis.issue.state == "OPEN"
                 && (matches!(thesis.phase, ThesisPhase::Approved)
-                    || (!auto_approve && matches!(thesis.phase, ThesisPhase::Submitted)))
+                    || (!auto_approve
+                        && matches!(thesis.phase, ThesisPhase::Submitted)
+                        && !thesis.maintainer_rejected))
         })
         .count()
 }
@@ -585,6 +587,35 @@ mod tests {
 
         assert!(matches!(submitted.phase, ThesisPhase::Submitted));
         assert_eq!(count_queue_depth(&[submitted], false), 1);
+    }
+
+    #[test]
+    fn queue_depth_excludes_rejected_submitted_theses() {
+        let thesis = ThesisState {
+            issue: Issue {
+                number: 3,
+                title: "Rejected thesis".to_string(),
+                body: None,
+                state: "OPEN".to_string(),
+                labels: vec![],
+                created_at: chrono::Utc::now(),
+                closed_at: None,
+                author: None,
+                url: None,
+            },
+            phase: ThesisPhase::Submitted,
+            approved: false,
+            maintainer_approved: false,
+            maintainer_rejected: true,
+            active_claims: vec![],
+            releases: vec![],
+            attempts: vec![],
+            pull_requests: vec![],
+            best_attempt_metric: None,
+            findings: vec![],
+        };
+
+        assert_eq!(count_queue_depth(&[thesis], false), 0);
     }
 
     #[test]
