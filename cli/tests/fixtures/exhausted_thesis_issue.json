@@ -1,0 +1,37 @@
+{
+  "leadGithubLogin": "lead",
+  "issue": {
+    "number": 28,
+    "title": "Exhausted thesis fixture",
+    "body": "Thesis that should become exhausted after a no_improvement release",
+    "state": "OPEN",
+    "labels": [{ "name": "thesis" }],
+    "createdAt": "2099-04-08T00:00:00Z",
+    "closedAt": null,
+    "author": { "login": "lead" },
+    "url": "https://example.test/issues/28"
+  },
+  "comments": [
+    {
+      "id": 1,
+      "body": "Polyresearch approval: thesis #28.\n\n<!-- polyresearch:approval\nthesis: 28\n-->",
+      "user": { "login": "lead" },
+      "created_at": "2099-04-08T00:01:00Z",
+      "updated_at": null
+    },
+    {
+      "id": 2,
+      "body": "Polyresearch claim: thesis #28 by node `test-node`.\n\n<!-- polyresearch:claim\nthesis: 28\nnode: test-node\n-->",
+      "user": { "login": "alice" },
+      "created_at": "2099-04-08T00:02:00Z",
+      "updated_at": null
+    },
+    {
+      "id": 3,
+      "body": "Polyresearch release: thesis #28 by node `test-node` (`reason: no_improvement`).\n\n<!-- polyresearch:release\nthesis: 28\nnode: test-node\nreason: no_improvement\n-->",
+      "user": { "login": "alice" },
+      "created_at": "2099-04-08T00:03:00Z",
+      "updated_at": null
+    }
+  ]
+}

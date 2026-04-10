@@ -545,8 +545,8 @@ fn comment_parser_handles_malformed_fields_gracefully() {
 
 #[test]
 fn observation_value_enum_accepts_snake_case() {
-    use polyresearch_cli::comments::Observation;
     use clap::ValueEnum;
+    use polyresearch_cli::comments::Observation;
 
     let variants: Vec<_> = Observation::value_variants()
         .iter()
@@ -579,7 +579,9 @@ async fn duties_reports_blocking_when_claim_has_no_attempts() {
     );
     commands::write_node_id(&repo.path, "test-node").unwrap();
 
-    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await.unwrap();
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
     let report = commands::duties::check(&ctx, &repo_state).unwrap();
     assert!(!report.clean, "should have blocking duties");
     assert!(
@@ -608,7 +610,9 @@ async fn duties_reports_blocking_when_improved_but_not_submitted() {
     );
     commands::write_node_id(&repo.path, "test-node").unwrap();
 
-    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await.unwrap();
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
     let report = commands::duties::check(&ctx, &repo_state).unwrap();
     assert!(!report.clean, "should have blocking duties");
     assert!(
@@ -637,7 +641,9 @@ async fn duties_clean_on_no_claims() {
     );
     commands::write_node_id(&repo.path, "node-x").unwrap();
 
-    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await.unwrap();
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
     let report = commands::duties::check(&ctx, &repo_state).unwrap();
     assert!(report.clean, "should have no blocking duties");
 }
@@ -653,7 +659,10 @@ async fn claim_blocked_by_outstanding_duties() {
         "alice",
         vec![fixture_claimed.issue.clone(), fixture_open.issue.clone()],
         HashMap::from([
-            (fixture_claimed.issue.number, fixture_claimed.comments.clone()),
+            (
+                fixture_claimed.issue.number,
+                fixture_claimed.comments.clone(),
+            ),
             (fixture_open.issue.number, fixture_open.comments.clone()),
         ]),
         vec![],

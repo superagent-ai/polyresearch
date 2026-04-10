@@ -71,10 +71,7 @@ pub fn check(ctx: &AppContext, repo_state: &RepositoryState) -> Result<DutyRepor
         let has_improved = my_attempts
             .iter()
             .any(|a| a.observation == Observation::Improved);
-        let has_open_pr = thesis
-            .pull_requests
-            .iter()
-            .any(|pr| pr.pr.state == "OPEN");
+        let has_open_pr = thesis.pull_requests.iter().any(|pr| pr.pr.state == "OPEN");
         if has_improved && !has_open_pr {
             blocking.push(DutyItem {
                 category: "submit".to_string(),
@@ -118,10 +115,7 @@ fn check_lead_duties(
             if !pr_state.policy_pass {
                 blocking.push(DutyItem {
                     category: "policy-check".to_string(),
-                    message: format!(
-                        "PR #{}: open without policy-check.",
-                        pr_state.pr.number
-                    ),
+                    message: format!("PR #{}: open without policy-check.", pr_state.pr.number),
                     command: format!("polyresearch policy-check {}", pr_state.pr.number),
                 });
                 continue;
@@ -171,15 +165,13 @@ fn check_review_opportunities(
     login: &str,
     advisory: &mut Vec<DutyItem>,
 ) {
-
     for thesis in &repo_state.theses {
         if !matches!(thesis.phase, ThesisPhase::InReview) {
             continue;
         }
 
         for pr_state in &thesis.pull_requests {
-            if pr_state.pr.state != "OPEN" || !pr_state.policy_pass || pr_state.decision.is_some()
-            {
+            if pr_state.pr.state != "OPEN" || !pr_state.policy_pass || pr_state.decision.is_some() {
                 continue;
             }
 
@@ -193,10 +185,7 @@ fn check_review_opportunities(
                 continue;
             }
 
-            let already_claimed = pr_state
-                .review_claims
-                .iter()
-                .any(|rc| rc.node == node_id);
+            let already_claimed = pr_state.review_claims.iter().any(|rc| rc.node == node_id);
             if already_claimed {
                 continue;
             }

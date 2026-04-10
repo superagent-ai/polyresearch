@@ -38,6 +38,7 @@ pub struct ThesisState {
 pub enum ThesisPhase {
     Submitted,
     Approved,
+    Exhausted,
     Claimed,
     CandidateSubmitted,
     InReview,
@@ -147,12 +148,7 @@ impl RepositoryState {
             .into_iter()
             .collect::<Vec<_>>();
 
-        let queue_depth = theses
-            .iter()
-            .filter(|thesis| {
-                thesis.issue.state == "OPEN" && matches!(thesis.phase, ThesisPhase::Approved)
-            })
-            .count();
+        let queue_depth = count_queue_depth(&theses);
 
         let current_best_accepted_metric = theses
             .iter()
@@ -280,6 +276,12 @@ impl ThesisState {
             ThesisPhase::CandidateSubmitted
         } else if !active_claims.is_empty() {
             ThesisPhase::Claimed
+        } else if approved
+            && releases
+                .iter()
+                .any(|release| release.reason == ReleaseReason::NoImprovement)
+        {
+            ThesisPhase::Exhausted
         } else if approved {
             ThesisPhase::Approved
         } else if issue.state == "CLOSED" {
@@ -444,6 +446,15 @@ pub fn select_metric(current: Option<f64>, candidate: f64, direction: MetricDire
     }
 }
 
+fn count_queue_depth(theses: &[ThesisState]) -> usize {
+    theses
+        .iter()
+        .filter(|thesis| {
+            thesis.issue.state == "OPEN" && matches!(thesis.phase, ThesisPhase::Approved)
+        })
+        .count()
+}
+
 pub fn metric_beats(a: f64, b: f64, tolerance: f64, direction: MetricDirection) -> bool {
     match direction {
         MetricDirection::HigherIsBetter => a > b + tolerance,
@@ -453,6 +464,17 @@ pub fn metric_beats(a: f64, b: f64, tolerance: f64, direction: MetricDirection) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{MetricDirection, ProtocolConfig};
+    use crate::github::{Issue, IssueComment};
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct IssueFixture {
+        lead_github_login: String,
+        issue: Issue,
+        comments: Vec<IssueComment>,
+    }
 
     #[test]
     fn parses_thesis_number_from_branch_name() {
@@ -477,5 +499,57 @@ mod tests {
             0.01,
             MetricDirection::HigherIsBetter
         ));
+    }
+
+    #[test]
+    fn marks_no_improvement_releases_as_exhausted() {
+        let fixture = exhausted_fixture();
+        let config = test_config(&fixture.lead_github_login);
+        let thesis = ThesisState::derive(fixture.issue, fixture.comments, &[], &config).unwrap();
+
+        assert!(matches!(thesis.phase, ThesisPhase::Exhausted));
+    }
+
+    #[test]
+    fn queue_depth_excludes_exhausted_theses() {
+        let fixture = exhausted_fixture();
+        let config = test_config(&fixture.lead_github_login);
+        let exhausted = ThesisState::derive(
+            fixture.issue.clone(),
+            fixture.comments.clone(),
+            &[],
+            &config,
+        )
+        .unwrap();
+        let approved = ThesisState::derive(
+            fixture.issue,
+            fixture.comments.into_iter().take(1).collect(),
+            &[],
+            &config,
+        )
+        .unwrap();
+
+        assert!(matches!(approved.phase, ThesisPhase::Approved));
+        assert_eq!(count_queue_depth(&[exhausted, approved]), 1);
+    }
+
+    fn exhausted_fixture() -> IssueFixture {
+        serde_json::from_str(include_str!(
+            "../tests/fixtures/exhausted_thesis_issue.json"
+        ))
+        .unwrap()
+    }
+
+    fn test_config(lead_github_login: &str) -> ProtocolConfig {
+        ProtocolConfig {
+            required_confirmations: 0,
+            metric_tolerance: Some(0.01),
+            metric_direction: MetricDirection::HigherIsBetter,
+            lead_github_login: Some(lead_github_login.to_string()),
+            assignment_timeout: std::time::Duration::from_secs(24 * 60 * 60),
+            review_timeout: std::time::Duration::from_secs(12 * 60 * 60),
+            min_queue_depth: 5,
+            max_queue_depth: Some(10),
+        }
     }
 }
