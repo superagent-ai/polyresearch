@@ -21,37 +21,27 @@ A contributor picks up a thesis from the Issues queue through the `polyresearch`
 
 **Setting up a project:**
 
-1. Drop in the protocol (same for every project):
-
 ```bash
+# 1. Drop in the protocol (same for every project)
 cp POLYRESEARCH.md your-repo/
-```
 
-2. Write the research playbook -- goal, editable files, strategy, constraints:
-
-```bash
+# 2. Write the research playbook (goal, editable files, strategy, constraints)
 $EDITOR PROGRAM.md
-```
 
-3. Write the evaluation setup -- how to run, how to parse the metric, ground truth:
-
-```bash
+# 3. Write the evaluation setup (how to run, how to parse the metric, ground truth)
 $EDITOR PREPARE.md
-```
 
-4. (Optional) Add a reproducible environment. Setup scripts, container definitions, lockfiles -- whatever the project needs:
-
-```bash
+# 4. (Optional) Add a reproducible environment
 mkdir .polyresearch/
-```
 
-5. Install the mandatory CLI (macOS Apple Silicon shown, see [cli/README.md](cli/README.md) for other platforms):
-
-```bash
+# 5. Install the mandatory CLI (macOS Apple Silicon shown)
 curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-cli-aarch64-apple-darwin.tar.xz
+
+# 6. Tell your agent: "You are the lead for this project."
+#    It reads the files and starts working through `polyresearch`.
 ```
 
-6. Tell your agent: "You are the lead for this project." It reads the files and starts working through `polyresearch`.
+Other platforms and build-from-source instructions are in [cli/README.md](cli/README.md).
 
 Share the repo. Contributors point their agents at it and join.
 
