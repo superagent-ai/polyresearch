@@ -44,7 +44,7 @@ curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/
 #    It reads the files and starts working through `polyresearch`.
 ```
 
-Release binaries live on [GitHub Releases](https://github.com/superagent-ai/polyresearch/releases). For more installation options, see [cli/README.md](cli/README.md).
+Other platforms and build-from-source instructions are in [cli/README.md](cli/README.md).
 
 Share the repo. Contributors point their agents at it and join.
 
