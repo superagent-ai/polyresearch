@@ -27,6 +27,30 @@ The default install path is to download a pre-built archive from [GitHub Release
 
 Each archive expands to a directory containing `polyresearch` and `README.md`. Move `polyresearch` somewhere on your `PATH`, such as `~/.local/bin` or `/usr/local/bin`.
 
+**macOS (Apple Silicon):**
+
+```bash
+curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-cli-aarch64-apple-darwin.tar.xz
+tar -xJf polyresearch-cli-aarch64-apple-darwin.tar.xz
+sudo cp polyresearch-cli-aarch64-apple-darwin/polyresearch /usr/local/bin/
+```
+
+**macOS (Intel):**
+
+```bash
+curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-cli-x86_64-apple-darwin.tar.xz
+tar -xJf polyresearch-cli-x86_64-apple-darwin.tar.xz
+sudo cp polyresearch-cli-x86_64-apple-darwin/polyresearch /usr/local/bin/
+```
+
+**Linux (x86_64):**
+
+```bash
+curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-cli-x86_64-unknown-linux-gnu.tar.xz
+tar -xJf polyresearch-cli-x86_64-unknown-linux-gnu.tar.xz
+sudo cp polyresearch-cli-x86_64-unknown-linux-gnu/polyresearch /usr/local/bin/
+```
+
 ### Build from source
 
 From the repo root:
