@@ -223,8 +223,8 @@ Submitted → Approved → Claimed → Experimenting ─┬→ CandidateSubmitte
      │                                           │                                  ├→ ClosedDisagreement
      │                                           │                                  └→ ClosedStale
      │                                           │
-     │                                           ├→ Released (returns to Approved)
-     │                                           └→ TimedOut (returns to Approved)
+     │                                           ├→ ReleasedNoImprovement → Exhausted
+     │                                           └→ ReleasedTimeoutOrInfra (returns to Approved)
      │
      └→ Rejected (maintainer closes issue)
 ```
@@ -236,11 +236,14 @@ Scan the comment trail on the issue to reconstruct the current state:
 - Issue exists with `thesis` label → **Submitted**
 - Has a `/approve` comment or a `polyresearch:approval` comment → **Approved**
 - Has a `polyresearch:claim` with no subsequent `polyresearch:release` for the same node → **Claimed**
+- Is approved, has no active claim or open PR, and has a `polyresearch:release` with `reason: no_improvement` → **Exhausted**
 - Claimed and has an open PR from a thesis branch → **CandidateSubmitted**
 - PR has a `polyresearch:policy-pass` comment → **InReview**
 - PR has a `polyresearch:decision` comment → **Resolved** (check `outcome` for terminal state)
 
 No mutable labels to get out of sync. The comment trail is the truth.
+
+Exhausted theses stay open for history, but they are not claimable and do not count toward queue depth.
 
 ---
 
