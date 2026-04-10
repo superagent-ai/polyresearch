@@ -120,6 +120,9 @@ fn maintainer_items(repo_state: &RepositoryState, auto_approve: bool) -> Vec<Str
 
     let mut items = Vec::new();
     for thesis in &repo_state.theses {
+        if thesis.issue.state != "OPEN" {
+            continue;
+        }
         if thesis.issue.state == "OPEN"
             && matches!(thesis.phase, crate::state::ThesisPhase::Submitted)
             && !thesis.maintainer_rejected

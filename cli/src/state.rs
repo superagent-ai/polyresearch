@@ -152,7 +152,7 @@ impl RepositoryState {
             .into_iter()
             .collect::<Vec<_>>();
 
-        let queue_depth = count_queue_depth(&theses);
+        let queue_depth = count_queue_depth(&theses, config.auto_approve);
 
         let current_best_accepted_metric = theses
             .iter()
@@ -486,11 +486,13 @@ pub fn select_metric(current: Option<f64>, candidate: f64, direction: MetricDire
     }
 }
 
-fn count_queue_depth(theses: &[ThesisState]) -> usize {
+fn count_queue_depth(theses: &[ThesisState], auto_approve: bool) -> usize {
     theses
         .iter()
         .filter(|thesis| {
-            thesis.issue.state == "OPEN" && matches!(thesis.phase, ThesisPhase::Approved)
+            thesis.issue.state == "OPEN"
+                && (matches!(thesis.phase, ThesisPhase::Approved)
+                    || (!auto_approve && matches!(thesis.phase, ThesisPhase::Submitted)))
         })
         .count()
 }
@@ -570,7 +572,19 @@ mod tests {
         .unwrap();
 
         assert!(matches!(approved.phase, ThesisPhase::Approved));
-        assert_eq!(count_queue_depth(&[exhausted, approved]), 1);
+        assert_eq!(count_queue_depth(&[exhausted, approved], true), 1);
+    }
+
+    #[test]
+    fn queue_depth_counts_submitted_theses_when_auto_approve_is_disabled() {
+        let fixture = exhausted_fixture();
+        let mut submitted_comments = fixture.comments;
+        submitted_comments.clear();
+        let config = test_config(&fixture.lead_github_login);
+        let submitted = ThesisState::derive(fixture.issue, submitted_comments, &[], &config).unwrap();
+
+        assert!(matches!(submitted.phase, ThesisPhase::Submitted));
+        assert_eq!(count_queue_depth(&[submitted], false), 1);
     }
 
     #[test]

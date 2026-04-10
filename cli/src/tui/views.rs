@@ -67,16 +67,18 @@ fn draw_summary(
             {
                 count += 1;
             }
-            count += thesis
-                .pull_requests
-                .iter()
-                .filter(|pr| {
-                    pr.pr.state == "OPEN"
-                        && pr.decision.is_none()
-                        && !pr.maintainer_approved
-                        && !pr.maintainer_rejected
-                })
-                .count();
+            if thesis.issue.state == "OPEN" {
+                count += thesis
+                    .pull_requests
+                    .iter()
+                    .filter(|pr| {
+                        pr.pr.state == "OPEN"
+                            && pr.decision.is_none()
+                            && !pr.maintainer_approved
+                            && !pr.maintainer_rejected
+                    })
+                    .count();
+            }
             std::iter::once(count)
         })
         .sum::<usize>();
@@ -85,12 +87,16 @@ fn draw_summary(
         .theses
         .iter()
         .map(|thesis| {
-            usize::from(thesis.maintainer_rejected)
-                + thesis
-                    .pull_requests
-                    .iter()
-                    .filter(|pr| pr.pr.state == "OPEN" && pr.maintainer_rejected)
-                    .count()
+            if thesis.issue.state != "OPEN" {
+                0
+            } else {
+                usize::from(thesis.maintainer_rejected)
+                    + thesis
+                        .pull_requests
+                        .iter()
+                        .filter(|pr| pr.pr.state == "OPEN" && pr.maintainer_rejected)
+                        .count()
+            }
         })
         .sum::<usize>();
     let text = format!(

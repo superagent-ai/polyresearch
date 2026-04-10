@@ -173,6 +173,7 @@ Complete all of these before opening any new thesis issue:
 Queue depth check:
 
 - Count the number of open theses that are approved and unclaimed, using [Deriving state](#deriving-state).
+- If `auto_approve` is `false`, also count open submitted theses that are waiting on maintainer review. They still occupy queue capacity and should prevent unbounded generation.
 - If `max_queue_depth` is set and that count is already at or above `max_queue_depth`, do not open new theses this iteration.
 - If that count is already at or above `min_queue_depth`, do not open new theses this iteration.
 - If that count is below `min_queue_depth`, open only enough new theses to bring the queue back to `min_queue_depth`.
