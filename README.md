@@ -37,10 +37,8 @@ $EDITOR PREPARE.md
 #    Setup scripts, container definitions, lockfiles -- whatever the project needs.
 mkdir .polyresearch/
 
-# 5. Install the mandatory CLI (macOS Apple Silicon shown; see cli/README.md for other platforms)
+# 5. Download the mandatory CLI (macOS Apple Silicon shown)
 curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-cli-aarch64-apple-darwin.tar.xz
-tar -xJf polyresearch-cli-aarch64-apple-darwin.tar.xz
-sudo cp polyresearch-cli-aarch64-apple-darwin/polyresearch /usr/local/bin/
 
 # 6. Tell your agent: "You are the lead for this project."
 #    It reads the files and starts working through `polyresearch`.
