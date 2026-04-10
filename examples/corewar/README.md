@@ -4,7 +4,7 @@ Evolve a [Redcode](https://corewar.co.uk/icws94.txt) warrior that beats a frozen
 
 ## Demo run: 218% improvement over 27 experiments
 
-We ran polyresearch on this example for 27 experiments using two contributor nodes on a single Hetzner dedicated server (18 cores / 36 threads). The chart below shows every experiment plotted by score, with the 12 accepted improvements highlighted in green and the running best drawn as a step function.
+We ran polyresearch on this example for 27 experiments using two contributor nodes on two machines: a Mac Mini M4 (24 GB RAM) and a Hetzner dedicated server (Intel Xeon W-2295, 18 cores / 36 threads, 251 GB DDR4). The chart below shows every experiment plotted by score, with the 12 accepted improvements highlighted in green and the running best drawn as a step function.
 
 ![Core War warrior progress over 27 experiments](progress.png)
 
