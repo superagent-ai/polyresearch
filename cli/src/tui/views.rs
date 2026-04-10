@@ -19,9 +19,9 @@ pub fn draw(frame: &mut Frame, app: &DashboardApp, ctx: &AppContext) {
         .split(frame.area());
 
     draw_summary(frame, root[0], app, ctx);
-    draw_thesis_table(frame, root[1], app);
+    draw_thesis_table(frame, root[1], app, ctx);
     if app.show_details {
-        draw_detail(frame, root[2], app);
+        draw_detail(frame, root[2], app, ctx);
     } else {
         draw_activity(frame, root[2], app);
     }
@@ -55,8 +55,52 @@ fn draw_summary(
         .iter()
         .filter(|finding| matches!(finding.severity, AuditSeverity::Suspicious))
         .count();
+    let maintainer_pending = app
+        .repo_state
+        .theses
+        .iter()
+        .flat_map(|thesis| {
+            let mut count = 0usize;
+            if thesis.issue.state == "OPEN"
+                && matches!(thesis.phase, crate::state::ThesisPhase::Submitted)
+                && !thesis.maintainer_rejected
+            {
+                count += 1;
+            }
+            if thesis.issue.state == "OPEN" {
+                count += thesis
+                    .pull_requests
+                    .iter()
+                    .filter(|pr| {
+                        pr.pr.state == "OPEN"
+                            && pr.decision.is_none()
+                            && !pr.maintainer_approved
+                            && !pr.maintainer_rejected
+                    })
+                    .count();
+            }
+            std::iter::once(count)
+        })
+        .sum::<usize>();
+    let maintainer_rejected = app
+        .repo_state
+        .theses
+        .iter()
+        .map(|thesis| {
+            if thesis.issue.state != "OPEN" {
+                0
+            } else {
+                usize::from(thesis.maintainer_rejected)
+                    + thesis
+                        .pull_requests
+                        .iter()
+                        .filter(|pr| pr.pr.state == "OPEN" && pr.maintainer_rejected)
+                        .count()
+            }
+        })
+        .sum::<usize>();
     let text = format!(
-        "Repo: {} | Theses: {} | Queue: {}/{} | Best: {} | Nodes: {} | results.tsv current: {} | Findings: {} invalid / {} suspicious",
+        "Repo: {} | Theses: {} | Queue: {}/{} | Best: {} | Nodes: {} | results.tsv current: {} | Findings: {} invalid / {} suspicious | Maintainer: {}",
         ctx.repo.slug(),
         app.repo_state.theses.len(),
         app.repo_state.queue_depth,
@@ -73,7 +117,12 @@ fn draw_summary(
             "no"
         },
         invalid_count,
-        suspicious_count
+        suspicious_count,
+        if ctx.config.auto_approve {
+            "auto".to_string()
+        } else {
+            format!("{maintainer_pending} awaiting / {maintainer_rejected} rejected")
+        }
     );
 
     let paragraph =
@@ -81,7 +130,12 @@ fn draw_summary(
     frame.render_widget(paragraph, area);
 }
 
-fn draw_thesis_table(frame: &mut Frame, area: ratatui::layout::Rect, app: &DashboardApp) {
+fn draw_thesis_table(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    app: &DashboardApp,
+    ctx: &AppContext,
+) {
     let rows = app.repo_state.theses.iter().map(|thesis| {
         let claims = if thesis.active_claims.is_empty() {
             "—".to_string()
@@ -102,6 +156,7 @@ fn draw_thesis_table(frame: &mut Frame, area: ratatui::layout::Rect, app: &Dashb
             Cell::from(format!("#{}", thesis.issue.number)),
             Cell::from(thesis.issue.title.clone()),
             Cell::from(format!("{:?}", thesis.phase)),
+            Cell::from(thesis.maintainer_summary(ctx.config.auto_approve)),
             Cell::from(claims),
             Cell::from(best_metric),
             Cell::from(thesis.attempts.len().to_string()),
@@ -112,6 +167,7 @@ fn draw_thesis_table(frame: &mut Frame, area: ratatui::layout::Rect, app: &Dashb
         Constraint::Length(8),
         Constraint::Percentage(45),
         Constraint::Length(20),
+        Constraint::Length(14),
         Constraint::Length(18),
         Constraint::Length(10),
         Constraint::Length(8),
@@ -122,6 +178,7 @@ fn draw_thesis_table(frame: &mut Frame, area: ratatui::layout::Rect, app: &Dashb
                 "Issue",
                 "Title",
                 "State",
+                "Maintainer",
                 "Claimed By",
                 "Best",
                 "Attempts",
@@ -160,7 +217,12 @@ fn draw_activity(frame: &mut Frame, area: ratatui::layout::Rect, app: &Dashboard
     frame.render_widget(list, area);
 }
 
-fn draw_detail(frame: &mut Frame, area: ratatui::layout::Rect, app: &DashboardApp) {
+fn draw_detail(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    app: &DashboardApp,
+    ctx: &AppContext,
+) {
     let text = if let Some(thesis) = app.selected_thesis() {
         let attempts = thesis
             .attempts
@@ -173,11 +235,24 @@ fn draw_detail(frame: &mut Frame, area: ratatui::layout::Rect, app: &DashboardAp
             })
             .collect::<Vec<_>>()
             .join("\n");
+        let open_prs = thesis
+            .pull_requests
+            .iter()
+            .filter(|pr| pr.pr.state == "OPEN")
+            .map(|pr| format!("#{} {}", pr.pr.number, pr.maintainer_status(ctx.config.auto_approve)))
+            .collect::<Vec<_>>()
+            .join(", ");
         format!(
-            "Thesis #{}\n{}\n\nState: {:?}\nClaims: {}\nFindings: {}\nAttempts:\n{}",
+            "Thesis #{}\n{}\n\nState: {:?}\nMaintainer: {}\nOpen PRs: {}\nClaims: {}\nFindings: {}\nAttempts:\n{}",
             thesis.issue.number,
             thesis.issue.title,
             thesis.phase,
+            thesis.maintainer_summary(ctx.config.auto_approve),
+            if open_prs.is_empty() {
+                "none".to_string()
+            } else {
+                open_prs
+            },
             if thesis.active_claims.is_empty() {
                 "none".to_string()
             } else {

@@ -114,6 +114,10 @@ impl GitHubApi for MockGitHubClient {
         })
     }
 
+    fn add_assignees(&self, _issue_number: u64, _assignees: &[&str]) -> Result<()> {
+        Ok(())
+    }
+
     fn close_issue(&self, _issue_number: u64) -> Result<Issue> {
         Err(eyre!("unexpected close_issue call in test"))
     }
@@ -718,6 +722,8 @@ fn make_ctx(
             metric_tolerance: Some(0.01),
             metric_direction: MetricDirection::HigherIsBetter,
             lead_github_login: Some(lead_github_login.to_string()),
+            maintainer_github_login: Some("maintainer".to_string()),
+            auto_approve: true,
             assignment_timeout: Duration::from_secs(24 * 60 * 60),
             review_timeout: Duration::from_secs(12 * 60 * 60),
             min_queue_depth: 5,

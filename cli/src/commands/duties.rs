@@ -106,6 +106,24 @@ fn check_lead_duties(
 ) -> Result<()> {
     let required = ctx.config.required_confirmations as usize;
 
+    if !ctx.config.auto_approve {
+        for thesis in &repo_state.theses {
+            if thesis.issue.state == "OPEN"
+                && matches!(thesis.phase, ThesisPhase::Submitted)
+                && !thesis.maintainer_rejected
+            {
+                advisory.push(DutyItem {
+                    category: "maintainer-approval".to_string(),
+                    message: format!(
+                        "Thesis #{}: awaiting maintainer `/approve`.",
+                        thesis.issue.number
+                    ),
+                    command: "GitHub comment: /approve OR /reject <reason>".to_string(),
+                });
+            }
+        }
+    }
+
     for thesis in &repo_state.theses {
         for pr_state in &thesis.pull_requests {
             if pr_state.pr.state != "OPEN" || pr_state.decision.is_some() {
@@ -117,6 +135,26 @@ fn check_lead_duties(
                     category: "policy-check".to_string(),
                     message: format!("PR #{}: open without policy-check.", pr_state.pr.number),
                     command: format!("polyresearch policy-check {}", pr_state.pr.number),
+                });
+                continue;
+            }
+
+            if !ctx.config.auto_approve && !pr_state.maintainer_approved {
+                let message = if pr_state.maintainer_rejected {
+                    format!(
+                        "PR #{}: maintainer rejected the candidate; waiting for a new `/approve` or replacement PR.",
+                        pr_state.pr.number
+                    )
+                } else {
+                    format!(
+                        "PR #{}: awaiting maintainer `/approve`.",
+                        pr_state.pr.number
+                    )
+                };
+                advisory.push(DutyItem {
+                    category: "maintainer-approval".to_string(),
+                    message,
+                    command: "GitHub comment: /approve OR /reject <reason>".to_string(),
                 });
                 continue;
             }

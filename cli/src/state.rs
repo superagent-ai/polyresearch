@@ -25,6 +25,8 @@ pub struct ThesisState {
     pub issue: Issue,
     pub phase: ThesisPhase,
     pub approved: bool,
+    pub maintainer_approved: bool,
+    pub maintainer_rejected: bool,
     pub active_claims: Vec<ClaimRecord>,
     pub releases: Vec<ReleaseRecord>,
     pub attempts: Vec<AttemptRecord>,
@@ -77,6 +79,8 @@ pub struct PullRequestState {
     pub pr: PullRequest,
     pub thesis_number: Option<u64>,
     pub policy_pass: bool,
+    pub maintainer_approved: bool,
+    pub maintainer_rejected: bool,
     pub review_claims: Vec<ReviewClaimRecord>,
     pub reviews: Vec<ReviewRecord>,
     pub decision: Option<DecisionRecord>,
@@ -148,7 +152,7 @@ impl RepositoryState {
             .into_iter()
             .collect::<Vec<_>>();
 
-        let queue_depth = count_queue_depth(&theses);
+        let queue_depth = count_queue_depth(&theses, config.auto_approve);
 
         let current_best_accepted_metric = theses
             .iter()
@@ -226,6 +230,8 @@ impl ThesisState {
         let validation = validate_issue(&issue, &comments, config, latest_valid_decision_at);
 
         let approved = validation.approved;
+        let maintainer_approved = validation.maintainer_approved;
+        let maintainer_rejected = validation.maintainer_rejected;
         let attempts = validation
             .attempts
             .iter()
@@ -302,6 +308,8 @@ impl ThesisState {
             issue,
             phase,
             approved,
+            maintainer_approved,
+            maintainer_rejected,
             active_claims,
             releases,
             attempts,
@@ -334,6 +342,24 @@ impl ThesisState {
 
     pub fn is_claimed_by(&self, node: &str) -> bool {
         self.active_claims.iter().any(|claim| claim.node == node)
+    }
+
+    pub fn maintainer_summary(&self, auto_approve: bool) -> String {
+        if auto_approve {
+            return "auto".to_string();
+        }
+
+        if let Some(open_pr) = self.pull_requests.iter().find(|pr| pr.pr.state == "OPEN") {
+            return format!("PR {}", open_pr.maintainer_status(auto_approve));
+        }
+
+        if self.maintainer_rejected {
+            "rejected".to_string()
+        } else if self.approved {
+            "approved".to_string()
+        } else {
+            "waiting".to_string()
+        }
     }
 
     pub fn activity_events(&self) -> Vec<ActivityEvent> {
@@ -422,11 +448,25 @@ impl PullRequestState {
             pr,
             thesis_number: validation.thesis_number,
             policy_pass: validation.policy_pass,
+            maintainer_approved: validation.maintainer_approved,
+            maintainer_rejected: validation.maintainer_rejected,
             review_claims,
             reviews,
             decision,
             findings: validation.findings,
         })
+    }
+
+    pub fn maintainer_status(&self, auto_approve: bool) -> &'static str {
+        if auto_approve {
+            "auto"
+        } else if self.maintainer_rejected {
+            "rejected"
+        } else if self.maintainer_approved {
+            "approved"
+        } else {
+            "waiting"
+        }
     }
 }
 
@@ -446,11 +486,15 @@ pub fn select_metric(current: Option<f64>, candidate: f64, direction: MetricDire
     }
 }
 
-fn count_queue_depth(theses: &[ThesisState]) -> usize {
+fn count_queue_depth(theses: &[ThesisState], auto_approve: bool) -> usize {
     theses
         .iter()
         .filter(|thesis| {
-            thesis.issue.state == "OPEN" && matches!(thesis.phase, ThesisPhase::Approved)
+            thesis.issue.state == "OPEN"
+                && (matches!(thesis.phase, ThesisPhase::Approved)
+                    || (!auto_approve
+                        && matches!(thesis.phase, ThesisPhase::Submitted)
+                        && !thesis.maintainer_rejected))
         })
         .count()
 }
@@ -465,7 +509,7 @@ pub fn metric_beats(a: f64, b: f64, tolerance: f64, direction: MetricDirection) 
 mod tests {
     use super::*;
     use crate::config::{MetricDirection, ProtocolConfig};
-    use crate::github::{Issue, IssueComment};
+    use crate::github::{Issue, IssueComment, PullRequest};
     use serde::Deserialize;
 
     #[derive(Deserialize)]
@@ -530,7 +574,100 @@ mod tests {
         .unwrap();
 
         assert!(matches!(approved.phase, ThesisPhase::Approved));
-        assert_eq!(count_queue_depth(&[exhausted, approved]), 1);
+        assert_eq!(count_queue_depth(&[exhausted, approved], true), 1);
+    }
+
+    #[test]
+    fn queue_depth_counts_submitted_theses_when_auto_approve_is_disabled() {
+        let fixture = exhausted_fixture();
+        let mut submitted_comments = fixture.comments;
+        submitted_comments.clear();
+        let config = test_config(&fixture.lead_github_login);
+        let submitted = ThesisState::derive(fixture.issue, submitted_comments, &[], &config).unwrap();
+
+        assert!(matches!(submitted.phase, ThesisPhase::Submitted));
+        assert_eq!(count_queue_depth(&[submitted], false), 1);
+    }
+
+    #[test]
+    fn queue_depth_excludes_rejected_submitted_theses() {
+        let thesis = ThesisState {
+            issue: Issue {
+                number: 3,
+                title: "Rejected thesis".to_string(),
+                body: None,
+                state: "OPEN".to_string(),
+                labels: vec![],
+                created_at: chrono::Utc::now(),
+                closed_at: None,
+                author: None,
+                url: None,
+            },
+            phase: ThesisPhase::Submitted,
+            approved: false,
+            maintainer_approved: false,
+            maintainer_rejected: true,
+            active_claims: vec![],
+            releases: vec![],
+            attempts: vec![],
+            pull_requests: vec![],
+            best_attempt_metric: None,
+            findings: vec![],
+        };
+
+        assert_eq!(count_queue_depth(&[thesis], false), 0);
+    }
+
+    #[test]
+    fn maintainer_summary_prefers_open_pr_state() {
+        let thesis = ThesisState {
+            issue: Issue {
+                number: 1,
+                title: "Example".to_string(),
+                body: None,
+                state: "OPEN".to_string(),
+                labels: vec![],
+                created_at: chrono::Utc::now(),
+                closed_at: None,
+                author: None,
+                url: None,
+            },
+            phase: ThesisPhase::InReview,
+            approved: true,
+            maintainer_approved: true,
+            maintainer_rejected: false,
+            active_claims: vec![],
+            releases: vec![],
+            attempts: vec![],
+            pull_requests: vec![PullRequestState {
+                pr: PullRequest {
+                    number: 2,
+                    title: "Candidate".to_string(),
+                    body: None,
+                    state: "OPEN".to_string(),
+                    head_ref_name: "thesis/1-example-attempt-1".to_string(),
+                    head_ref_oid: Some("abc123".to_string()),
+                    base_ref_name: Some("main".to_string()),
+                    created_at: chrono::Utc::now(),
+                    closed_at: None,
+                    merged_at: None,
+                    author: None,
+                    url: None,
+                },
+                thesis_number: Some(1),
+                policy_pass: true,
+                maintainer_approved: false,
+                maintainer_rejected: true,
+                review_claims: vec![],
+                reviews: vec![],
+                decision: None,
+                findings: vec![],
+            }],
+            best_attempt_metric: None,
+            findings: vec![],
+        };
+
+        assert_eq!(thesis.maintainer_summary(false), "PR rejected");
     }
 
     fn exhausted_fixture() -> IssueFixture {
@@ -546,6 +683,8 @@ mod tests {
             metric_tolerance: Some(0.01),
             metric_direction: MetricDirection::HigherIsBetter,
             lead_github_login: Some(lead_github_login.to_string()),
+            maintainer_github_login: Some("maintainer".to_string()),
+            auto_approve: true,
             assignment_timeout: std::time::Duration::from_secs(24 * 60 * 60),
             review_timeout: std::time::Duration::from_secs(12 * 60 * 60),
             min_queue_depth: 5,

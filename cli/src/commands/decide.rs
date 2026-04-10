@@ -26,6 +26,25 @@ pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
     let (thesis, pr_state) = require_decidable_pr(&repo_state, args.pr)?;
 
     let candidate_sha = pr_state.pr.head_ref_oid.clone().unwrap_or_default();
+    if !ctx.config.auto_approve {
+        let maintainer = ctx.config.maintainer_login()?;
+        if !ctx.cli.dry_run && (!pr_state.maintainer_approved || pr_state.maintainer_rejected) {
+            ctx.github.add_assignees(args.pr, &[maintainer])?;
+        }
+        if pr_state.maintainer_rejected {
+            return Err(eyre!(
+                "PR #{} was rejected by the maintainer; do not decide it until a maintainer comments `/approve` or the PR is replaced",
+                args.pr
+            ));
+        }
+        if !pr_state.maintainer_approved {
+            return Err(eyre!(
+                "PR #{} requires maintainer `/approve` before deciding",
+                args.pr
+            ));
+        }
+    }
+
     let outcome = if ctx.config.required_confirmations == 0 {
         decide_without_peer_review(ctx, thesis, pr_state, &ledger)?
     } else {

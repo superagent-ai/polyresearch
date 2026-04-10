@@ -97,10 +97,27 @@ pub struct ValidDecisionRecord {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintainerVerdict {
+    Approve,
+    Reject,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MaintainerFeedback {
+    pub verdict: MaintainerVerdict,
+    pub reason: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PullRequestValidation {
     pub thesis_number: Option<u64>,
     pub policy_pass: bool,
+    pub maintainer_approved: bool,
+    pub maintainer_rejected: bool,
+    pub maintainer_feedback: Vec<MaintainerFeedback>,
     pub review_claims: Vec<ValidReviewClaimRecord>,
     pub reviews: Vec<ValidReviewRecord>,
     pub decision: Option<ValidDecisionRecord>,
@@ -110,6 +127,9 @@ pub struct PullRequestValidation {
 #[derive(Debug, Clone)]
 pub struct IssueValidation {
     pub approved: bool,
+    pub maintainer_approved: bool,
+    pub maintainer_rejected: bool,
+    pub maintainer_feedback: Vec<MaintainerFeedback>,
     pub active_claims: Vec<ValidClaimRecord>,
     pub releases: Vec<ValidReleaseRecord>,
     pub attempts: Vec<ValidAttemptRecord>,
@@ -137,6 +157,9 @@ pub fn validate_pull_request(
     sorted_comments.sort_by_key(|comment| (comment.created_at, comment.id));
 
     let mut policy_pass = false;
+    let mut maintainer_approved = false;
+    let mut maintainer_rejected = false;
+    let mut maintainer_feedback = Vec::new();
     let mut review_claims = Vec::new();
     let mut claimed_nodes = BTreeSet::new();
     let mut reviews = Vec::new();
@@ -149,6 +172,40 @@ pub fn validate_pull_request(
 
     for comment in sorted_comments {
         match &comment.protocol {
+            Some(ProtocolComment::SlashApprove { reason }) => {
+                if !is_maintainer_actor(&comment.author, config) {
+                    findings.push(invalid_issue_like(
+                        AuditScope::PullRequest { number: pr.number },
+                        &comment,
+                        "slash approve comment from non-maintainer actor",
+                    ));
+                } else {
+                    maintainer_approved = true;
+                    maintainer_rejected = false;
+                    maintainer_feedback.push(MaintainerFeedback {
+                        verdict: MaintainerVerdict::Approve,
+                        reason: reason.clone(),
+                        created_at: comment.created_at,
+                    });
+                }
+            }
+            Some(ProtocolComment::SlashReject { reason }) => {
+                if !is_maintainer_actor(&comment.author, config) {
+                    findings.push(invalid_issue_like(
+                        AuditScope::PullRequest { number: pr.number },
+                        &comment,
+                        "slash reject comment from non-maintainer actor",
+                    ));
+                } else {
+                    maintainer_approved = false;
+                    maintainer_rejected = true;
+                    maintainer_feedback.push(MaintainerFeedback {
+                        verdict: MaintainerVerdict::Reject,
+                        reason: reason.clone(),
+                        created_at: comment.created_at,
+                    });
+                }
+            }
             Some(ProtocolComment::AdminNote {
                 action,
                 related_comment_id,
@@ -330,6 +387,9 @@ pub fn validate_pull_request(
     PullRequestValidation {
         thesis_number,
         policy_pass,
+        maintainer_approved,
+        maintainer_rejected,
+        maintainer_feedback,
         review_claims,
         reviews,
         decision,
@@ -347,6 +407,9 @@ pub fn validate_issue(
     sorted_comments.sort_by_key(|comment| (comment.created_at, comment.id));
 
     let mut approved = false;
+    let mut maintainer_approved = false;
+    let mut maintainer_rejected = false;
+    let mut maintainer_feedback = Vec::new();
     let mut findings = Vec::new();
     let mut acknowledged_comment_ids = BTreeSet::new();
     let mut active_claims = HashMap::<String, ValidClaimRecord>::new();
@@ -358,6 +421,46 @@ pub fn validate_issue(
 
     for comment in sorted_comments {
         match &comment.protocol {
+            Some(ProtocolComment::SlashApprove { reason }) => {
+                if !is_maintainer_actor(&comment.author, config) {
+                    findings.push(invalid_issue_like(
+                        AuditScope::Issue {
+                            number: issue.number,
+                        },
+                        &comment,
+                        "slash approve comment from non-maintainer actor",
+                    ));
+                } else {
+                    approved = true;
+                    maintainer_approved = true;
+                    maintainer_rejected = false;
+                    maintainer_feedback.push(MaintainerFeedback {
+                        verdict: MaintainerVerdict::Approve,
+                        reason: reason.clone(),
+                        created_at: comment.created_at,
+                    });
+                }
+            }
+            Some(ProtocolComment::SlashReject { reason }) => {
+                if !is_maintainer_actor(&comment.author, config) {
+                    findings.push(invalid_issue_like(
+                        AuditScope::Issue {
+                            number: issue.number,
+                        },
+                        &comment,
+                        "slash reject comment from non-maintainer actor",
+                    ));
+                } else {
+                    approved = false;
+                    maintainer_approved = false;
+                    maintainer_rejected = true;
+                    maintainer_feedback.push(MaintainerFeedback {
+                        verdict: MaintainerVerdict::Reject,
+                        reason: reason.clone(),
+                        created_at: comment.created_at,
+                    });
+                }
+            }
             Some(ProtocolComment::AdminNote {
                 action,
                 related_comment_id,
@@ -376,15 +479,6 @@ pub fn validate_issue(
                         acknowledged_comment_ids.insert(*related_comment_id);
                     }
                 }
-            }
-            Some(ProtocolComment::SlashApprove) => {
-                findings.push(suspicious_issue_like(
-                    AuditScope::Issue {
-                        number: issue.number,
-                    },
-                    &comment,
-                    "manual `/approve` comment is non-canonical; use `polyresearch generate` or an admin command",
-                ));
             }
             Some(ProtocolComment::Approval { thesis }) => {
                 if *thesis != issue.number {
@@ -600,6 +694,9 @@ pub fn validate_issue(
 
     IssueValidation {
         approved,
+        maintainer_approved,
+        maintainer_rejected,
+        maintainer_feedback,
         active_claims,
         releases,
         attempts,
@@ -612,6 +709,14 @@ fn is_lead_actor(author: &str, config: &ProtocolConfig) -> bool {
         .lead_github_login
         .as_deref()
         .map(|lead| lead == author)
+        .unwrap_or(false)
+}
+
+fn is_maintainer_actor(author: &str, config: &ProtocolConfig) -> bool {
+    config
+        .maintainer_github_login
+        .as_deref()
+        .map(|maintainer| maintainer == author)
         .unwrap_or(false)
 }
 
@@ -670,6 +775,7 @@ mod tests {
     #[serde(rename_all = "camelCase")]
     struct IssueFixture {
         lead_github_login: String,
+        maintainer_github_login: Option<String>,
         issue: Issue,
         comments: Vec<IssueComment>,
     }
@@ -678,6 +784,7 @@ mod tests {
     #[serde(rename_all = "camelCase")]
     struct PullRequestFixture {
         lead_github_login: String,
+        maintainer_github_login: Option<String>,
         pr: PullRequest,
         comments: Vec<IssueComment>,
     }
@@ -687,7 +794,10 @@ mod tests {
         let fixture: IssueFixture =
             serde_json::from_str(include_str!("../tests/fixtures/duplicate_claim_issue.json"))
                 .unwrap();
-        let config = test_config(&fixture.lead_github_login);
+        let config = test_config(
+            &fixture.lead_github_login,
+            fixture.maintainer_github_login.as_deref(),
+        );
         let comments = envelopes(fixture.comments);
         let validation = validate_issue(&fixture.issue, &comments, &config, None);
 
@@ -706,7 +816,10 @@ mod tests {
         let fixture: PullRequestFixture =
             serde_json::from_str(include_str!("../tests/fixtures/non_lead_decision_pr.json"))
                 .unwrap();
-        let config = test_config(&fixture.lead_github_login);
+        let config = test_config(
+            &fixture.lead_github_login,
+            fixture.maintainer_github_login.as_deref(),
+        );
         let comments = envelopes(fixture.comments);
         let validation = validate_pull_request(&fixture.pr, &comments, &config);
 
@@ -726,7 +839,10 @@ mod tests {
             "../tests/fixtures/attempt_after_closure_issue.json"
         ))
         .unwrap();
-        let config = test_config(&fixture.lead_github_login);
+        let config = test_config(
+            &fixture.lead_github_login,
+            fixture.maintainer_github_login.as_deref(),
+        );
         let comments = envelopes(fixture.comments);
         let validation = validate_issue(&fixture.issue, &comments, &config, None);
 
@@ -745,12 +861,74 @@ mod tests {
             "../tests/fixtures/acknowledged_invalid_issue.json"
         ))
         .unwrap();
-        let config = test_config(&fixture.lead_github_login);
+        let config = test_config(
+            &fixture.lead_github_login,
+            fixture.maintainer_github_login.as_deref(),
+        );
         let comments = envelopes(fixture.comments);
         let validation = validate_issue(&fixture.issue, &comments, &config, None);
 
         assert!(validation.approved);
         assert!(validation.findings.is_empty());
+    }
+
+    #[test]
+    fn maintainer_slash_approve_marks_issue_as_approved() {
+        let fixture: IssueFixture = serde_json::from_str(include_str!(
+            "../tests/fixtures/maintainer_approve_issue.json"
+        ))
+        .unwrap();
+        let config = test_config(
+            &fixture.lead_github_login,
+            fixture.maintainer_github_login.as_deref(),
+        );
+        let comments = envelopes(fixture.comments);
+        let validation = validate_issue(&fixture.issue, &comments, &config, None);
+
+        assert!(validation.approved);
+        assert!(validation.maintainer_approved);
+        assert!(!validation.maintainer_rejected);
+        assert_eq!(validation.maintainer_feedback.len(), 1);
+        assert!(validation.findings.is_empty());
+    }
+
+    #[test]
+    fn maintainer_slash_reject_marks_issue_as_rejected() {
+        let fixture: IssueFixture = serde_json::from_str(include_str!(
+            "../tests/fixtures/maintainer_reject_issue.json"
+        ))
+        .unwrap();
+        let config = test_config(
+            &fixture.lead_github_login,
+            fixture.maintainer_github_login.as_deref(),
+        );
+        let comments = envelopes(fixture.comments);
+        let validation = validate_issue(&fixture.issue, &comments, &config, None);
+
+        assert!(!validation.approved);
+        assert!(!validation.maintainer_approved);
+        assert!(validation.maintainer_rejected);
+        assert_eq!(validation.maintainer_feedback.len(), 1);
+        assert!(validation.findings.is_empty());
+    }
+
+    #[test]
+    fn non_maintainer_slash_approve_is_invalid() {
+        let fixture: IssueFixture = serde_json::from_str(include_str!(
+            "../tests/fixtures/maintainer_approve_issue.json"
+        ))
+        .unwrap();
+        let config = test_config(&fixture.lead_github_login, Some("someone-else"));
+        let comments = envelopes(fixture.comments);
+        let validation = validate_issue(&fixture.issue, &comments, &config, None);
+
+        assert!(!validation.approved);
+        assert_eq!(validation.findings.len(), 1);
+        assert!(
+            validation.findings[0]
+                .message
+                .contains("slash approve comment from non-maintainer actor")
+        );
     }
 
     fn envelopes(comments: Vec<IssueComment>) -> Vec<ProtocolEnvelope> {
@@ -761,12 +939,17 @@ mod tests {
             .unwrap()
     }
 
-    fn test_config(lead_github_login: &str) -> ProtocolConfig {
+    fn test_config(
+        lead_github_login: &str,
+        maintainer_github_login: Option<&str>,
+    ) -> ProtocolConfig {
         ProtocolConfig {
             required_confirmations: 0,
             metric_tolerance: Some(0.01),
             metric_direction: MetricDirection::HigherIsBetter,
             lead_github_login: Some(lead_github_login.to_string()),
+            maintainer_github_login: maintainer_github_login.map(ToString::to_string),
+            auto_approve: true,
             assignment_timeout: std::time::Duration::from_secs(24 * 60 * 60),
             review_timeout: std::time::Duration::from_secs(12 * 60 * 60),
             min_queue_depth: 5,

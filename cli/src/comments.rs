@@ -84,7 +84,12 @@ impl fmt::Display for Outcome {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProtocolComment {
-    SlashApprove,
+    SlashApprove {
+        reason: Option<String>,
+    },
+    SlashReject {
+        reason: Option<String>,
+    },
     Approval {
         thesis: u64,
     },
@@ -141,8 +146,11 @@ pub enum ProtocolComment {
 impl ProtocolComment {
     pub fn parse(body: &str) -> Result<Option<Self>> {
         let trimmed = body.trim();
-        if trimmed.starts_with("/approve") {
-            return Ok(Some(Self::SlashApprove));
+        if let Some(reason) = parse_slash_command(trimmed, "/approve") {
+            return Ok(Some(Self::SlashApprove { reason }));
+        }
+        if let Some(reason) = parse_slash_command(trimmed, "/reject") {
+            return Ok(Some(Self::SlashReject { reason }));
         }
 
         let regex = comment_block_regex();
@@ -236,7 +244,8 @@ impl ProtocolComment {
 
     pub fn render(&self) -> String {
         match self {
-            Self::SlashApprove => "/approve".to_string(),
+            Self::SlashApprove { reason } => render_slash_command("/approve", reason.as_deref()),
+            Self::SlashReject { reason } => render_slash_command("/reject", reason.as_deref()),
             Self::Approval { thesis } => render_block(
                 format!("Polyresearch approval: thesis #{thesis}."),
                 "approval",
@@ -367,6 +376,27 @@ impl ProtocolComment {
                 )
             }
         }
+    }
+}
+
+fn parse_slash_command(body: &str, command: &str) -> Option<Option<String>> {
+    let remainder = body.strip_prefix(command)?;
+    if remainder
+        .chars()
+        .next()
+        .is_some_and(|character| !character.is_whitespace())
+    {
+        return None;
+    }
+
+    let reason = remainder.trim();
+    Some((!reason.is_empty()).then(|| reason.to_string()))
+}
+
+fn render_slash_command(command: &str, reason: Option<&str>) -> String {
+    match reason {
+        Some(reason) => format!("{command} {reason}"),
+        None => command.to_string(),
     }
 }
 
@@ -525,5 +555,28 @@ summary: RMSNorm instead of LayerNorm
         assert!(rendered.starts_with("Polyresearch claim: thesis #42 by node `node-7f83`."));
         assert!(rendered.contains("<!-- polyresearch:claim"));
         assert!(rendered.contains("node: node-7f83"));
+    }
+
+    #[test]
+    fn parses_slash_commands_with_optional_reasons() {
+        let approve = ProtocolComment::parse("/approve focus on normalization")
+            .unwrap()
+            .unwrap();
+        let reject = ProtocolComment::parse("/reject this is too broad").unwrap().unwrap();
+        let not_a_match = ProtocolComment::parse("/approved").unwrap();
+
+        assert_eq!(
+            approve,
+            ProtocolComment::SlashApprove {
+                reason: Some("focus on normalization".to_string())
+            }
+        );
+        assert_eq!(
+            reject,
+            ProtocolComment::SlashReject {
+                reason: Some("this is too broad".to_string())
+            }
+        );
+        assert!(not_a_match.is_none());
     }
 }
