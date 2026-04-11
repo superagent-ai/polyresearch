@@ -2,6 +2,7 @@ use std::env;
 use std::process::Command;
 
 use color_eyre::eyre::Result;
+use rand::RngExt;
 use serde::Serialize;
 
 use crate::cli::InitArgs;
@@ -15,10 +16,11 @@ struct InitOutput {
 }
 
 pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
-    let node = args.node.clone().unwrap_or_else(default_node_id);
     let login = ctx.github.current_login()?;
     let _ = ctx.github.auth_status()?;
     let _ = ctx.github.auth_token()?;
+    let machine_id = args.node.clone().unwrap_or_else(default_machine_id);
+    let node = format!("{login}/{machine_id}");
 
     if let Ok(false) = ctx.github.repo_has_issues() {
         eprintln!("Warning: Issues are disabled on this repository (common for forks).");
@@ -46,7 +48,13 @@ pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
     })
 }
 
-fn default_node_id() -> String {
+fn default_machine_id() -> String {
+    let hostname = resolve_hostname();
+    let suffix: u16 = rand::rng().random();
+    format!("{hostname}-{suffix:04x}")
+}
+
+fn resolve_hostname() -> String {
     if let Ok(hostname) = env::var("HOSTNAME") {
         if !hostname.trim().is_empty() {
             return hostname;

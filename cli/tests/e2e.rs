@@ -221,7 +221,7 @@ async fn init_writes_node_identity() {
     .unwrap();
 
     let node_file = repo.path.join(".polyresearch-node");
-    assert_eq!(fs::read_to_string(node_file).unwrap(), "test-node\n");
+    assert_eq!(fs::read_to_string(node_file).unwrap(), "lead/test-node\n");
 }
 
 #[tokio::test]

@@ -57,7 +57,7 @@ When you start, before doing anything else:
 3. Run `git log --oneline -20` on `main` to see recent state.
 4. If `.polyresearch/` exists, run its setup. Otherwise follow PREPARE.md setup instructions.
 5. Check your GitHub identity. Run `gh api user --jq '.login'` to see which GitHub account you are operating as. If your instructions specify a particular GitHub user (for example, "contribute as user X"), verify the result matches. If it does not, stop and report the mismatch before proceeding. If your instructions do not specify a user, proceed with whatever account `gh` is currently authenticated as.
-6. Generate your node identifier if you don't have one. Use your machine's hostname or a short ID (e.g. `node-7f83`). Keep it consistent across sessions.
+6. Generate your node identifier if you don't have one. Run `polyresearch init`. The CLI generates a composite identifier in the form `{github_login}/{hostname}-{suffix}` (e.g. `alice/mac.lan-a3f2`). This prevents collisions across users and across multiple machines with the same hostname. Override the machine part with `polyresearch init --node <id>`.
 7. Identify your role. If your instructions say "you are the lead," follow the lead loop. Otherwise, follow the contributor loop.
 
 ---
@@ -335,22 +335,22 @@ Both forms are valid approval signals. The protocol recognizes either.
 **Claim** (contributor claims a thesis):
 
 ```
-Polyresearch claim: thesis #12 by node `node-7f83`.
+Polyresearch claim: thesis #12 by node `alice/node-7f83`.
 
 <!-- polyresearch:claim
 thesis: 12
-node: node-7f83
+node: alice/node-7f83
 -->
 ```
 
 **Release** (contributor releases a claim without submitting a candidate):
 
 ```
-Polyresearch release: thesis #12 by node `node-7f83` (`reason: no_improvement`).
+Polyresearch release: thesis #12 by node `alice/node-7f83` (`reason: no_improvement`).
 
 <!-- polyresearch:release
 thesis: 12
-node: node-7f83
+node: alice/node-7f83
 reason: no_improvement | timeout | infra_failure
 -->
 ```
@@ -390,24 +390,24 @@ candidate_sha: a1b2c3d
 **Review claim** (reviewer signals they are starting evaluation):
 
 ```
-Polyresearch review claim: thesis #12 by node `node-3e91`.
+Polyresearch review claim: thesis #12 by node `bob/node-3e91`.
 
 <!-- polyresearch:review-claim
 thesis: 12
-node: node-3e91
+node: bob/node-3e91
 -->
 ```
 
 **Review record** (reviewer posts evaluation results):
 
 ```
-Polyresearch review: thesis #12 by node `node-3e91`, candidate `0.9934`, baseline `0.9979`, observation `improved`.
+Polyresearch review: thesis #12 by node `bob/node-3e91`, candidate `0.9934`, baseline `0.9979`, observation `improved`.
 
 <!-- polyresearch:review
 thesis: 12
 candidate_sha: a1b2c3d
 base_sha: c0d1e2f
-node: node-3e91
+node: bob/node-3e91
 metric: 0.9934
 baseline_metric: 0.9979
 observation: improved | no_improvement | crashed | infra_failure
