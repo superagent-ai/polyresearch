@@ -2,6 +2,7 @@ use std::env;
 use std::process::Command;
 
 use color_eyre::eyre::Result;
+use rand::RngExt;
 use serde::Serialize;
 
 use crate::cli::InitArgs;
@@ -48,6 +49,12 @@ pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
 }
 
 fn default_machine_id() -> String {
+    let hostname = resolve_hostname();
+    let suffix: u16 = rand::rng().random();
+    format!("{hostname}-{suffix:04x}")
+}
+
+fn resolve_hostname() -> String {
     if let Ok(hostname) = env::var("HOSTNAME") {
         if !hostname.trim().is_empty() {
             return hostname;

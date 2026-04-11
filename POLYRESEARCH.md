@@ -57,7 +57,7 @@ When you start, before doing anything else:
 3. Run `git log --oneline -20` on `main` to see recent state.
 4. If `.polyresearch/` exists, run its setup. Otherwise follow PREPARE.md setup instructions.
 5. Check your GitHub identity. Run `gh api user --jq '.login'` to see which GitHub account you are operating as. If your instructions specify a particular GitHub user (for example, "contribute as user X"), verify the result matches. If it does not, stop and report the mismatch before proceeding. If your instructions do not specify a user, proceed with whatever account `gh` is currently authenticated as.
-6. Generate your node identifier if you don't have one. Run `polyresearch init`. The CLI generates a composite identifier in the form `{github_login}/{hostname}` (e.g. `alice/mac.lan`). This prevents collisions when multiple GitHub users share the same machine hostname. Override the machine part with `polyresearch init --node <id>`.
+6. Generate your node identifier if you don't have one. Run `polyresearch init`. The CLI generates a composite identifier in the form `{github_login}/{hostname}-{suffix}` (e.g. `alice/mac.lan-a3f2`). This prevents collisions across users and across multiple machines with the same hostname. Override the machine part with `polyresearch init --node <id>`.
 7. Identify your role. If your instructions say "you are the lead," follow the lead loop. Otherwise, follow the contributor loop.
 
 ---
