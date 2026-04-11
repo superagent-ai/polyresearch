@@ -60,6 +60,7 @@ pub struct ValidReleaseRecord {
 #[derive(Debug, Clone)]
 pub struct ValidAttemptRecord {
     pub thesis: u64,
+    pub node: String,
     pub branch: String,
     pub metric: f64,
     pub baseline_metric: f64,
@@ -664,8 +665,13 @@ pub fn validate_issue(
                         "duplicate attempt branch recorded more than once",
                     ));
                 } else {
+                    let claim = active_claims
+                        .values()
+                        .find(|claim| claim.author_login == comment.author)
+                        .expect("validated attempt should have a matching active claim");
                     attempts.push(ValidAttemptRecord {
                         thesis: *thesis,
+                        node: claim.node.clone(),
                         branch: branch.clone(),
                         metric: *metric,
                         baseline_metric: *baseline_metric,

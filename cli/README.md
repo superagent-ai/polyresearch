@@ -80,13 +80,18 @@ Initialize the local node identity once per repo:
 
 ```bash
 polyresearch init
+polyresearch init --resource-policy "2 GPUs, run up to 4 evals in parallel, stay under 50 API calls/min"
 ```
+
+This writes `.polyresearch-node.toml` in the repo root. The file stores a stable `node_id` plus an optional natural-language `resource_policy`. If no policy is set, the protocol default is to maximize throughput.
 
 Inspect the current state:
 
 ```bash
+polyresearch pace
 polyresearch status
 polyresearch audit
+polyresearch pace --json
 polyresearch status --json
 polyresearch status --tui
 ```
@@ -135,7 +140,8 @@ The maintainer comments `/approve` or `/reject` directly on thesis issues and ca
 
 ## Command summary
 
-- `polyresearch init` -- set node identity, verify GitHub auth, detect repo
+- `polyresearch init` -- set node identity, optional resource policy, verify GitHub auth, detect repo
+- `polyresearch pace` -- show the effective resource policy alongside recent node throughput
 - `polyresearch status` -- derive thesis state, queue depth, active nodes, current best metric
 - `polyresearch audit` -- validate raw GitHub activity and report invalid or suspicious protocol events
 - `polyresearch claim` -- atomically claim a thesis and create the thesis branch
