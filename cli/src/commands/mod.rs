@@ -24,7 +24,7 @@ use color_eyre::eyre::{Context, Result, eyre};
 use serde::Serialize;
 
 use crate::cli::{Cli, Commands};
-use crate::config::{NodeConfig, ProgramSpec, ProtocolConfig, node_config_path};
+use crate::config::{NodeConfig, ProgramSpec, ProtocolConfig};
 use crate::github::{GitHubApi, RepoRef};
 
 #[derive(Clone)]
@@ -68,10 +68,6 @@ where
         println!("{}", plain(value));
     }
     Ok(())
-}
-
-pub fn node_file(repo_root: &PathBuf) -> PathBuf {
-    node_config_path(repo_root)
 }
 
 pub fn read_node_config(repo_root: &PathBuf) -> Result<NodeConfig> {

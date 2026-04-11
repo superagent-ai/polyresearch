@@ -4,7 +4,7 @@ __pycache__/
 .env
 .venv/
 node_modules/
-.polyresearch-node
+.polyresearch-node.toml
 target/
 cli/target/
 *.log
