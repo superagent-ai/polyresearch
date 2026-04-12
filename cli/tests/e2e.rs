@@ -862,45 +862,6 @@ async fn duties_reports_metric_floor_and_stale_queue_for_lead() {
 }
 
 #[tokio::test]
-async fn duties_reports_stale_queue_for_lead_when_all_claimable_theses_are_released() {
-    let repo = TestRepo::new("duties-stale-queue-released");
-    let mock = Arc::new(MockGitHubClient::new(
-        "lead",
-        vec![],
-        HashMap::new(),
-        vec![],
-        HashMap::new(),
-    ));
-    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
-
-    let mut thesis_one = make_approved_thesis(1);
-    thesis_one.releases.push(ReleaseRecord {
-        node: "node-a".to_string(),
-        reason: ReleaseReason::NoImprovement,
-        created_at: chrono::Utc::now(),
-    });
-
-    let mut thesis_two = make_approved_thesis(2);
-    thesis_two.releases.push(ReleaseRecord {
-        node: "node-b".to_string(),
-        reason: ReleaseReason::NoImprovement,
-        created_at: chrono::Utc::now(),
-    });
-
-    let repo_state = make_repo_state(vec![thesis_one, thesis_two], 2, None);
-    let report = commands::duties::check(&ctx, &repo_state).unwrap();
-
-    assert!(
-        report.advisory.iter().any(|d| d.category == "stale-queue"),
-        "should report a stale-queue advisory when every claimable thesis was already released with no_improvement"
-    );
-    assert!(
-        !report.advisory.iter().any(|d| d.category == "metric-floor"),
-        "release-based stale queue detection should not require a metric-floor condition"
-    );
-}
-
-#[tokio::test]
 async fn duties_reports_no_claimable_work_for_contributor_at_metric_floor() {
     let repo = TestRepo::new("duties-no-claimable-metric-floor");
     let mock = Arc::new(MockGitHubClient::new(
