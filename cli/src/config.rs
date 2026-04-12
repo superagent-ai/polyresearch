@@ -148,83 +148,102 @@ impl ProtocolConfig {
         let contents = fs::read_to_string(&program_path)
             .wrap_err_with(|| format!("failed to read {}", program_path.display()))?;
         let mut in_configuration = false;
+        let mut in_preamble = true;
 
         for line in contents.lines() {
             let trimmed = line.trim();
             if trimmed.starts_with("## ") {
+                in_preamble = false;
                 in_configuration = trimmed == "## Configuration";
                 continue;
             }
-
-            if !in_configuration || !trimmed.starts_with('|') {
+            if trimmed.starts_with("# ") {
                 continue;
             }
 
-            let cells: Vec<String> = trimmed
-                .split('|')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-                .collect();
+            if in_configuration && trimmed.starts_with('|') {
+                let cells: Vec<String> = trimmed
+                    .split('|')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToString::to_string)
+                    .collect();
 
-            if cells.len() < 2 {
-                continue;
-            }
+                if cells.len() < 2 {
+                    continue;
+                }
 
-            let key = cells[0].trim_matches('`');
-            let value = cells[1].trim_matches('`');
-            if value == "Value" || key == "Parameter" || value.chars().all(|c| c == '-') {
-                continue;
-            }
-
-            match key {
-                "required_confirmations" => {
-                    config.required_confirmations = value.parse().wrap_err_with(|| {
-                        format!("invalid required_confirmations value `{value}`")
-                    })?;
+                let key = cells[0].trim_matches('`');
+                let value = cells[1].trim_matches('`');
+                if value == "Value" || key == "Parameter" || value.chars().all(|c| c == '-') {
+                    continue;
                 }
-                "metric_tolerance" => {
-                    config.metric_tolerance =
-                        Some(value.parse().wrap_err_with(|| {
-                            format!("invalid metric_tolerance value `{value}`")
-                        })?);
-                }
-                "metric_direction" => {
-                    config.metric_direction = match value {
-                        "higher_is_better" => MetricDirection::HigherIsBetter,
-                        "lower_is_better" => MetricDirection::LowerIsBetter,
-                        other => return Err(eyre!("invalid metric_direction `{other}`")),
-                    };
-                }
-                "lead_github_login" => {
-                    if value != "replace-me" && !value.is_empty() {
-                        config.lead_github_login = Some(value.to_string());
+                Self::apply_setting(&mut config, key, value)?;
+            } else if in_preamble || in_configuration {
+                if let Some((key, value)) = trimmed.split_once(':') {
+                    let key = key.trim();
+                    let value = value.trim();
+                    if !key.is_empty()
+                        && !value.is_empty()
+                        && !key.contains(' ')
+                        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    {
+                        Self::apply_setting(&mut config, key, value)?;
                     }
                 }
-                "maintainer_github_login" => {
-                    if value != "replace-me" && !value.is_empty() {
-                        config.maintainer_github_login = Some(value.to_string());
-                    }
-                }
-                "auto_approve" => config.auto_approve = parse_bool(value)?,
-                "assignment_timeout" => config.assignment_timeout = parse_duration(value)?,
-                "review_timeout" => config.review_timeout = parse_duration(value)?,
-                "min_queue_depth" => {
-                    config.min_queue_depth = value
-                        .parse()
-                        .wrap_err_with(|| format!("invalid min_queue_depth value `{value}`"))?;
-                }
-                "max_queue_depth" => {
-                    config.max_queue_depth =
-                        Some(value.parse().wrap_err_with(|| {
-                            format!("invalid max_queue_depth value `{value}`")
-                        })?);
-                }
-                _ => {}
             }
         }
 
         Ok(config)
+    }
+
+    fn apply_setting(config: &mut Self, key: &str, value: &str) -> Result<()> {
+        match key {
+            "required_confirmations" => {
+                config.required_confirmations = value.parse().wrap_err_with(|| {
+                    format!("invalid required_confirmations value `{value}`")
+                })?;
+            }
+            "metric_tolerance" => {
+                config.metric_tolerance =
+                    Some(value.parse().wrap_err_with(|| {
+                        format!("invalid metric_tolerance value `{value}`")
+                    })?);
+            }
+            "metric_direction" => {
+                config.metric_direction = match value {
+                    "higher_is_better" => MetricDirection::HigherIsBetter,
+                    "lower_is_better" => MetricDirection::LowerIsBetter,
+                    other => return Err(eyre!("invalid metric_direction `{other}`")),
+                };
+            }
+            "lead_github_login" => {
+                if value != "replace-me" && !value.is_empty() {
+                    config.lead_github_login = Some(value.to_string());
+                }
+            }
+            "maintainer_github_login" => {
+                if value != "replace-me" && !value.is_empty() {
+                    config.maintainer_github_login = Some(value.to_string());
+                }
+            }
+            "auto_approve" => config.auto_approve = parse_bool(value)?,
+            "assignment_timeout" => config.assignment_timeout = parse_duration(value)?,
+            "review_timeout" => config.review_timeout = parse_duration(value)?,
+            "min_queue_depth" => {
+                config.min_queue_depth = value
+                    .parse()
+                    .wrap_err_with(|| format!("invalid min_queue_depth value `{value}`"))?;
+            }
+            "max_queue_depth" => {
+                config.max_queue_depth =
+                    Some(value.parse().wrap_err_with(|| {
+                        format!("invalid max_queue_depth value `{value}`")
+                    })?);
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     pub fn tolerance(&self) -> Result<f64> {
@@ -502,6 +521,93 @@ resource_policy = "Run 4 evals in parallel."
         let (policy, is_default) = config.effective_resource_policy();
         assert!(is_default);
         assert_eq!(policy, DEFAULT_RESOURCE_POLICY);
+    }
+
+    #[test]
+    fn loads_protocol_config_from_table_format() {
+        let repo_root = unique_temp_dir("config-table");
+        fs::write(
+            repo_root.join("PROGRAM.md"),
+            r#"# Research Program
+
+## Configuration
+
+| Parameter | Value |
+| --- | --- |
+| `lead_github_login` | `alice` |
+| `maintainer_github_login` | `bob` |
+| `min_queue_depth` | `3` |
+| `auto_approve` | `false` |
+| `metric_tolerance` | `10` |
+
+## Goal
+
+Do something.
+"#,
+        )
+        .unwrap();
+
+        let config = ProtocolConfig::load(&repo_root).unwrap();
+        assert_eq!(config.lead_github_login.as_deref(), Some("alice"));
+        assert_eq!(config.maintainer_github_login.as_deref(), Some("bob"));
+        assert_eq!(config.min_queue_depth, 3);
+        assert!(!config.auto_approve);
+        assert_eq!(config.metric_tolerance, Some(10.0));
+
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn loads_protocol_config_from_plain_key_value() {
+        let repo_root = unique_temp_dir("config-kv");
+        fs::write(
+            repo_root.join("PROGRAM.md"),
+            r#"# Research Program
+
+lead_github_login: alice
+maintainer_github_login: bob
+min_queue_depth: 3
+auto_approve: false
+metric_tolerance: 10
+
+## Goal
+
+Do something.
+"#,
+        )
+        .unwrap();
+
+        let config = ProtocolConfig::load(&repo_root).unwrap();
+        assert_eq!(config.lead_github_login.as_deref(), Some("alice"));
+        assert_eq!(config.maintainer_github_login.as_deref(), Some("bob"));
+        assert_eq!(config.min_queue_depth, 3);
+        assert!(!config.auto_approve);
+        assert_eq!(config.metric_tolerance, Some(10.0));
+
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn ignores_prose_lines_with_colons_in_preamble() {
+        let repo_root = unique_temp_dir("config-prose");
+        fs::write(
+            repo_root.join("PROGRAM.md"),
+            r#"# Research Program
+
+lead_github_login: alice
+**Baseline**: ~399 ms (mean of 5 runs)
+
+## Goal
+
+Do something.
+"#,
+        )
+        .unwrap();
+
+        let config = ProtocolConfig::load(&repo_root).unwrap();
+        assert_eq!(config.lead_github_login.as_deref(), Some("alice"));
+
+        fs::remove_dir_all(repo_root).unwrap();
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {
