@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod annotate;
 pub mod attempt;
 pub mod audit;
 pub mod claim;
@@ -46,6 +47,7 @@ pub async fn run(ctx: AppContext) -> Result<()> {
         Commands::Status(args) => status::run(&ctx, args).await,
         Commands::Claim(args) => claim::run(&ctx, args).await,
         Commands::Attempt(args) => attempt::run(&ctx, args).await,
+        Commands::Annotate(args) => annotate::run(&ctx, args).await,
         Commands::Release(args) => release::run(&ctx, args).await,
         Commands::Submit(args) => submit::run(&ctx, args).await,
         Commands::ReviewClaim(args) => review_claim::run(&ctx, args).await,

@@ -318,7 +318,6 @@ async fn env_override_uses_session_node_id() {
     assert_eq!(output.node_id, "lead/env-node");
     assert_eq!(output.resource_policy, "Keep CPUs saturated.");
     assert!(!output.is_default_policy);
-
 }
 
 #[tokio::test]
@@ -513,6 +512,7 @@ async fn attempt_rejects_node_without_canonical_claim() {
             baseline: 0.50,
             observation: Observation::Improved,
             summary: "test".to_string(),
+            annotations: None,
         }),
     );
     commands::write_node_id(&repo.path, "node-b").unwrap();
@@ -525,6 +525,7 @@ async fn attempt_rejects_node_without_canonical_claim() {
             baseline: 0.50,
             observation: Observation::Improved,
             summary: "test".to_string(),
+            annotations: None,
         },
     )
     .await

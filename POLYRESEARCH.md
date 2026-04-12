@@ -205,6 +205,7 @@ Complete all of these before opening any new thesis issue:
 1. Confirm `polyresearch audit` is clean and `results.tsv` is current. The maintain step above must be done first.
 2. Read results.tsv and PROGRAM.md. Identify patterns in what worked, what failed, and what has not been tried yet.
 3. Run `polyresearch status` and read every existing thesis title and body, open and closed.
+4. Read annotations on closed theses. Treat them as negative knowledge. Do not repeat those directions unless you can explain why the new attempt is materially different.
 
 Queue depth check:
 
@@ -407,8 +408,32 @@ metric: 1.0050
 baseline_metric: 0.9934
 observation: no_improvement | crashed | infra_failure
 summary: Switched to GeLU activation, regression on val_bpb
+annotations: [{"category":"failure_analysis","task_id":"task-7","text":"Tool selection drifted after step 2"}]   # optional
 -->
 ```
+
+The optional `annotations` field is a JSON array of objects with:
+
+- `category` — short machine-friendly label such as `failure_analysis`, `observation`, or `hypothesis`
+- `task_id` — optional benchmark task ID
+- `text` — the human-readable note
+
+When `annotations` are present, the visible part of the comment may also include a short `Annotations:` section above the HTML metadata block.
+
+**Annotation** (informational note on a thesis issue):
+
+```
+Polyresearch annotation: thesis #12 by node `alice/node-7f83`.
+
+Tried the retrieval-heavy direction twice. It regressed on tool-use tasks.
+
+<!-- polyresearch:annotation
+thesis: 12
+node: alice/node-7f83
+-->
+```
+
+Annotations are informational only. They do not change thesis state.
 
 ### On candidate PRs
 

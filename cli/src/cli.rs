@@ -27,6 +27,7 @@ pub enum Commands {
     Status(StatusArgs),
     Claim(IssueArgs),
     Attempt(AttemptArgs),
+    Annotate(AnnotateArgs),
     Release(ReleaseArgs),
     Submit(IssueArgs),
     ReviewClaim(PrArgs),
@@ -84,6 +85,17 @@ pub struct AttemptArgs {
 
     #[arg(long)]
     pub summary: String,
+
+    #[arg(long)]
+    pub annotations: Option<String>,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct AnnotateArgs {
+    pub issue: u64,
+
+    #[arg(long)]
+    pub text: String,
 }
 
 #[derive(Debug, Args, Clone)]
