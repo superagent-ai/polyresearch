@@ -147,33 +147,22 @@ impl ProtocolConfig {
 
         let contents = fs::read_to_string(&program_path)
             .wrap_err_with(|| format!("failed to read {}", program_path.display()))?;
-        let mut in_configuration = false;
 
         for line in contents.lines() {
             let trimmed = line.trim();
-            if trimmed.starts_with("## ") {
-                in_configuration = trimmed == "## Configuration";
+            if trimmed.starts_with('#') || trimmed.is_empty() {
                 continue;
             }
 
-            if !in_configuration || !trimmed.starts_with('|') {
+            let Some((key, value)) = trimmed.split_once(':') else {
                 continue;
-            }
-
-            let cells: Vec<String> = trimmed
-                .split('|')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-                .collect();
-
-            if cells.len() < 2 {
-                continue;
-            }
-
-            let key = cells[0].trim_matches('`');
-            let value = cells[1].trim_matches('`');
-            if value == "Value" || key == "Parameter" || value.chars().all(|c| c == '-') {
+            };
+            let key = key.trim();
+            let value = value.trim();
+            if key.is_empty()
+                || value.is_empty()
+                || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
                 continue;
             }
 
@@ -502,6 +491,59 @@ resource_policy = "Run 4 evals in parallel."
         let (policy, is_default) = config.effective_resource_policy();
         assert!(is_default);
         assert_eq!(policy, DEFAULT_RESOURCE_POLICY);
+    }
+
+    #[test]
+    fn loads_protocol_config_from_key_value() {
+        let repo_root = unique_temp_dir("config-kv");
+        fs::write(
+            repo_root.join("PROGRAM.md"),
+            r#"# Research Program
+
+lead_github_login: alice
+maintainer_github_login: bob
+min_queue_depth: 3
+auto_approve: false
+metric_tolerance: 10
+
+## Goal
+
+Do something.
+"#,
+        )
+        .unwrap();
+
+        let config = ProtocolConfig::load(&repo_root).unwrap();
+        assert_eq!(config.lead_github_login.as_deref(), Some("alice"));
+        assert_eq!(config.maintainer_github_login.as_deref(), Some("bob"));
+        assert_eq!(config.min_queue_depth, 3);
+        assert!(!config.auto_approve);
+        assert_eq!(config.metric_tolerance, Some(10.0));
+
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn ignores_prose_lines_with_colons() {
+        let repo_root = unique_temp_dir("config-prose");
+        fs::write(
+            repo_root.join("PROGRAM.md"),
+            r#"# Research Program
+
+lead_github_login: alice
+**Baseline**: ~399 ms (mean of 5 runs)
+
+## Goal
+
+Do something.
+"#,
+        )
+        .unwrap();
+
+        let config = ProtocolConfig::load(&repo_root).unwrap();
+        assert_eq!(config.lead_github_login.as_deref(), Some("alice"));
+
+        fs::remove_dir_all(repo_root).unwrap();
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {

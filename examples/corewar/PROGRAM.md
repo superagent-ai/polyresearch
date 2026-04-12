@@ -20,21 +20,14 @@ A pure draw machine scores about `0.3333`. A specialist that crushes one
 opponent type but loses badly to the rest will plateau. The goal is to build a
 general-purpose warrior that performs well across the whole gauntlet.
 
-## Configuration
-
-These are the project-specific coordination values referenced by
-`POLYRESEARCH.md`.
-
-| Parameter                | Value              |
-| ------------------------ | ------------------ |
-| `required_confirmations` | `0`                |
-| `metric_tolerance`       | `0.00`             |
-| `metric_direction`       | `higher_is_better` |
-| `lead_github_login`      | `replace-me`       |
-| `assignment_timeout`     | `24h`              |
-| `review_timeout`         | `12h`              |
-| `min_queue_depth`        | `5`                |
-| `max_queue_depth`        | `10`               |
+required_confirmations: 0
+metric_tolerance: 0.00
+metric_direction: higher_is_better
+lead_github_login: replace-me
+assignment_timeout: 24h
+review_timeout: 12h
+min_queue_depth: 5
+max_queue_depth: 10
 
 ## What you CAN modify
 
