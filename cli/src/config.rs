@@ -351,11 +351,29 @@ fn parse_bool(value: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::{Mutex, MutexGuard, OnceLock};
 
     fn env_lock() -> &'static Mutex<()> {
         static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct NodeIdEnvGuard {
+        _guard: MutexGuard<'static, ()>,
+    }
+
+    impl NodeIdEnvGuard {
+        fn lock_clean() -> Self {
+            let guard = env_lock().lock().unwrap();
+            clear_node_id_env();
+            Self { _guard: guard }
+        }
+    }
+
+    impl Drop for NodeIdEnvGuard {
+        fn drop(&mut self) {
+            clear_node_id_env();
+        }
     }
 
     fn set_node_id_env(value: &str) {
@@ -405,6 +423,7 @@ mod tests {
 
     #[test]
     fn loads_node_config_from_toml() {
+        let _guard = NodeIdEnvGuard::lock_clean();
         let repo_root = unique_temp_dir("node-config");
         let path = node_config_path(&repo_root);
         fs::write(
@@ -427,7 +446,7 @@ resource_policy = "Run 4 evals in parallel."
 
     #[test]
     fn env_override_wins_over_file_node_id() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = NodeIdEnvGuard::lock_clean();
         let repo_root = unique_temp_dir("node-config-env-override");
         let path = node_config_path(&repo_root);
         fs::write(
@@ -446,13 +465,12 @@ resource_policy = "Run 4 evals in parallel."
             Some("Run 4 evals in parallel.")
         );
 
-        clear_node_id_env();
         fs::remove_dir_all(repo_root).unwrap();
     }
 
     #[test]
     fn env_override_allows_loading_without_file() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = NodeIdEnvGuard::lock_clean();
         let repo_root = unique_temp_dir("node-config-env-only");
         set_node_id_env("env-node");
 
@@ -460,13 +478,12 @@ resource_policy = "Run 4 evals in parallel."
         assert_eq!(config.node_id, "env-node");
         assert_eq!(config.resource_policy, None);
 
-        clear_node_id_env();
         fs::remove_dir_all(repo_root).unwrap();
     }
 
     #[test]
     fn env_override_ignores_invalid_file_contents() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = NodeIdEnvGuard::lock_clean();
         let repo_root = unique_temp_dir("node-config-env-invalid");
         let path = node_config_path(&repo_root);
         fs::write(&path, "this is not valid toml").unwrap();
@@ -476,7 +493,6 @@ resource_policy = "Run 4 evals in parallel."
         assert_eq!(config.node_id, "env-node");
         assert_eq!(config.resource_policy, None);
 
-        clear_node_id_env();
         fs::remove_dir_all(repo_root).unwrap();
     }
 
