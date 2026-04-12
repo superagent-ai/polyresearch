@@ -277,6 +277,41 @@ fn check_contributor_idle_state(
         return Ok(());
     }
 
+    let approved_claimable_count = repo_state
+        .theses
+        .iter()
+        .filter(|thesis| {
+            thesis.issue.state == "OPEN" && matches!(thesis.phase, ThesisPhase::Approved)
+        })
+        .count();
+    if approved_claimable_count == 0 {
+        let pending_approval_count = repo_state
+            .theses
+            .iter()
+            .filter(|thesis| {
+                thesis.issue.state == "OPEN"
+                    && matches!(thesis.phase, ThesisPhase::Submitted)
+                    && !thesis.maintainer_rejected
+            })
+            .count();
+
+        if pending_approval_count > 0 {
+            let noun = if pending_approval_count == 1 {
+                "thesis is"
+            } else {
+                "theses are"
+            };
+            advisory.push(DutyItem {
+                category: "awaiting-approval".to_string(),
+                message: format!(
+                    "No approved theses are currently claimable. {pending_approval_count} {noun} still awaiting maintainer `/approve`."
+                ),
+                command: "sleep 60 && polyresearch duties".to_string(),
+            });
+        }
+        return Ok(());
+    }
+
     if let Some((best, tolerance)) = metric_floor_info(ctx, repo_state) {
         advisory.push(DutyItem {
             category: "no-claimable-work".to_string(),

@@ -936,6 +936,39 @@ async fn duties_reports_no_claimable_work_when_all_theses_were_released_by_node(
     );
 }
 
+#[tokio::test]
+async fn duties_reports_waiting_for_approval_when_queue_has_only_submitted_theses() {
+    let repo = TestRepo::new("duties-awaiting-approval");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let mut ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    ctx.config.auto_approve = false;
+    commands::write_node_id(&repo.path, "node-a").unwrap();
+
+    let repo_state = make_repo_state(vec![make_submitted_thesis(1)], 1, None);
+    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+
+    assert!(
+        report
+            .advisory
+            .iter()
+            .any(|d| d.category == "awaiting-approval"),
+        "should report that the queue is waiting on maintainer approval"
+    );
+    assert!(
+        !report
+            .advisory
+            .iter()
+            .any(|d| d.category == "no-claimable-work"),
+        "submitted theses waiting on approval should not be reported as already tried by this node"
+    );
+}
+
 // --- B6: Duty gate on claim ---
 
 #[tokio::test]
@@ -1057,6 +1090,22 @@ fn make_approved_thesis(number: u64) -> ThesisState {
         phase: ThesisPhase::Approved,
         approved: true,
         maintainer_approved: true,
+        maintainer_rejected: false,
+        active_claims: vec![],
+        releases: vec![],
+        attempts: vec![],
+        pull_requests: vec![],
+        best_attempt_metric: None,
+        findings: vec![],
+    }
+}
+
+fn make_submitted_thesis(number: u64) -> ThesisState {
+    ThesisState {
+        issue: make_open_issue(number, &format!("Submitted thesis {number}")),
+        phase: ThesisPhase::Submitted,
+        approved: false,
+        maintainer_approved: false,
         maintainer_rejected: false,
         active_claims: vec![],
         releases: vec![],
