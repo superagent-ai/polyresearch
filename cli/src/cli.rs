@@ -4,6 +4,7 @@ use crate::comments::{Observation, ReleaseReason};
 
 #[derive(Debug, Parser, Clone)]
 #[command(name = "polyresearch")]
+#[command(version)]
 #[command(about = "Deterministic state middleware for the polyresearch protocol")]
 pub struct Cli {
     #[arg(long, global = true)]
