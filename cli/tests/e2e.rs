@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -191,6 +192,30 @@ impl Drop for TestRepo {
     }
 }
 
+fn init_git_repo(path: &PathBuf) {
+    run_git(path, &["init"]);
+    run_git(path, &["config", "user.name", "Test User"]);
+    run_git(path, &["config", "user.email", "test@example.com"]);
+    fs::write(path.join("README.md"), "test\n").unwrap();
+    run_git(path, &["add", "README.md"]);
+    run_git(path, &["commit", "-m", "Initial commit"]);
+    run_git(path, &["branch", "-M", "main"]);
+}
+
+fn run_git(path: &PathBuf, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[tokio::test]
 async fn init_writes_node_identity() {
     let repo = TestRepo::new("init");
@@ -283,7 +308,6 @@ async fn pace_reports_default_policy_and_node_metrics() {
     assert_eq!(output.claimable_theses, 1);
     assert_eq!(output.active_claims, 2);
     assert_eq!(output.idle_minutes, Some(0));
->>>>>>> 788dc56 (Add per-node resource policy and `polyresearch pace` command for enforced resource utilization (closes #23).)
 }
 
 #[tokio::test]
@@ -345,6 +369,7 @@ async fn claim_rejects_already_claimed_thesis() {
         false,
         Commands::Claim(IssueArgs {
             issue: fixture.issue.number,
+            no_worktree: false,
         }),
     );
     commands::write_node_id(&repo.path, "node-b").unwrap();
@@ -353,6 +378,7 @@ async fn claim_rejects_already_claimed_thesis() {
         &ctx,
         &IssueArgs {
             issue: fixture.issue.number,
+            no_worktree: false,
         },
     )
     .await
@@ -378,6 +404,7 @@ async fn claim_rejects_closed_thesis() {
         false,
         Commands::Claim(IssueArgs {
             issue: fixture.issue.number,
+            no_worktree: false,
         }),
     );
     commands::write_node_id(&repo.path, "server").unwrap();
@@ -386,6 +413,7 @@ async fn claim_rejects_closed_thesis() {
         &ctx,
         &IssueArgs {
             issue: fixture.issue.number,
+            no_worktree: false,
         },
     )
     .await
@@ -506,6 +534,7 @@ async fn valid_claim_succeeds_in_dry_run_without_writing() {
         true,
         Commands::Claim(IssueArgs {
             issue: fixture.issue.number,
+            no_worktree: false,
         }),
     );
     commands::write_node_id(&repo.path, "node-a").unwrap();
@@ -514,12 +543,94 @@ async fn valid_claim_succeeds_in_dry_run_without_writing() {
         &ctx,
         &IssueArgs {
             issue: fixture.issue.number,
+            no_worktree: false,
         },
     )
     .await
     .unwrap();
 
     assert!(mock.posted_issue_comments.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn claim_creates_worktree_by_default() {
+    let repo = TestRepo::new("claim-worktree");
+    init_git_repo(&repo.path);
+    let fixture = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture.lead_github_login,
+        false,
+        Commands::Claim(IssueArgs {
+            issue: fixture.issue.number,
+            no_worktree: false,
+        }),
+    );
+    commands::write_node_id(&repo.path, "node-a").unwrap();
+
+    commands::claim::run(
+        &ctx,
+        &IssueArgs {
+            issue: fixture.issue.number,
+            no_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let expected_branch = format!(
+        "thesis/{}-{}",
+        fixture.issue.number,
+        commands::slugify(&fixture.issue.title)
+    );
+    let worktree_path = repo.path.join(".worktrees").join(format!(
+        "{}-{}",
+        fixture.issue.number,
+        commands::slugify(&fixture.issue.title)
+    ));
+
+    assert!(
+        worktree_path.exists(),
+        "expected worktree at {}",
+        worktree_path.display()
+    );
+    assert_eq!(commands::current_branch(&repo.path).unwrap(), "main");
+    assert_eq!(
+        commands::current_branch(&worktree_path).unwrap(),
+        expected_branch
+    );
+    assert_eq!(mock.posted_issue_comments.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn prune_removes_empty_stale_worktree_directories() {
+    let repo = TestRepo::new("prune-worktrees");
+    init_git_repo(&repo.path);
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let stale = repo.path.join(".worktrees").join("stale");
+    fs::create_dir_all(&stale).unwrap();
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Prune);
+
+    commands::prune::run(&ctx).await.unwrap();
+
+    assert!(
+        !stale.exists(),
+        "expected stale worktree directory to be removed"
+    );
 }
 
 // --- A1: Serde deserialization with snake_case (REST API) ---
@@ -741,6 +852,7 @@ async fn claim_blocked_by_outstanding_duties() {
         true,
         Commands::Claim(IssueArgs {
             issue: fixture_open.issue.number,
+            no_worktree: false,
         }),
     );
     commands::write_node_id(&repo.path, "test-node").unwrap();
@@ -749,6 +861,7 @@ async fn claim_blocked_by_outstanding_duties() {
         &ctx,
         &IssueArgs {
             issue: fixture_open.issue.number,
+            no_worktree: false,
         },
     )
     .await

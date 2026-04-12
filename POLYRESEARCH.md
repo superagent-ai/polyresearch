@@ -42,9 +42,11 @@ The parameter definitions live here. Concrete project values live in `PROGRAM.md
 
 **Contributor.** A machine running an agent. Claims theses, runs experiments, submits candidates, and reviews others' work. You are a contributor unless told otherwise.
 
-**Lead.** A contributor with additional responsibilities: generates theses from results history, runs policy checks on candidate PRs, decides PRs (merge or close), and maintains results.tsv as sole writer. One per project. If your instructions say "you are the lead," follow the lead sections in addition to the contributor sections.
+**Lead.** A machine running an agent dedicated to project management. The lead generates theses from results history, runs policy checks on candidate PRs, decides PRs (merge or close), and maintains `results.tsv` as sole writer. One per project. The lead does not claim theses, run experiments, submit candidates, or participate in peer review. If your instructions say "you are the lead," follow the lead loop only.
 
 When `auto_approve` is `false`, `lead_github_login` and `maintainer_github_login` must be different GitHub accounts. Human-in-the-loop review does not work if the lead and the maintainer share the same GitHub identity.
+
+In practice, the maintainer usually runs the lead and at least one contributor as separate agent instances. Contributors may share the lead's GitHub login because the protocol uses node IDs for attribution, but the lead and maintainer still must be different GitHub accounts when `auto_approve` is `false`. The lead may spend many iterations idle between duty cycles; that is expected and preferable to blocking contributors behind GitHub-visible work.
 
 ---
 
@@ -115,9 +117,9 @@ LOOP FOREVER:
 2. **Check for theses.** Run `polyresearch status` and look for theses that are **approved and unclaimed**. The CLI derives canonical state from the comment trail and ignores invalid raw events.
 3. **If a claimable thesis exists:**
   a. Run `polyresearch claim <issue-number>`.
-   b. The CLI posts the `polyresearch:claim` comment and creates the thesis branch from `main`: `thesis/<issue-number>-<slug>`.
+   b. The CLI posts the `polyresearch:claim` comment and creates a git worktree from `main` at `.worktrees/<issue-number>-<slug>/` on branch `thesis/<issue-number>-<slug>`. Change into that worktree before editing.
    c. Read PROGRAM.md for direction and constraints.
-   d. Run experiments. Each attempt on its own sub-branch: `thesis/<issue-number>-<slug>-attempt-<n>`.
+   d. Run experiments from inside that thesis worktree. Each attempt uses its own sub-branch: `thesis/<issue-number>-<slug>-attempt-<n>`. If you run attempts in parallel, use one worktree per active attempt.
    e. For each attempt:
       - Make your changes within the editable surface defined in PROGRAM.md.
       - Commit your changes.
@@ -126,6 +128,7 @@ LOOP FOREVER:
       - Run `polyresearch attempt <issue-number> --metric <value> --baseline <value> --observation <observation> --summary "<summary>"`.
    f. **If you find an improvement:** run `polyresearch submit <issue-number>`. The CLI pushes the best attempt branch and opens the candidate PR to `main`.
    g. **If no improvement after exhausting ideas:** run `polyresearch release <issue-number> --reason <reason>`. The thesis returns to the queue for another contributor.
+   h. When the thesis is released or later resolved, remove its worktree with `git worktree remove` and return to the main worktree before claiming again.
 4. **Check for review work.** Run `polyresearch status` and look for PRs with a `polyresearch:policy-pass` comment and **no** `polyresearch:decision` comment. These need peer review. Skip PRs you authored.
 5. **If a reviewable PR exists:**
   a. Run `polyresearch review-claim <pr-number>`.
@@ -149,7 +152,7 @@ If there are no theses to claim and no PRs to review, wait briefly and check aga
 
 ## The lead loop
 
-Everything in the contributor loop, plus these additional responsibilities. Run them as part of the same loop.
+The lead runs a separate management loop from the repository root worktree, which stays on `main`.
 
 **Priority order within each iteration.** GitHub-visible duties run first, in this order:
 
@@ -158,9 +161,9 @@ Everything in the contributor loop, plus these additional responsibilities. Run 
 2. `polyresearch sync` (always before other lead actions).
 3. Process open PRs: `policy-check` and `decide` any that are ready. When `auto_approve` is `false`, assign ready PRs to `maintainer_github_login` and wait for `/approve`.
 4. Check queue depth; `generate` if below `min_queue_depth`.
-5. Only then proceed to local experiments.
+5. If there is no immediate GitHub-visible work, wait briefly and repeat from step 0.
 
-Between experiment batches (or while waiting for evaluations), re-run steps 0–4. The lead must never have GitHub stale while the server is working. Post `polyresearch attempt` results immediately after each evaluation completes, not in batches.
+The lead never claims theses or runs experiments. Keeping `main` current is the lead's full-time job.
 
 ### Maintain results.tsv
 
@@ -289,18 +292,22 @@ When `auto_approve` is `false`, a generated thesis stays in **Submitted** until 
 ## Branching
 
 ```
-main
-  └── thesis/12-rmsnorm                    (thesis branch)
-        ├── thesis/12-rmsnorm-attempt-1    (discarded, unmerged)
-        ├── thesis/12-rmsnorm-attempt-2    (discarded, unmerged)
-        └── thesis/12-rmsnorm-attempt-3    (candidate PR → merged to main)
+repo-root/                                 (main worktree on `main`)
+  ├── .git
+  ├── .worktrees/                          (gitignored)
+  │     ├── 12-rmsnorm/                    (worktree on `thesis/12-rmsnorm`)
+  │     └── 12-rmsnorm-attempt-2/          (optional parallel attempt worktree)
+  └── ...                                  (lead stays here)
 ```
 
+- The repository root is the main worktree. The lead stays here on `main`.
 - `main` is the accepted ledger. Only verified improvements land here.
-- Each thesis gets a branch: `thesis/<issue-number>-<slug>`.
+- Each claim creates a thesis worktree under `.worktrees/<issue-number>-<slug>/` on branch `thesis/<issue-number>-<slug>`.
 - Each attempt gets its own sub-branch: `thesis/<issue-number>-<slug>-attempt-<n>`, forked from the thesis branch.
+- When running attempts in parallel, create one worktree per active attempt.
 - The candidate PR merges the best attempt's sub-branch into `main`.
 - Discarded attempts stay as unmerged branches. They are data, not waste.
+- Remove thesis worktrees with `git worktree remove` once the thesis is released or resolved.
 
 ---
 

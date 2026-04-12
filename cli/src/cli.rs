@@ -37,6 +37,7 @@ pub enum Commands {
     Generate(GenerateArgs),
     PolicyCheck(PrArgs),
     Decide(PrArgs),
+    Prune,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -57,6 +58,9 @@ pub struct StatusArgs {
 #[derive(Debug, Args, Clone)]
 pub struct IssueArgs {
     pub issue: u64,
+
+    #[arg(long)]
+    pub no_worktree: bool,
 }
 
 #[derive(Debug, Args, Clone)]

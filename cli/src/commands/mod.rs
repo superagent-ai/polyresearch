@@ -9,6 +9,7 @@ pub mod guards;
 pub mod init;
 pub mod pace;
 pub mod policy_check;
+pub mod prune;
 pub mod release;
 pub mod review;
 pub mod review_claim;
@@ -16,6 +17,7 @@ pub mod status;
 pub mod submit;
 pub mod sync;
 
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
@@ -55,6 +57,7 @@ pub async fn run(ctx: AppContext) -> Result<()> {
         Commands::Generate(args) => generate::run(&ctx, args).await,
         Commands::PolicyCheck(args) => policy_check::run(&ctx, args).await,
         Commands::Decide(args) => decide::run(&ctx, args).await,
+        Commands::Prune => prune::run(&ctx).await,
     }
 }
 
@@ -125,6 +128,12 @@ pub fn run_git(repo_root: &PathBuf, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8(output.stdout)?.trim().to_string())
 }
 
+#[derive(Debug, Clone)]
+pub struct ThesisWorkspace {
+    pub branch: String,
+    pub worktree_path: PathBuf,
+}
+
 pub fn create_thesis_branch(repo_root: &PathBuf, issue_number: u64, title: &str) -> Result<String> {
     let slug = slugify(title);
     let branch = format!("thesis/{issue_number}-{slug}");
@@ -134,6 +143,53 @@ pub fn create_thesis_branch(repo_root: &PathBuf, issue_number: u64, title: &str)
     }
     run_git(repo_root, &["checkout", "-b", &branch])?;
     Ok(branch)
+}
+
+pub fn thesis_worktree_path(repo_root: &PathBuf, issue_number: u64, title: &str) -> PathBuf {
+    let slug = slugify(title);
+    repo_root
+        .join(".worktrees")
+        .join(format!("{issue_number}-{slug}"))
+}
+
+pub fn create_thesis_worktree(
+    repo_root: &PathBuf,
+    issue_number: u64,
+    title: &str,
+) -> Result<ThesisWorkspace> {
+    let slug = slugify(title);
+    let branch = format!("thesis/{issue_number}-{slug}");
+    let worktree_root = repo_root.join(".worktrees");
+    let worktree_path = thesis_worktree_path(repo_root, issue_number, title);
+
+    fs::create_dir_all(&worktree_root)
+        .wrap_err_with(|| format!("failed to create {}", worktree_root.display()))?;
+
+    if worktree_path.exists() {
+        return Err(eyre!(
+            "worktree path `{}` already exists; remove it with `git worktree remove` before reclaiming thesis #{}",
+            worktree_path.display(),
+            issue_number
+        ));
+    }
+
+    if run_git(repo_root, &["rev-parse", "--verify", &branch]).is_ok() {
+        return Err(eyre!(
+            "branch `{branch}` already exists; delete or rename it before reclaiming thesis #{}",
+            issue_number
+        ));
+    }
+
+    let worktree_path_arg = worktree_path.to_string_lossy().into_owned();
+    run_git(
+        repo_root,
+        &["worktree", "add", "-b", &branch, &worktree_path_arg, "main"],
+    )?;
+
+    Ok(ThesisWorkspace {
+        branch,
+        worktree_path,
+    })
 }
 
 pub fn push_current_branch(repo_root: &PathBuf) -> Result<String> {
