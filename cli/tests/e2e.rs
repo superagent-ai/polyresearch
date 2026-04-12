@@ -11,13 +11,13 @@ use polyresearch_cli::cli::{
     AttemptArgs, Cli, Commands, GenerateArgs, InitArgs, IssueArgs, StatusArgs,
 };
 use polyresearch_cli::commands;
-use polyresearch_cli::comments::Observation;
+use polyresearch_cli::comments::{Observation, ReleaseReason};
 use polyresearch_cli::config::{MetricDirection, NodeConfig, ProgramSpec, ProtocolConfig};
 use polyresearch_cli::github::{
     CommentUser, GitHubApi, Issue, IssueComment, IssueListState, PullRequest, PullRequestFile,
     PullRequestListState, RepoRef,
 };
-use polyresearch_cli::state::RepositoryState;
+use polyresearch_cli::state::{ReleaseRecord, RepositoryState, ThesisPhase, ThesisState};
 use serde::Deserialize;
 
 #[allow(unused_imports)]
@@ -903,6 +903,150 @@ async fn duties_clean_on_no_claims() {
     assert!(report.clean, "should have no blocking duties");
 }
 
+#[tokio::test]
+async fn duties_reports_metric_floor_and_stale_queue_for_lead() {
+    let repo = TestRepo::new("duties-metric-floor-lead");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let mut ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    ctx.config.metric_direction = MetricDirection::LowerIsBetter;
+    ctx.config.metric_tolerance = Some(50.0);
+    ctx.config.min_queue_depth = 3;
+
+    let repo_state = make_repo_state(
+        vec![
+            make_approved_thesis(1),
+            make_approved_thesis(2),
+            make_approved_thesis(3),
+        ],
+        3,
+        Some(25.8),
+    );
+    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+
+    assert!(
+        report.advisory.iter().any(|d| d.category == "metric-floor"),
+        "should report a metric-floor advisory"
+    );
+    assert!(
+        report.advisory.iter().any(|d| d.category == "stale-queue"),
+        "should report a stale-queue advisory when the queue looks healthy but is stale"
+    );
+}
+
+#[tokio::test]
+async fn duties_reports_no_claimable_work_for_contributor_at_metric_floor() {
+    let repo = TestRepo::new("duties-no-claimable-metric-floor");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let mut ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    ctx.config.metric_direction = MetricDirection::LowerIsBetter;
+    ctx.config.metric_tolerance = Some(50.0);
+    ctx.config.min_queue_depth = 3;
+    commands::write_node_id(&repo.path, "node-a").unwrap();
+
+    let repo_state = make_repo_state(
+        vec![
+            make_approved_thesis(1),
+            make_approved_thesis(2),
+            make_approved_thesis(3),
+        ],
+        3,
+        Some(25.8),
+    );
+    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+
+    assert!(
+        report
+            .advisory
+            .iter()
+            .any(|d| d.category == "no-claimable-work"),
+        "should tell contributors to wait for fresh theses when the metric floor is hit"
+    );
+}
+
+#[tokio::test]
+async fn duties_reports_no_claimable_work_when_all_theses_were_released_by_node() {
+    let repo = TestRepo::new("duties-no-claimable-released");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    commands::write_node_id(&repo.path, "node-a").unwrap();
+
+    let mut thesis_one = make_approved_thesis(1);
+    thesis_one.releases.push(ReleaseRecord {
+        node: "node-a".to_string(),
+        reason: ReleaseReason::InfraFailure,
+        created_at: chrono::Utc::now(),
+    });
+
+    let mut thesis_two = make_approved_thesis(2);
+    thesis_two.releases.push(ReleaseRecord {
+        node: "node-a".to_string(),
+        reason: ReleaseReason::Timeout,
+        created_at: chrono::Utc::now(),
+    });
+
+    let repo_state = make_repo_state(vec![thesis_one, thesis_two], 2, None);
+    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+
+    assert!(
+        report
+            .advisory
+            .iter()
+            .any(|d| d.category == "no-claimable-work"),
+        "should report no-claimable-work when every approved thesis was already tried by this node"
+    );
+}
+
+#[tokio::test]
+async fn duties_reports_waiting_for_approval_when_queue_has_only_submitted_theses() {
+    let repo = TestRepo::new("duties-awaiting-approval");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let mut ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    ctx.config.auto_approve = false;
+    commands::write_node_id(&repo.path, "node-a").unwrap();
+
+    let repo_state = make_repo_state(vec![make_submitted_thesis(1)], 1, None);
+    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+
+    assert!(
+        report
+            .advisory
+            .iter()
+            .any(|d| d.category == "awaiting-approval"),
+        "should report that the queue is waiting on maintainer approval"
+    );
+    assert!(
+        !report
+            .advisory
+            .iter()
+            .any(|d| d.category == "no-claimable-work"),
+        "submitted theses waiting on approval should not be reported as already tried by this node"
+    );
+}
+
 // --- B6: Duty gate on claim ---
 
 #[tokio::test]
@@ -987,6 +1131,67 @@ fn make_ctx(
             can_modify: vec!["system_prompt.md".to_string()],
             cannot_modify: vec!["PREPARE.md".to_string()],
         },
+    }
+}
+
+fn make_repo_state(
+    theses: Vec<ThesisState>,
+    queue_depth: usize,
+    current_best_accepted_metric: Option<f64>,
+) -> RepositoryState {
+    RepositoryState {
+        theses,
+        active_nodes: vec![],
+        queue_depth,
+        current_best_accepted_metric,
+        recent_events: vec![],
+        audit_findings: vec![],
+    }
+}
+
+fn make_open_issue(number: u64, title: &str) -> Issue {
+    Issue {
+        number,
+        title: title.to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        labels: vec![],
+        created_at: chrono::Utc::now(),
+        closed_at: None,
+        author: None,
+        url: None,
+    }
+}
+
+fn make_approved_thesis(number: u64) -> ThesisState {
+    ThesisState {
+        issue: make_open_issue(number, &format!("Thesis {number}")),
+        phase: ThesisPhase::Approved,
+        approved: true,
+        maintainer_approved: true,
+        maintainer_rejected: false,
+        active_claims: vec![],
+        releases: vec![],
+        attempts: vec![],
+        pull_requests: vec![],
+        best_attempt_metric: None,
+        findings: vec![],
+    }
+}
+
+fn make_submitted_thesis(number: u64) -> ThesisState {
+    ThesisState {
+        issue: make_open_issue(number, &format!("Submitted thesis {number}")),
+        phase: ThesisPhase::Submitted,
+        approved: false,
+        maintainer_approved: false,
+        maintainer_rejected: false,
+        active_claims: vec![],
+        releases: vec![],
+        attempts: vec![],
+        pull_requests: vec![],
+        best_attempt_metric: None,
+        findings: vec![],
     }
 }
 

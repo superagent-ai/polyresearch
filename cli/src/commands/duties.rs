@@ -88,7 +88,10 @@ pub fn check(ctx: &AppContext, repo_state: &RepositoryState) -> Result<DutyRepor
         check_lead_duties(ctx, repo_state, &mut blocking, &mut advisory)?;
     }
 
-    check_review_opportunities(repo_state, &node_id, &login, &mut advisory);
+    let has_review_work = check_review_opportunities(repo_state, &node_id, &login, &mut advisory);
+    if !is_lead {
+        check_contributor_idle_state(ctx, repo_state, &node_id, has_review_work, &mut advisory)?;
+    }
 
     let clean = blocking.is_empty();
     Ok(DutyReport {
@@ -194,6 +197,27 @@ fn check_lead_duties(
         });
     }
 
+    if let Some((best, tolerance)) = metric_floor_info(ctx, repo_state) {
+        advisory.push(DutyItem {
+            category: "metric-floor".to_string(),
+            message: format!(
+                "Best metric ({best:.1}ms) is below metric_tolerance ({tolerance:.1}ms). Further improvement within the current tolerance is impossible."
+            ),
+            command: "Consider adjusting metric_tolerance or concluding the program.".to_string(),
+        });
+
+        if repo_state.queue_depth >= ctx.config.min_queue_depth && repo_state.queue_depth > 0 {
+            advisory.push(DutyItem {
+                category: "stale-queue".to_string(),
+                message: format!(
+                    "Queue depth is {} but best metric ({best:.1}ms) is already below metric_tolerance ({tolerance:.1}ms). Existing theses may no longer contain meaningful work.",
+                    repo_state.queue_depth
+                ),
+                command: "polyresearch generate --title \"...\" --body \"...\"".to_string(),
+            });
+        }
+    }
+
     Ok(())
 }
 
@@ -202,7 +226,9 @@ fn check_review_opportunities(
     node_id: &str,
     login: &str,
     advisory: &mut Vec<DutyItem>,
-) {
+) -> bool {
+    let mut added = false;
+
     for thesis in &repo_state.theses {
         if !matches!(thesis.phase, ThesisPhase::InReview) {
             continue;
@@ -233,45 +259,166 @@ fn check_review_opportunities(
                 message: format!("PR #{}: needs review.", pr_state.pr.number),
                 command: format!("polyresearch review-claim {}", pr_state.pr.number),
             });
+            added = true;
         }
     }
+
+    added
+}
+
+fn check_contributor_idle_state(
+    ctx: &AppContext,
+    repo_state: &RepositoryState,
+    node_id: &str,
+    has_review_work: bool,
+    advisory: &mut Vec<DutyItem>,
+) -> Result<()> {
+    if has_review_work || repo_state.queue_depth == 0 {
+        return Ok(());
+    }
+
+    let approved_claimable_count = repo_state
+        .theses
+        .iter()
+        .filter(|thesis| {
+            thesis.issue.state == "OPEN" && matches!(thesis.phase, ThesisPhase::Approved)
+        })
+        .count();
+    if approved_claimable_count == 0 {
+        let pending_approval_count = repo_state
+            .theses
+            .iter()
+            .filter(|thesis| {
+                thesis.issue.state == "OPEN"
+                    && matches!(thesis.phase, ThesisPhase::Submitted)
+                    && !thesis.maintainer_rejected
+            })
+            .count();
+
+        if pending_approval_count > 0 {
+            let noun = if pending_approval_count == 1 {
+                "thesis is"
+            } else {
+                "theses are"
+            };
+            advisory.push(DutyItem {
+                category: "awaiting-approval".to_string(),
+                message: format!(
+                    "No approved theses are currently claimable. {pending_approval_count} {noun} still awaiting maintainer `/approve`."
+                ),
+                command: "sleep 60 && polyresearch duties".to_string(),
+            });
+        }
+        return Ok(());
+    }
+
+    if let Some((best, tolerance)) = metric_floor_info(ctx, repo_state) {
+        advisory.push(DutyItem {
+            category: "no-claimable-work".to_string(),
+            message: format!(
+                "Best metric ({best:.1}ms) is already below metric_tolerance ({tolerance:.1}ms). Remaining theses may not support another meaningful improvement. Wait for fresh theses from the lead."
+            ),
+            command: "sleep 60 && polyresearch duties".to_string(),
+        });
+        return Ok(());
+    }
+
+    if node_id.is_empty() {
+        return Ok(());
+    }
+
+    let claimable_for_me = repo_state
+        .theses
+        .iter()
+        .filter(|thesis| {
+            thesis.issue.state == "OPEN"
+                && matches!(thesis.phase, ThesisPhase::Approved)
+                && !thesis
+                    .releases
+                    .iter()
+                    .any(|release| release.node == node_id)
+        })
+        .count();
+
+    if claimable_for_me == 0 {
+        advisory.push(DutyItem {
+            category: "no-claimable-work".to_string(),
+            message: "All claimable theses have been tried by this node. Waiting for fresh theses from the lead.".to_string(),
+            command: "sleep 60 && polyresearch duties".to_string(),
+        });
+    }
+
+    Ok(())
+}
+
+fn metric_floor_info(ctx: &AppContext, repo_state: &RepositoryState) -> Option<(f64, f64)> {
+    let tolerance = ctx.config.metric_tolerance?;
+    let best = repo_state.current_best_accepted_metric?;
+
+    // Lower-is-better metrics have a generic floor at zero, so once the best score is
+    // below the required tolerance there is no room left for another meaningful win.
+    matches!(
+        ctx.config.metric_direction,
+        crate::config::MetricDirection::LowerIsBetter
+    )
+    .then_some((best, tolerance))
+    .filter(|(best, tolerance)| *best < *tolerance)
+}
+
+fn render_report(value: &DutyReport) -> String {
+    let mut output = String::new();
+
+    if value.blocking.is_empty() && value.advisory.is_empty() {
+        output.push_str("No duties. All clear.\nNEXT: sleep 60 && polyresearch duties");
+        return output;
+    }
+
+    if !value.blocking.is_empty() {
+        output.push_str("BLOCKING (resolve before continuing):\n");
+        for item in &value.blocking {
+            output.push_str(&format!(
+                "  [{}] {} Run: {}\n",
+                item.category, item.message, item.command
+            ));
+        }
+    }
+
+    if !value.advisory.is_empty() {
+        if !value.blocking.is_empty() {
+            output.push('\n');
+        }
+        output.push_str("ADVISORY:\n");
+        for item in &value.advisory {
+            output.push_str(&format!(
+                "  [{}] {} Run: {}\n",
+                item.category, item.message, item.command
+            ));
+        }
+    }
+
+    output.trim_end().to_string()
 }
 
 pub async fn run(ctx: &AppContext) -> Result<()> {
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
     let report = check(ctx, &repo_state)?;
 
-    print_value(ctx, &report, |value| {
-        let mut output = String::new();
+    print_value(ctx, &report, render_report)
+}
 
-        if value.blocking.is_empty() && value.advisory.is_empty() {
-            output.push_str("No duties. All clear.");
-            return output;
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        if !value.blocking.is_empty() {
-            output.push_str("BLOCKING (resolve before continuing):\n");
-            for item in &value.blocking {
-                output.push_str(&format!(
-                    "  [{}] {} Run: {}\n",
-                    item.category, item.message, item.command
-                ));
-            }
-        }
+    #[test]
+    fn render_report_includes_next_step_when_clear() {
+        let rendered = render_report(&DutyReport {
+            blocking: vec![],
+            advisory: vec![],
+            clean: true,
+        });
 
-        if !value.advisory.is_empty() {
-            if !value.blocking.is_empty() {
-                output.push('\n');
-            }
-            output.push_str("ADVISORY:\n");
-            for item in &value.advisory {
-                output.push_str(&format!(
-                    "  [{}] {} Run: {}\n",
-                    item.category, item.message, item.command
-                ));
-            }
-        }
-
-        output.trim_end().to_string()
-    })
+        assert!(rendered.contains("No duties. All clear."));
+        assert!(rendered.contains("NEXT: sleep 60 && polyresearch duties"));
+    }
 }
