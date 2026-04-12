@@ -59,8 +59,16 @@ When you start, before doing anything else:
 3. Run `git log --oneline -20` on `main` to see recent state.
 4. If `.polyresearch/` exists, run its setup. Otherwise follow PREPARE.md setup instructions.
 5. Check your GitHub identity. Run `gh api user --jq '.login'` to see which GitHub account you are operating as. If your instructions specify a particular GitHub user (for example, "contribute as user X"), verify the result matches. If it does not, stop and report the mismatch before proceeding. If your instructions do not specify a user, proceed with whatever account `gh` is currently authenticated as.
-6. Run `polyresearch init` if `.polyresearch-node.toml` does not exist yet. The CLI generates a composite identifier in the form `{github_login}/{hostname}-{suffix}` (e.g. `alice/mac.lan-a3f2`) to prevent collisions across users and machines. Override the machine part with `polyresearch init --node <id>`. This also records your optional node-specific `resource_policy`.
-7. Identify your role. If your instructions say "you are the lead," follow the lead loop. Otherwise, follow the contributor loop.
+6. Create a distinct node ID for this session before running other `polyresearch` commands. This is required when multiple agents share the same checkout or when one GitHub login runs several workers in parallel:
+
+   ```bash
+   LOGIN=$(gh api user --jq '.login')
+   MACHINE_ID="$(hostname -s)-$(xxd -l2 -p /dev/urandom)"
+   export POLYRESEARCH_NODE_ID="${LOGIN}/${MACHINE_ID}"
+   ```
+
+7. If `.polyresearch-node.toml` does not exist yet, run `polyresearch init --node "$MACHINE_ID"`. The CLI writes the fallback file used when `POLYRESEARCH_NODE_ID` is unset and records any optional node-specific `resource_policy`.
+8. Identify your role. If your instructions say "you are the lead," follow the lead loop. Otherwise, follow the contributor loop.
 
 ---
 
@@ -69,13 +77,15 @@ When you start, before doing anything else:
 Each node keeps a local `.polyresearch-node.toml` file at the repo root:
 
 ```toml
-node_id = "node-7f83"
+node_id = "alice/mac.lan-a3f2"
 resource_policy = "8-core machine with 2 GPUs. Run up to 4 parallel evaluations. Keep GPUs saturated. Stay under 50 API calls/min."
 ```
 
-- `node_id` identifies the machine or worker. Keep it stable across sessions.
+- `node_id` identifies the machine or worker. Keep it stable for the lifetime of that worker or agent session.
 - `resource_policy` is optional natural language guidance for that node only. It is not project state.
 - Set or update it with `polyresearch init --resource-policy "..."`.
+- `POLYRESEARCH_NODE_ID` overrides `node_id` for the current process. Use it when multiple agents share one checkout or when one GitHub login needs several concurrent nodes.
+- If `POLYRESEARCH_NODE_ID` is unset, the CLI falls back to `.polyresearch-node.toml`.
 
 If `resource_policy` is absent, the default policy applies:
 

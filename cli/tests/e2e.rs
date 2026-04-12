@@ -1,8 +1,9 @@
 use std::collections::HashMap;
+use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Result, eyre};
@@ -216,6 +217,23 @@ fn run_git(path: &PathBuf, args: &[&str]) {
     );
 }
 
+fn env_lock() -> &'static Mutex<()> {
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    ENV_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn set_node_id_env(value: &str) {
+    unsafe {
+        env::set_var(polyresearch_cli::config::NODE_ID_ENV_VAR, value);
+    }
+}
+
+fn clear_node_id_env() {
+    unsafe {
+        env::remove_var(polyresearch_cli::config::NODE_ID_ENV_VAR);
+    }
+}
+
 #[tokio::test]
 async fn init_writes_node_identity() {
     let repo = TestRepo::new("init");
@@ -254,6 +272,35 @@ async fn init_writes_node_identity() {
         config.resource_policy.as_deref(),
         Some("Use 2 GPUs and keep them busy.")
     );
+}
+
+#[tokio::test]
+async fn env_override_uses_session_node_id() {
+    let _guard = env_lock().lock().unwrap();
+    let repo = TestRepo::new("env-node-override");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Pace);
+    commands::write_node_config(&repo.path, "lead/file-node", Some("Keep CPUs saturated."))
+        .unwrap();
+    set_node_id_env("lead/env-node");
+
+    let node_config = NodeConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
+    let output = commands::pace::build_output(ctx.repo.slug(), &node_config, &repo_state);
+
+    assert_eq!(output.node_id, "lead/env-node");
+    assert_eq!(output.resource_policy, "Keep CPUs saturated.");
+    assert!(!output.is_default_policy);
+
+    clear_node_id_env();
 }
 
 #[tokio::test]

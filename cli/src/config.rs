@@ -1,3 +1,4 @@
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -7,6 +8,7 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_RESOURCE_POLICY: &str = "Maximize throughput. Never leave claimable theses idle while experiments could be running. Run evaluations in parallel when the evaluator supports it. Interleave duties with long-running evaluations.";
+pub const NODE_ID_ENV_VAR: &str = "POLYRESEARCH_NODE_ID";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -32,21 +34,35 @@ impl NodeConfig {
 
     pub fn load(repo_root: &Path) -> Result<Self> {
         let path = node_config_path(repo_root);
-        if !path.exists() {
-            return Err(eyre!(
-                "node identity is not configured yet; run `polyresearch init` first"
-            ));
-        }
+        let env_node_id = node_id_override();
+        let file_config = match path.exists() {
+            true => match load_node_config_from_file(&path) {
+                Ok(config) => Some(config),
+                Err(_error) if env_node_id.is_some() => None,
+                Err(error) => return Err(error),
+            },
+            false => None,
+        };
 
-        let contents = fs::read_to_string(&path)
-            .wrap_err_with(|| format!("failed to read {}", path.display()))?;
-        let config: Self = toml::from_str(&contents)
-            .wrap_err_with(|| format!("failed to parse {}", path.display()))?;
-        if config.node_id.trim().is_empty() {
-            return Err(eyre!("node_id in {} cannot be empty", path.display()));
-        }
+        let node_id = match env_node_id {
+            Some(node_id) => node_id,
+            None => {
+                let Some(config) = file_config.as_ref() else {
+                    return Err(eyre!(
+                        "node identity is not configured yet; run `polyresearch init` first"
+                    ));
+                };
+                if config.node_id.trim().is_empty() {
+                    return Err(eyre!("node_id in {} cannot be empty", path.display()));
+                }
+                config.node_id.clone()
+            }
+        };
 
-        Ok(Self::new(config.node_id, config.resource_policy))
+        Ok(Self::new(
+            node_id,
+            file_config.and_then(|config| config.resource_policy),
+        ))
     }
 
     pub fn save(&self, repo_root: &Path) -> Result<()> {
@@ -74,6 +90,19 @@ impl NodeConfig {
 
 pub fn node_config_path(repo_root: &Path) -> PathBuf {
     repo_root.join(".polyresearch-node.toml")
+}
+
+fn load_node_config_from_file(path: &Path) -> Result<NodeConfig> {
+    let contents =
+        fs::read_to_string(path).wrap_err_with(|| format!("failed to read {}", path.display()))?;
+    toml::from_str(&contents).wrap_err_with(|| format!("failed to parse {}", path.display()))
+}
+
+fn node_id_override() -> Option<String> {
+    env::var(NODE_ID_ENV_VAR).ok().and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -322,6 +351,24 @@ fn parse_bool(value: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn set_node_id_env(value: &str) {
+        unsafe {
+            env::set_var(NODE_ID_ENV_VAR, value);
+        }
+    }
+
+    fn clear_node_id_env() {
+        unsafe {
+            env::remove_var(NODE_ID_ENV_VAR);
+        }
+    }
 
     #[test]
     fn parses_duration_suffixes() {
@@ -375,6 +422,61 @@ resource_policy = "Run 4 evals in parallel."
             Some("Run 4 evals in parallel.")
         );
 
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn env_override_wins_over_file_node_id() {
+        let _guard = env_lock().lock().unwrap();
+        let repo_root = unique_temp_dir("node-config-env-override");
+        let path = node_config_path(&repo_root);
+        fs::write(
+            &path,
+            r#"node_id = "file-node"
+resource_policy = "Run 4 evals in parallel."
+"#,
+        )
+        .unwrap();
+        set_node_id_env("env-node");
+
+        let config = NodeConfig::load(&repo_root).unwrap();
+        assert_eq!(config.node_id, "env-node");
+        assert_eq!(
+            config.resource_policy.as_deref(),
+            Some("Run 4 evals in parallel.")
+        );
+
+        clear_node_id_env();
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn env_override_allows_loading_without_file() {
+        let _guard = env_lock().lock().unwrap();
+        let repo_root = unique_temp_dir("node-config-env-only");
+        set_node_id_env("env-node");
+
+        let config = NodeConfig::load(&repo_root).unwrap();
+        assert_eq!(config.node_id, "env-node");
+        assert_eq!(config.resource_policy, None);
+
+        clear_node_id_env();
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn env_override_ignores_invalid_file_contents() {
+        let _guard = env_lock().lock().unwrap();
+        let repo_root = unique_temp_dir("node-config-env-invalid");
+        let path = node_config_path(&repo_root);
+        fs::write(&path, "this is not valid toml").unwrap();
+        set_node_id_env("env-node");
+
+        let config = NodeConfig::load(&repo_root).unwrap();
+        assert_eq!(config.node_id, "env-node");
+        assert_eq!(config.resource_policy, None);
+
+        clear_node_id_env();
         fs::remove_dir_all(repo_root).unwrap();
     }
 
