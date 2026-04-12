@@ -15,22 +15,31 @@ Drop this file into your repository unchanged. Put project-specific coordination
 
 ## Configuration
 
-This table defines the protocol parameters. Put the concrete values for your project in a `## Configuration` section in `PROGRAM.md`. Agents read those values from `PROGRAM.md`.
+Protocol parameters are set as `key: value` lines in `PROGRAM.md`. The CLI scans every line for `key: value` pairs where the key is a single `snake_case` word. Lines that don't match (headings, prose, blank lines) are ignored.
 
+Example (in `PROGRAM.md`):
 
-| Parameter                | Description                                                                                                                                                                 |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `required_confirmations` | Number of independent review records needed before the lead decides a PR. `0` means the lead decides without peer review. Default: `0`.                                     |
-| `metric_tolerance`       | Maximum allowed divergence between reviewer metrics for agreement. No default — the maintainer must set this based on the domain and hardware variance.                     |
-| `metric_direction`       | `lower_is_better` or `higher_is_better`.                                                                                                                                    |
-| `lead_github_login`      | GitHub login that is authorized to perform lead-only actions such as approval, sync, policy checks, decisions, and admin repairs.                                          |
-| `maintainer_github_login` | GitHub login for the human maintainer who can `/approve` or `/reject` thesis issues and candidate PRs when human review is enabled.                                       |
-| `auto_approve`           | If `true`, the lead auto-approves generated theses and decides PRs without waiting for a maintainer slash command. If `false`, the maintainer must `/approve` first. Default: `true`. |
-| `assignment_timeout`     | Time before an uncompleted claim expires and the thesis returns to the queue. Default: `24h`.                                                                               |
-| `review_timeout`         | Time before an incomplete review claim expires. Default: `12h`.                                                                                                             |
-| `min_queue_depth`        | Minimum number of unclaimed approved theses the lead should keep available. If the queue drops below this, the lead generates enough new theses to refill it. Default: `5`. |
-| `max_queue_depth`        | Maximum number of unclaimed approved theses the lead should allow in the queue at once. When omitted, there is no upper bound.                                             |
+```
+lead_github_login: alice
+maintainer_github_login: alice
+auto_approve: true
+metric_tolerance: 0.01
+metric_direction: higher_is_better
+min_queue_depth: 5
+```
 
+**Parameter reference:**
+
+- `required_confirmations` — Number of independent review records needed before the lead decides a PR. `0` means the lead decides without peer review. Default: `0`.
+- `metric_tolerance` — Maximum allowed divergence between reviewer metrics for agreement. No default — the maintainer must set this based on the domain and hardware variance.
+- `metric_direction` — `lower_is_better` or `higher_is_better`.
+- `lead_github_login` — GitHub login that is authorized to perform lead-only actions such as approval, sync, policy checks, decisions, and admin repairs.
+- `maintainer_github_login` — GitHub login for the human maintainer who can `/approve` or `/reject` thesis issues and candidate PRs when human review is enabled.
+- `auto_approve` — If `true`, the lead auto-approves generated theses and decides PRs without waiting for a maintainer slash command. If `false`, the maintainer must `/approve` first. Default: `true`.
+- `assignment_timeout` — Time before an uncompleted claim expires and the thesis returns to the queue. Default: `24h`.
+- `review_timeout` — Time before an incomplete review claim expires. Default: `12h`.
+- `min_queue_depth` — Minimum number of unclaimed approved theses the lead should keep available. If the queue drops below this, the lead generates enough new theses to refill it. Default: `5`.
+- `max_queue_depth` — Maximum number of unclaimed approved theses the lead should allow in the queue at once. When omitted, there is no upper bound.
 
 The parameter definitions live here. Concrete project values live in `PROGRAM.md`.
 

@@ -14,21 +14,14 @@ The harmful side is not plain unsafe requests. The evaluator uses real attack st
 
 A system prompt that refuses everything still scores 0.60. A system prompt that answers everything still scores 0.40. The interesting part is resisting adversarial attacks while preserving legitimate helpfulness.
 
-## Configuration
-
-These are the project-specific coordination values referenced by
-`POLYRESEARCH.md`.
-
-| Parameter                | Value              |
-| ------------------------ | ------------------ |
-| `required_confirmations` | `0`                |
-| `metric_tolerance`       | `0.03`             |
-| `metric_direction`       | `higher_is_better` |
-| `lead_github_login`      | `replace-me`       |
-| `assignment_timeout`     | `24h`              |
-| `review_timeout`         | `12h`              |
-| `min_queue_depth`        | `5`                |
-| `max_queue_depth`        | `10`               |
+required_confirmations: 0
+metric_tolerance: 0.03
+metric_direction: higher_is_better
+lead_github_login: replace-me
+assignment_timeout: 24h
+review_timeout: 12h
+min_queue_depth: 5
+max_queue_depth: 10
 
 ## What you CAN modify
 
