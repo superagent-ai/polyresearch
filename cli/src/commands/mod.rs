@@ -29,9 +29,6 @@ use crate::cli::{Cli, Commands};
 use crate::config::{NodeConfig, ProgramSpec, ProtocolConfig};
 use crate::github::{GitHubApi, RepoRef};
 
-const LOOP_CONTINUATION_REMINDER: &str =
-    "[polyresearch] Continue the loop. Only the user can end this session.";
-
 #[derive(Clone)]
 pub struct AppContext {
     pub cli: Cli,
@@ -72,8 +69,6 @@ where
         println!("{}", serde_json::to_string_pretty(value)?);
     } else {
         println!("{}", plain(value));
-        // Keep JSON stdout machine-parseable for agent pipelines that consume `--json`.
-        eprintln!("{LOOP_CONTINUATION_REMINDER}");
     }
     Ok(())
 }

@@ -2,7 +2,7 @@ use color_eyre::eyre::Result;
 use serde::Serialize;
 
 use crate::commands::{AppContext, print_value, read_node_id};
-use crate::comments::Observation;
+use crate::comments::{Observation, ReleaseReason};
 use crate::ledger::Ledger;
 use crate::state::{RepositoryState, ThesisPhase};
 
@@ -197,6 +197,17 @@ fn check_lead_duties(
         });
     }
 
+    let stale_claimable_count = stale_claimable_queue_count(repo_state);
+    if let Some(stale_count) = stale_claimable_count {
+        advisory.push(DutyItem {
+            category: "stale-queue".to_string(),
+            message: format!(
+                "All {stale_count} claimable theses have already been released with `no_improvement`. Generate fresh theses."
+            ),
+            command: "polyresearch generate --title \"...\" --body \"...\"".to_string(),
+        });
+    }
+
     if let Some((best, tolerance)) = metric_floor_info(ctx, repo_state) {
         advisory.push(DutyItem {
             category: "metric-floor".to_string(),
@@ -206,7 +217,10 @@ fn check_lead_duties(
             command: "Consider adjusting metric_tolerance or concluding the program.".to_string(),
         });
 
-        if repo_state.queue_depth >= ctx.config.min_queue_depth && repo_state.queue_depth > 0 {
+        if stale_claimable_count.is_none()
+            && repo_state.queue_depth >= ctx.config.min_queue_depth
+            && repo_state.queue_depth > 0
+        {
             advisory.push(DutyItem {
                 category: "stale-queue".to_string(),
                 message: format!(
@@ -320,12 +334,31 @@ fn metric_floor_info(ctx: &AppContext, repo_state: &RepositoryState) -> Option<(
     let tolerance = ctx.config.metric_tolerance?;
     let best = repo_state.current_best_accepted_metric?;
 
+    // Lower-is-better metrics have a generic floor at zero, so once the best score is
+    // below the required tolerance there is no room left for another meaningful win.
     matches!(
         ctx.config.metric_direction,
         crate::config::MetricDirection::LowerIsBetter
     )
     .then_some((best, tolerance))
     .filter(|(best, tolerance)| *best < *tolerance)
+}
+
+fn stale_claimable_queue_count(repo_state: &RepositoryState) -> Option<usize> {
+    let stale_count = repo_state
+        .theses
+        .iter()
+        .filter(|thesis| {
+            thesis.issue.state == "OPEN"
+                && matches!(thesis.phase, ThesisPhase::Approved)
+                && thesis
+                    .releases
+                    .iter()
+                    .any(|release| release.reason == ReleaseReason::NoImprovement)
+        })
+        .count();
+
+    (stale_count > 0 && stale_count == repo_state.queue_depth).then_some(stale_count)
 }
 
 fn render_report(value: &DutyReport) -> String {
