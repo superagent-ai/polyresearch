@@ -81,6 +81,14 @@ impl fmt::Display for Outcome {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttemptAnnotation {
+    pub category: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProtocolComment {
@@ -109,6 +117,12 @@ pub enum ProtocolComment {
         baseline_metric: f64,
         observation: Observation,
         summary: String,
+        annotations: Option<Vec<AttemptAnnotation>>,
+    },
+    Annotation {
+        thesis: u64,
+        node: String,
+        text: String,
     },
     PolicyPass {
         thesis: u64,
@@ -177,13 +191,18 @@ impl ProtocolComment {
             .as_str();
         let fields = parse_fields(payload);
 
-        match Self::parse_typed(comment_type, &fields) {
+        let visible_body = extract_visible_body(before_match);
+        match Self::parse_typed(comment_type, &fields, visible_body.as_deref()) {
             Ok(comment) => Ok(Some(comment)),
             Err(_) => Ok(None),
         }
     }
 
-    fn parse_typed(comment_type: &str, fields: &BTreeMap<String, String>) -> Result<Self> {
+    fn parse_typed(
+        comment_type: &str,
+        fields: &BTreeMap<String, String>,
+        visible_body: Option<&str>,
+    ) -> Result<Self> {
         let comment = match comment_type {
             "approval" => Self::Approval {
                 thesis: parse_u64(fields, "thesis")?,
@@ -204,6 +223,12 @@ impl ProtocolComment {
                 baseline_metric: parse_f64(fields, "baseline_metric")?,
                 observation: parse_observation(fields, "observation")?,
                 summary: parse_string(fields, "summary")?,
+                annotations: parse_optional_annotations(fields, "annotations")?,
+            },
+            "annotation" => Self::Annotation {
+                thesis: parse_u64(fields, "thesis")?,
+                node: parse_string(fields, "node")?,
+                text: visible_body.unwrap_or_default().trim().to_string(),
             },
             "policy-pass" => Self::PolicyPass {
                 thesis: parse_u64(fields, "thesis")?,
@@ -242,6 +267,16 @@ impl ProtocolComment {
         Ok(comment)
     }
 
+    pub fn attempt_annotations(&self) -> Option<&[AttemptAnnotation]> {
+        match self {
+            Self::Attempt {
+                annotations: Some(annotations),
+                ..
+            } => Some(annotations),
+            _ => None,
+        }
+    }
+
     pub fn render(&self) -> String {
         match self {
             Self::SlashApprove { reason } => render_slash_command("/approve", reason.as_deref()),
@@ -278,19 +313,30 @@ impl ProtocolComment {
                 baseline_metric,
                 observation,
                 summary,
-            } => render_block(
+                annotations,
+            } => render_block_with_body(
                 format!(
                     "Polyresearch attempt: thesis #{thesis}, branch `{branch}`, metric `{metric:.4}`, observation `{observation}`."
                 ),
+                annotations
+                    .as_ref()
+                    .map(|items| render_attempt_annotations(items)),
                 "attempt",
-                &[
-                    ("thesis", thesis.to_string()),
-                    ("branch", branch.clone()),
-                    ("metric", format!("{metric:.4}")),
-                    ("baseline_metric", format!("{baseline_metric:.4}")),
-                    ("observation", observation.to_string()),
-                    ("summary", summary.clone()),
-                ],
+                &attempt_fields(
+                    thesis.to_string(),
+                    branch,
+                    *metric,
+                    *baseline_metric,
+                    *observation,
+                    summary,
+                    annotations.as_ref(),
+                ),
+            ),
+            Self::Annotation { thesis, node, text } => render_block_with_body(
+                format!("Polyresearch annotation: thesis #{thesis} by node `{node}`."),
+                Some(text.clone()),
+                "annotation",
+                &[("thesis", thesis.to_string()), ("node", node.clone())],
             ),
             Self::PolicyPass {
                 thesis,
@@ -423,6 +469,13 @@ fn parse_fields(payload: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
+fn extract_visible_body(before_match: &str) -> Option<String> {
+    let trimmed = before_match.trim_end();
+    let (_, rest) = trimmed.split_once("\n\n")?;
+    let body = rest.trim();
+    (!body.is_empty()).then(|| body.to_string())
+}
+
 fn parse_string(fields: &BTreeMap<String, String>, key: &str) -> Result<String> {
     fields
         .get(key)
@@ -440,6 +493,17 @@ fn parse_optional_string(fields: &BTreeMap<String, String>, key: &str) -> Result
     }
 
     Ok(Some(value.clone()))
+}
+
+fn parse_optional_annotations(
+    fields: &BTreeMap<String, String>,
+    key: &str,
+) -> Result<Option<Vec<AttemptAnnotation>>> {
+    let Some(value) = parse_optional_string(fields, key)? else {
+        return Ok(None);
+    };
+    let annotations = parse_attempt_annotations(&value)?;
+    Ok(Some(annotations))
 }
 
 fn parse_optional_u64(fields: &BTreeMap<String, String>, key: &str) -> Result<Option<u64>> {
@@ -503,10 +567,83 @@ fn parse_outcome(fields: &BTreeMap<String, String>, key: &str) -> Result<Outcome
     }
 }
 
+pub fn parse_attempt_annotations(raw: &str) -> Result<Vec<AttemptAnnotation>> {
+    let annotations = serde_json::from_str::<Vec<AttemptAnnotation>>(raw)
+        .map_err(|err| eyre!("invalid attempt annotations JSON: {err}"))?;
+    if annotations.is_empty() {
+        return Err(eyre!(
+            "attempt annotations must be a non-empty JSON array when provided"
+        ));
+    }
+    for (index, annotation) in annotations.iter().enumerate() {
+        if annotation.category.trim().is_empty() {
+            return Err(eyre!("attempt annotation #{index} has an empty `category`"));
+        }
+        if annotation.text.trim().is_empty() {
+            return Err(eyre!("attempt annotation #{index} has an empty `text`"));
+        }
+    }
+    Ok(annotations)
+}
+
+fn attempt_fields(
+    thesis: String,
+    branch: &str,
+    metric: f64,
+    baseline_metric: f64,
+    observation: Observation,
+    summary: &str,
+    annotations: Option<&Vec<AttemptAnnotation>>,
+) -> Vec<(&'static str, String)> {
+    let mut fields = vec![
+        ("thesis", thesis),
+        ("branch", branch.to_string()),
+        ("metric", format!("{metric:.4}")),
+        ("baseline_metric", format!("{baseline_metric:.4}")),
+        ("observation", observation.to_string()),
+        ("summary", summary.to_string()),
+    ];
+    if let Some(annotations) = annotations {
+        fields.push((
+            "annotations",
+            serde_json::to_string(annotations).expect("attempt annotations serialize"),
+        ));
+    }
+    fields
+}
+
+fn render_attempt_annotations(annotations: &[AttemptAnnotation]) -> String {
+    let mut rendered = String::from("Annotations:\n");
+    for annotation in annotations {
+        let text = annotation.text.replace('\n', " ");
+        match &annotation.task_id {
+            Some(task_id) => rendered.push_str(&format!(
+                "- [{}] task `{}`: {}\n",
+                annotation.category, task_id, text
+            )),
+            None => rendered.push_str(&format!("- [{}]: {}\n", annotation.category, text)),
+        }
+    }
+    rendered.trim_end().to_string()
+}
+
 fn render_block(summary: String, comment_type: &str, fields: &[(&str, String)]) -> String {
+    render_block_with_body(summary, None, comment_type, fields)
+}
+
+fn render_block_with_body(
+    summary: String,
+    visible_body: Option<String>,
+    comment_type: &str,
+    fields: &[(&str, String)],
+) -> String {
     let mut rendered = String::new();
     rendered.push_str(&summary);
     rendered.push_str("\n\n");
+    if let Some(visible_body) = visible_body {
+        rendered.push_str(&visible_body);
+        rendered.push_str("\n\n");
+    }
     rendered.push_str(&format!("<!-- polyresearch:{comment_type}\n"));
     for (key, value) in fields {
         rendered.push_str(&format!("{key}: {value}\n"));
@@ -546,6 +683,59 @@ summary: RMSNorm instead of LayerNorm
     }
 
     #[test]
+    fn parses_attempt_comments_with_annotations() {
+        let body = r#"Polyresearch attempt: thesis #12, branch `thesis/12-rmsnorm-attempt-1`, metric `0.9934`, observation `improved`.
+
+Annotations:
+- [failure_analysis] task `task-7`: Tool selection drifted after step 2
+
+<!-- polyresearch:attempt
+thesis: 12
+branch: thesis/12-rmsnorm-attempt-1
+metric: 0.9934
+baseline_metric: 0.9979
+observation: improved
+summary: RMSNorm instead of LayerNorm
+annotations: [{"category":"failure_analysis","task_id":"task-7","text":"Tool selection drifted after step 2"}]
+-->"#;
+
+        let parsed = ProtocolComment::parse(body).unwrap().unwrap();
+        assert_eq!(
+            parsed,
+            ProtocolComment::Attempt {
+                thesis: 12,
+                branch: "thesis/12-rmsnorm-attempt-1".to_string(),
+                metric: 0.9934,
+                baseline_metric: 0.9979,
+                observation: Observation::Improved,
+                summary: "RMSNorm instead of LayerNorm".to_string(),
+                annotations: Some(vec![AttemptAnnotation {
+                    category: "failure_analysis".to_string(),
+                    task_id: Some("task-7".to_string()),
+                    text: "Tool selection drifted after step 2".to_string(),
+                }]),
+            }
+        );
+    }
+
+    #[test]
+    fn renders_and_parses_annotation_comments() {
+        let comment = ProtocolComment::Annotation {
+            thesis: 12,
+            node: "alice/node-7f83".to_string(),
+            text: "Tried the retrieval-heavy direction twice. It regressed on tool-use tasks."
+                .to_string(),
+        };
+
+        let rendered = comment.render();
+        assert!(
+            rendered.contains("Polyresearch annotation: thesis #12 by node `alice/node-7f83`.")
+        );
+        assert!(rendered.contains("Tried the retrieval-heavy direction twice."));
+        assert_eq!(ProtocolComment::parse(&rendered).unwrap().unwrap(), comment);
+    }
+
+    #[test]
     fn renders_claim_comments_with_summary() {
         let comment = ProtocolComment::Claim {
             thesis: 42,
@@ -562,7 +752,9 @@ summary: RMSNorm instead of LayerNorm
         let approve = ProtocolComment::parse("/approve focus on normalization")
             .unwrap()
             .unwrap();
-        let reject = ProtocolComment::parse("/reject this is too broad").unwrap().unwrap();
+        let reject = ProtocolComment::parse("/reject this is too broad")
+            .unwrap()
+            .unwrap();
         let not_a_match = ProtocolComment::parse("/approved").unwrap();
 
         assert_eq!(

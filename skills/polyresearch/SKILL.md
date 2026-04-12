@@ -33,6 +33,10 @@ description: >-
 
 `POLYRESEARCH_NODE_ID` takes precedence over `.polyresearch-node.toml` for the current session. This is required when multiple agents share one checkout or when one GitHub login runs several workers in parallel.
 
+## Bootstrap new projects
+
+If a repo has `POLYRESEARCH.md` but `PROGRAM.md` or `PREPARE.md` are missing, or still contain placeholders such as `replace-me`, draft both files before you try to claim or generate work. Use the stock `PROGRAM.md` and `PREPARE.md` files as templates; they already define the sections. Explore the repo, fill in both drafts, and hand them to the maintainer for review before launching agents.
+
 ## Core principle
 
 GitHub visibility first. All work must be visible on GitHub. Local-only work is
@@ -67,12 +71,16 @@ LOOP FOREVER:
         - IMMEDIATELY post:
           polyresearch attempt <issue> --metric <val> --baseline <val> \
             --observation <obs> --summary "<summary>"
+          Add `--annotations '<json>'` if you have structured findings future
+          contributors should see.
         - polyresearch duties
      d. If observation was improved:
         polyresearch submit <issue>
         Do this NOW. Do not keep tinkering.
      e. If no improvement after exhausting ideas:
         polyresearch release <issue> --reason <reason>
+        If you learned something future contributors should know, post:
+        polyresearch annotate <issue> --text "<what you learned>"
 
   4. Check for review work (PRs with policy-pass, no decision,
      not authored by you):
@@ -115,6 +123,8 @@ Each iteration, before any experiments:
      - If `auto_approve` is `false`, generated theses are not auto-approved.
        They stay queued for the maintainer to `/approve` or `/reject`.
      - Read results.tsv and all thesis history before generating.
+     - Read annotations on closed theses before generating. Treat them as
+       negative knowledge.
      - Read maintainer `/approve` and `/reject` comments and use them as
        directional input for future thesis generation.
      - Deduplicate against existing open and closed theses.

@@ -604,6 +604,7 @@ pub fn validate_issue(
                 baseline_metric,
                 observation,
                 summary,
+                ..
             }) => {
                 if *thesis != issue.number {
                     findings.push(invalid_issue_like(
