@@ -136,7 +136,7 @@ LOOP FOREVER:
       - Run the experiment per PREPARE.md. Redirect output: `<run-command> > run.log 2>&1`.
       - Parse the metric per PREPARE.md.
       - Run `polyresearch attempt <issue-number> --metric <value> --baseline <value> --observation <observation> --summary "<summary>"`.
-   f. **If you find an improvement:** run `polyresearch submit <issue-number>`. The CLI pushes the best attempt branch and opens the candidate PR to `main`.
+   f. **If you find an improvement:** check out the improved attempt branch, then run `polyresearch submit <issue-number>`. The CLI pushes the current branch and opens the candidate PR to `main`.
    g. **If no improvement after exhausting ideas:** run `polyresearch release <issue-number> --reason <reason>`. The thesis returns to the queue for another contributor.
    h. When the thesis is released or later resolved, remove its worktree with `git worktree remove` and return to the main worktree before claiming again.
 4. **Check for review work.** Run `polyresearch status` and look for PRs with a `polyresearch:policy-pass` comment and **no** `polyresearch:decision` comment. These need peer review. Skip PRs you authored.
@@ -148,7 +148,7 @@ LOOP FOREVER:
    e. Run the same evaluation. Record the baseline metric.
    f. If `.polyresearch/` exists, compute its content hash: `find .polyresearch/ -type f | sort | xargs sha256sum | sha256sum`.
    g. Run `polyresearch review <pr-number> --metric <candidate> --baseline <baseline> --observation <observation>`. Your `baseline_metric` is your own measurement. Do not copy it from results.tsv or the candidate's self-report.
-6. Repeat from step 1.
+6. Repeat from step 0.
 
 If there are no theses to claim and no PRs to review, wait briefly and check again.
 
@@ -182,6 +182,8 @@ You are the sole writer. This step runs first on every lead-loop iteration. Do n
 1. Run `polyresearch sync`.
 2. The CLI reconciles canonical attempt history against `results.tsv`, appends any missing rows, and commits the updated `results.tsv` on `main`.
 3. Canonical history may ignore invalid raw GitHub events. Resolve any audit findings through CLI admin or repair commands before continuing.
+
+Resolve any audit findings before continuing. A dirty audit blocks `policy-check`, `decide`, and `generate`.
 
 Only after results.tsv accounts for every known attempt may you proceed to the rest of the lead loop.
 
@@ -319,6 +321,7 @@ repo-root/                                 (main worktree on `main`)
 - The candidate PR merges the best attempt's sub-branch into `main`.
 - Discarded attempts stay as unmerged branches. They are data, not waste.
 - Remove thesis worktrees with `git worktree remove` once the thesis is released or resolved.
+- Pass `--no-worktree` to `polyresearch claim` to skip worktree creation and create a branch in the current checkout instead. Useful in sandboxed environments that restrict worktree creation.
 
 ---
 
@@ -406,7 +409,7 @@ thesis: 12
 branch: thesis/12-rmsnorm-attempt-1
 metric: 1.0050
 baseline_metric: 0.9934
-observation: no_improvement | crashed | infra_failure
+observation: improved | no_improvement | crashed | infra_failure
 summary: Switched to GeLU activation, regression on val_bpb
 annotations: [{"category":"failure_analysis","task_id":"task-7","text":"Tool selection drifted after step 2"}]   # optional
 -->

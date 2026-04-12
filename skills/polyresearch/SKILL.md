@@ -47,6 +47,8 @@ The `polyresearch duties` command enforces this. The CLI gates `claim` and
 
 ## The contributor loop
 
+See `POLYRESEARCH.md` "The contributor loop" for full sub-step details.
+
 ```
 LOOP FOREVER:
 
@@ -63,8 +65,9 @@ LOOP FOREVER:
 
   3. If a claimable thesis exists:
      a. polyresearch claim <issue>
-     b. Read PROGRAM.md for direction and constraints.
-     c. For each experiment:
+     b. cd into the worktree path printed by claim.
+     c. Read PROGRAM.md for direction and constraints.
+     d. For each experiment:
         - Make changes within the editable surface (PROGRAM.md CAN list).
         - Run evaluator per PREPARE.md: <run-command> > run.log 2>&1
         - Parse the metric per PREPARE.md.
@@ -74,13 +77,16 @@ LOOP FOREVER:
           Add `--annotations '<json>'` if you have structured findings future
           contributors should see.
         - polyresearch duties
-     d. If observation was improved:
+     e. If observation was improved:
         polyresearch submit <issue>
         Do this NOW. Do not keep tinkering.
-     e. If no improvement after exhausting ideas:
+     f. If no improvement after exhausting ideas:
         polyresearch release <issue> --reason <reason>
         If you learned something future contributors should know, post:
         polyresearch annotate <issue> --text "<what you learned>"
+     g. When the thesis is released or later resolved:
+        git worktree remove <worktree-path>
+        Return to the repo root before claiming again.
 
   4. Check for review work (PRs with policy-pass, no decision,
      not authored by you):
@@ -94,10 +100,12 @@ LOOP FOREVER:
 
 ## The lead loop
 
-The lead runs contributor duties PLUS these, in strict priority order.
+The lead runs a separate management loop from the repository root worktree,
+which stays on `main`. The lead never claims theses or runs experiments.
+See `POLYRESEARCH.md` "The lead loop" for full sub-procedure details.
 
 ```
-Each iteration, before any experiments:
+LOOP FOREVER:
 
   0. polyresearch duties
      Resolve ALL blocking items. Lead blocking items include:
@@ -108,6 +116,7 @@ Each iteration, before any experiments:
   1. polyresearch pace          # compare actual throughput vs effective policy
   2. polyresearch sync          # on main branch, always first
   3. polyresearch audit         # check for inconsistencies
+     A dirty audit blocks `policy-check`, `decide`, and `generate`.
 
   4. Process open PRs:
      - For each PR without policy-check:
@@ -120,6 +129,8 @@ Each iteration, before any experiments:
   5. Check queue depth:
      - If below min_queue_depth:
        polyresearch generate --title "<title>" --body "<body>"
+     - If `max_queue_depth` is set and queue depth is already at or above it:
+       do not generate.
      - If `auto_approve` is `false`, generated theses are not auto-approved.
        They stay queued for the maintainer to `/approve` or `/reject`.
      - Read results.tsv and all thesis history before generating.
@@ -129,39 +140,25 @@ Each iteration, before any experiments:
        directional input for future thesis generation.
      - Deduplicate against existing open and closed theses.
 
-  6. Now proceed with contributor loop (experiments, etc.)
-
-  Between experiment batches, re-run steps 0-5.
+  6. Wait briefly, then repeat from step 0.
 ```
 
 ## Resource pacing
 
-The protocol has a default resource policy: maximize throughput. Never leave
-claimable theses idle while experiments could be running. Run evaluations in
-parallel when the evaluator supports it. Interleave duties with long-running
-evaluations.
-
-If `.polyresearch-node.toml` sets a `resource_policy`, that node-specific
-policy overrides the default. Treat it as a real operating constraint.
-
-Use `polyresearch pace` as the feedback loop:
-
-1. Read the effective resource policy shown by `pace`.
-2. Compare it against the throughput metrics for your node.
-3. If the policy allows more throughput than you are getting, increase
-   parallelism or claim rate.
-4. If the policy imposes a ceiling (hardware, RAM, API rate limits), stay
-   below it.
-
-Do not leave resource usage on autopilot. Re-run `pace` regularly and correct
-drift.
+Run `polyresearch pace` regularly. It prints your effective resource policy
+and recent throughput. If `.polyresearch-node.toml` sets a `resource_policy`,
+treat it as a real constraint. See `POLYRESEARCH.md` "Node configuration" for
+the default policy and details.
 
 ## Critical rules
+
+These rules are extracted from `POLYRESEARCH.md`. The protocol is authoritative
+if any wording differs.
 
 - Post `polyresearch attempt` after EVERY experiment. Never batch.
 - Run `polyresearch submit` immediately when you observe `improved`.
   Do not "keep trying."
-- Lead: process the PR backlog before starting new experiments. Period.
+- Lead: process the PR backlog before any other work. Period.
 - Lead: re-run `polyresearch sync` after any decision that closes a thesis.
 - Never modify files in `.polyresearch/` or files outside the editable surface
   in `PROGRAM.md`.
@@ -173,14 +170,9 @@ drift.
 
 ## Evaluation variance
 
-If metrics are noisy (variance > 10% of `metric_tolerance`), run the evaluator
-multiple times and report the mean.
-
-Note the number of runs and range in the `--summary` field, e.g.:
-`--summary "3 runs, range 0.932-0.948, mean 0.940, <description>"`
-
-A candidate that consistently scores higher across 3+ runs can be considered
-`improved` even if no single run exceeds tolerance.
+If metrics are noisy, run the evaluator multiple times and report the mean.
+Note runs and range in `--summary`. See `POLYRESEARCH.md` "Evaluation variance"
+for thresholds and acceptance rules.
 
 ## Deeper reading
 
