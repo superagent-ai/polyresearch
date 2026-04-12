@@ -4,7 +4,10 @@ use serde::Serialize;
 use crate::cli::IssueArgs;
 use crate::commands::duties;
 use crate::commands::guards::require_claimable_thesis;
-use crate::commands::{AppContext, create_thesis_branch, print_value, read_node_id, slugify};
+use crate::commands::{
+    AppContext, create_thesis_branch, create_thesis_worktree, print_value, read_node_id, slugify,
+    thesis_worktree_path,
+};
 use crate::comments::ProtocolComment;
 use crate::state::RepositoryState;
 
@@ -13,6 +16,7 @@ struct ClaimOutput {
     issue: u64,
     node: String,
     branch: String,
+    worktree_path: Option<String>,
 }
 
 pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
@@ -46,14 +50,30 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
         ));
     }
 
-    let branch = if ctx.cli.dry_run {
-        format!(
+    let (branch, worktree_path) = if ctx.cli.dry_run {
+        let branch = format!(
             "thesis/{}-{}",
             thesis.issue.number,
             slugify(&thesis.issue.title)
+        );
+        let worktree_path = (!args.no_worktree).then(|| {
+            thesis_worktree_path(&ctx.repo_root, thesis.issue.number, &thesis.issue.title)
+                .display()
+                .to_string()
+        });
+        (branch, worktree_path)
+    } else if args.no_worktree {
+        (
+            create_thesis_branch(&ctx.repo_root, thesis.issue.number, &thesis.issue.title)?,
+            None,
         )
     } else {
-        create_thesis_branch(&ctx.repo_root, thesis.issue.number, &thesis.issue.title)?
+        let workspace =
+            create_thesis_worktree(&ctx.repo_root, thesis.issue.number, &thesis.issue.title)?;
+        (
+            workspace.branch,
+            Some(workspace.worktree_path.display().to_string()),
+        )
     };
 
     let comment = ProtocolComment::Claim {
@@ -69,12 +89,27 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
         issue: thesis.issue.number,
         node,
         branch,
+        worktree_path,
     };
 
     print_value(ctx, &output, |value| {
-        format!(
-            "Claimed thesis #{} as node `{}` on branch `{}`.",
-            value.issue, value.node, value.branch
-        )
+        match (&value.worktree_path, ctx.cli.dry_run) {
+            (Some(path), true) => format!(
+                "Would claim thesis #{} as node `{}` on branch `{}` in worktree `{}`.",
+                value.issue, value.node, value.branch, path
+            ),
+            (Some(path), false) => format!(
+                "Claimed thesis #{} as node `{}` on branch `{}` in worktree `{}`.",
+                value.issue, value.node, value.branch, path
+            ),
+            (None, true) => format!(
+                "Would claim thesis #{} as node `{}` on branch `{}`.",
+                value.issue, value.node, value.branch
+            ),
+            (None, false) => format!(
+                "Claimed thesis #{} as node `{}` on branch `{}`.",
+                value.issue, value.node, value.branch
+            ),
+        }
     })
 }

@@ -100,6 +100,8 @@ polyresearch submit 88
 polyresearch release 88 --reason no_improvement
 ```
 
+By default, `polyresearch claim` creates a dedicated worktree at `.worktrees/<issue>-<slug>/` from `main` and prints the path. Change into that worktree before editing or running evaluations. Pass `--no-worktree` only if you intentionally want the legacy single-working-tree checkout flow.
+
 Review flow:
 
 ```bash
@@ -114,8 +116,11 @@ polyresearch sync
 polyresearch generate --title "New thesis" --body "Hypothesis and rationale"
 polyresearch policy-check 93
 polyresearch decide 93
+polyresearch prune
 polyresearch admin reconcile-ledger
 ```
+
+Run the lead from the repository root on `main`. Launch contributors as separate agents in their own thesis worktrees.
 
 ## Output modes
 
@@ -128,7 +133,7 @@ polyresearch admin reconcile-ledger
 - `polyresearch init` -- set node identity, verify GitHub auth, detect repo
 - `polyresearch status` -- derive thesis state, queue depth, active nodes, current best metric
 - `polyresearch audit` -- validate raw GitHub activity and report invalid or suspicious protocol events
-- `polyresearch claim` -- atomically claim a thesis and create the thesis branch
+- `polyresearch claim` -- atomically claim a thesis and create the thesis worktree (or a branch with `--no-worktree`)
 - `polyresearch attempt` -- post a structured attempt comment from the current branch
 - `polyresearch release` -- release a claim with a structured reason
 - `polyresearch submit` -- push the branch and open a candidate PR
@@ -138,6 +143,7 @@ polyresearch admin reconcile-ledger
 - `polyresearch generate` -- open and auto-approve a thesis issue
 - `polyresearch policy-check` -- validate PR files against the editable surface
 - `polyresearch decide` -- post the lead decision and merge/close accordingly
+- `polyresearch prune` -- prune git worktree metadata and remove empty stale directories under `.worktrees`
 - `polyresearch admin ...` -- lead-only repair commands for exceptional recovery
 
 ## Notes

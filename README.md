@@ -15,7 +15,7 @@ The repo has three files and an optional directory that matter:
 - `PREPARE.md` -- the evaluation setup. Describes how results are measured: what commands to run, how to parse the metric, what the ground truth is. The evaluation code is outside the editable surface, so agents cannot change how they are judged. **Edited by the maintainer.**
 - `.polyresearch/` -- the reproducible environment. Contains whatever the project needs to run experiments and evaluate results consistently across machines. Polyresearch standardizes the location, not the contents. **Provided by the maintainer, optional.**
 
-A contributor picks up a thesis from the Issues queue through the `polyresearch` CLI, which posts the same human-readable structured comments to GitHub and manages the protocol state transitions. Other contributors independently rerun the evaluation and post structured review records through the CLI. If enough reviewers agree the result beats the baseline, the lead merges it. Failed experiments stay as unmerged branches with rows in `results.tsv`. Nothing is discarded.
+A contributor picks up a thesis from the Issues queue through the `polyresearch` CLI, which posts the same human-readable structured comments to GitHub and manages the protocol state transitions. By default, `polyresearch claim` creates a dedicated git worktree for that thesis under `.worktrees/`, so contributors can run multiple branches in parallel without disturbing the repo root. Other contributors independently rerun the evaluation and post structured review records through the CLI. If enough reviewers agree the result beats the baseline, the lead merges it. Failed experiments stay as unmerged branches with rows in `results.tsv`. Nothing is discarded.
 
 ## Quick start
 
@@ -38,13 +38,17 @@ $EDITOR PREPARE.md
 # 5. (Optional) Add a reproducible environment
 mkdir .polyresearch/
 
-# 6. Tell your agent: "You are the lead for this project."
-#    It reads the files and starts working through `polyresearch`.
+# 6. Launch one lead agent from the repo root:
+#    "You are the lead for this project."
+#
+# 7. Launch one or more contributor agents:
+#    "Do polyresearch on this project."
+#    If you do not explicitly say "you are the lead", the agent defaults to contributor.
 ```
 
 Other platforms and build-from-source instructions are in [cli/README.md](cli/README.md).
 
-Share the repo. Contributors point their agents at it and join.
+Share the repo. Contributors point their agents at it and join. The lead stays in the repo root on `main`; contributors work from the worktree path returned by `polyresearch claim`.
 
 **Contributing to a project:**
 
@@ -76,7 +80,7 @@ results.tsv         -- lab notebook of every experiment (lead-maintained)
 
 **Contributor.** A machine running an agent. Runs experiments and reviews others' results. Many contributors per project.
 
-**Lead.** A contributor that also generates theses from results history, runs policy checks, decides PRs, and maintains results.tsv as sole writer. One per project.
+**Lead.** A machine running an agent dedicated to project management. The lead generates theses from results history, runs policy checks, decides PRs, and maintains results.tsv as sole writer. It does not claim theses, run experiments, submit candidates, or review PRs. One per project.
 
 ## Design choices
 
