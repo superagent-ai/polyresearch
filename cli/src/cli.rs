@@ -22,6 +22,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand, Clone)]
 pub enum Commands {
     Init(InitArgs),
+    Pace,
     Status(StatusArgs),
     Claim(IssueArgs),
     Attempt(AttemptArgs),
@@ -43,6 +44,9 @@ pub enum Commands {
 pub struct InitArgs {
     #[arg(long)]
     pub node: Option<String>,
+
+    #[arg(long)]
+    pub resource_policy: Option<String>,
 }
 
 #[derive(Debug, Args, Clone)]

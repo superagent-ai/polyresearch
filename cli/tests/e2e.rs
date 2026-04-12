@@ -11,7 +11,7 @@ use polyresearch_cli::cli::{
 };
 use polyresearch_cli::commands;
 use polyresearch_cli::comments::Observation;
-use polyresearch_cli::config::{MetricDirection, ProgramSpec, ProtocolConfig};
+use polyresearch_cli::config::{MetricDirection, NodeConfig, ProgramSpec, ProtocolConfig};
 use polyresearch_cli::github::{
     CommentUser, GitHubApi, Issue, IssueComment, IssueListState, PullRequest, PullRequestFile,
     PullRequestListState, RepoRef,
@@ -233,6 +233,7 @@ async fn init_writes_node_identity() {
         false,
         Commands::Init(InitArgs {
             node: Some("test-node".to_string()),
+            resource_policy: Some("Use 2 GPUs and keep them busy.".to_string()),
         }),
     );
 
@@ -240,13 +241,73 @@ async fn init_writes_node_identity() {
         &ctx,
         &InitArgs {
             node: Some("test-node".to_string()),
+            resource_policy: Some("Use 2 GPUs and keep them busy.".to_string()),
         },
     )
     .await
     .unwrap();
 
-    let node_file = repo.path.join(".polyresearch-node");
-    assert_eq!(fs::read_to_string(node_file).unwrap(), "test-node\n");
+    let node_file = repo.path.join(".polyresearch-node.toml");
+    let config: NodeConfig = toml::from_str(&fs::read_to_string(node_file).unwrap()).unwrap();
+    assert_eq!(config.node_id, "lead/test-node");
+    assert_eq!(
+        config.resource_policy.as_deref(),
+        Some("Use 2 GPUs and keep them busy.")
+    );
+}
+
+#[tokio::test]
+async fn pace_reports_default_policy_and_node_metrics() {
+    let repo = TestRepo::new("pace");
+    let approved_fixture = load_issue_fixture("acknowledged_invalid_issue.json");
+    let claimed_fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    let attempt_fixture = load_issue_fixture("improved_no_submit_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![
+            approved_fixture.issue.clone(),
+            claimed_fixture.issue.clone(),
+            attempt_fixture.issue.clone(),
+        ],
+        HashMap::from([
+            (
+                approved_fixture.issue.number,
+                approved_fixture.comments.clone(),
+            ),
+            (
+                claimed_fixture.issue.number,
+                claimed_fixture.comments.clone(),
+            ),
+            (
+                attempt_fixture.issue.number,
+                attempt_fixture.comments.clone(),
+            ),
+        ]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &approved_fixture.lead_github_login,
+        false,
+        Commands::Pace,
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let node_config = NodeConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
+    let output = commands::pace::build_output(ctx.repo.slug(), &node_config, &repo_state);
+
+    assert_eq!(output.node_id, "test-node");
+    assert!(output.is_default_policy);
+    assert_eq!(output.attempts_last_hour, 1);
+    assert_eq!(output.attempts_last_4_hours, 1);
+    assert_eq!(output.claimable_theses, 1);
+    assert_eq!(output.active_claims, 2);
+    assert_eq!(output.idle_minutes, Some(0));
 }
 
 #[tokio::test]

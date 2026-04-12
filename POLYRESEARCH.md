@@ -59,8 +59,29 @@ When you start, before doing anything else:
 3. Run `git log --oneline -20` on `main` to see recent state.
 4. If `.polyresearch/` exists, run its setup. Otherwise follow PREPARE.md setup instructions.
 5. Check your GitHub identity. Run `gh api user --jq '.login'` to see which GitHub account you are operating as. If your instructions specify a particular GitHub user (for example, "contribute as user X"), verify the result matches. If it does not, stop and report the mismatch before proceeding. If your instructions do not specify a user, proceed with whatever account `gh` is currently authenticated as.
-6. Generate your node identifier if you don't have one. Use your machine's hostname or a short ID (e.g. `node-7f83`). Keep it consistent across sessions.
+6. Run `polyresearch init` if `.polyresearch-node.toml` does not exist yet. The CLI generates a composite identifier in the form `{github_login}/{hostname}-{suffix}` (e.g. `alice/mac.lan-a3f2`) to prevent collisions across users and machines. Override the machine part with `polyresearch init --node <id>`. This also records your optional node-specific `resource_policy`.
 7. Identify your role. If your instructions say "you are the lead," follow the lead loop. Otherwise, follow the contributor loop.
+
+---
+
+## Node configuration
+
+Each node keeps a local `.polyresearch-node.toml` file at the repo root:
+
+```toml
+node_id = "node-7f83"
+resource_policy = "8-core machine with 2 GPUs. Run up to 4 parallel evaluations. Keep GPUs saturated. Stay under 50 API calls/min."
+```
+
+- `node_id` identifies the machine or worker. Keep it stable across sessions.
+- `resource_policy` is optional natural language guidance for that node only. It is not project state.
+- Set or update it with `polyresearch init --resource-policy "..."`.
+
+If `resource_policy` is absent, the default policy applies:
+
+> Maximize throughput. Never leave claimable theses idle while experiments could be running. Run evaluations in parallel when the evaluator supports it. Interleave duties with long-running evaluations.
+
+Run `polyresearch pace` regularly. It prints the effective resource policy alongside recent node activity so the agent can compare expectation vs reality and adjust parallelism or claim rate.
 
 ---
 
@@ -92,8 +113,9 @@ This mechanism exists because GitHub visibility is a shared resource. Other cont
 LOOP FOREVER:
 
 0. **Check duties.** Run `polyresearch duties`. If any blocking items are reported, resolve each one before continuing. The CLI will also block `claim` if duties are outstanding.
-1. **Check for theses.** Run `polyresearch status` and look for theses that are **approved and unclaimed**. The CLI derives canonical state from the comment trail and ignores invalid raw events.
-2. **If a claimable thesis exists:**
+1. **Check pace.** Run `polyresearch pace`. Compare the effective resource policy against recent throughput and adjust how many experiments you run in parallel.
+2. **Check for theses.** Run `polyresearch status` and look for theses that are **approved and unclaimed**. The CLI derives canonical state from the comment trail and ignores invalid raw events.
+3. **If a claimable thesis exists:**
   a. Run `polyresearch claim <issue-number>`.
    b. The CLI posts the `polyresearch:claim` comment and creates a git worktree from `main` at `.worktrees/<issue-number>-<slug>/` on branch `thesis/<issue-number>-<slug>`. Change into that worktree before editing.
    c. Read PROGRAM.md for direction and constraints.
@@ -107,8 +129,8 @@ LOOP FOREVER:
    f. **If you find an improvement:** run `polyresearch submit <issue-number>`. The CLI pushes the best attempt branch and opens the candidate PR to `main`.
    g. **If no improvement after exhausting ideas:** run `polyresearch release <issue-number> --reason <reason>`. The thesis returns to the queue for another contributor.
    h. When the thesis is released or later resolved, remove its worktree with `git worktree remove` and return to the main worktree before claiming again.
-3. **Check for review work.** Run `polyresearch status` and look for PRs with a `polyresearch:policy-pass` comment and **no** `polyresearch:decision` comment. These need peer review. Skip PRs you authored.
-4. **If a reviewable PR exists:**
+4. **Check for review work.** Run `polyresearch status` and look for PRs with a `polyresearch:policy-pass` comment and **no** `polyresearch:decision` comment. These need peer review. Skip PRs you authored.
+5. **If a reviewable PR exists:**
   a. Run `polyresearch review-claim <pr-number>`.
    b. Check out the **candidate SHA** (the PR head).
    c. Run the evaluation per PREPARE.md. Record the candidate metric.
@@ -116,7 +138,7 @@ LOOP FOREVER:
    e. Run the same evaluation. Record the baseline metric.
    f. If `.polyresearch/` exists, compute its content hash: `find .polyresearch/ -type f | sort | xargs sha256sum | sha256sum`.
    g. Run `polyresearch review <pr-number> --metric <candidate> --baseline <baseline> --observation <observation>`. Your `baseline_metric` is your own measurement. Do not copy it from results.tsv or the candidate's self-report.
-5. Repeat from step 1.
+6. Repeat from step 1.
 
 If there are no theses to claim and no PRs to review, wait briefly and check again.
 
@@ -135,10 +157,11 @@ The lead runs a separate management loop from the repository root worktree, whic
 **Priority order within each iteration.** GitHub-visible duties run first, in this order:
 
 0. `polyresearch duties` — resolve any blocking items (decidable PRs, stale results.tsv, etc.).
-1. `polyresearch sync` (always before other lead actions).
-2. Process open PRs: `policy-check` and `decide` any that are ready. When `auto_approve` is `false`, assign ready PRs to `maintainer_github_login` and wait for `/approve`.
-3. Check queue depth; `generate` if below `min_queue_depth`.
-4. If there is no immediate GitHub-visible work, wait briefly and repeat from step 0.
+1. `polyresearch pace` — compare your effective resource policy against recent node throughput.
+2. `polyresearch sync` (always before other lead actions).
+3. Process open PRs: `policy-check` and `decide` any that are ready. When `auto_approve` is `false`, assign ready PRs to `maintainer_github_login` and wait for `/approve`.
+4. Check queue depth; `generate` if below `min_queue_depth`.
+5. If there is no immediate GitHub-visible work, wait briefly and repeat from step 0.
 
 The lead never claims theses or runs experiments. Keeping `main` current is the lead's full-time job.
 
@@ -342,22 +365,22 @@ Both forms are valid approval signals. The protocol recognizes either.
 **Claim** (contributor claims a thesis):
 
 ```
-Polyresearch claim: thesis #12 by node `node-7f83`.
+Polyresearch claim: thesis #12 by node `alice/node-7f83`.
 
 <!-- polyresearch:claim
 thesis: 12
-node: node-7f83
+node: alice/node-7f83
 -->
 ```
 
 **Release** (contributor releases a claim without submitting a candidate):
 
 ```
-Polyresearch release: thesis #12 by node `node-7f83` (`reason: no_improvement`).
+Polyresearch release: thesis #12 by node `alice/node-7f83` (`reason: no_improvement`).
 
 <!-- polyresearch:release
 thesis: 12
-node: node-7f83
+node: alice/node-7f83
 reason: no_improvement | timeout | infra_failure
 -->
 ```
@@ -397,24 +420,24 @@ candidate_sha: a1b2c3d
 **Review claim** (reviewer signals they are starting evaluation):
 
 ```
-Polyresearch review claim: thesis #12 by node `node-3e91`.
+Polyresearch review claim: thesis #12 by node `bob/node-3e91`.
 
 <!-- polyresearch:review-claim
 thesis: 12
-node: node-3e91
+node: bob/node-3e91
 -->
 ```
 
 **Review record** (reviewer posts evaluation results):
 
 ```
-Polyresearch review: thesis #12 by node `node-3e91`, candidate `0.9934`, baseline `0.9979`, observation `improved`.
+Polyresearch review: thesis #12 by node `bob/node-3e91`, candidate `0.9934`, baseline `0.9979`, observation `improved`.
 
 <!-- polyresearch:review
 thesis: 12
 candidate_sha: a1b2c3d
 base_sha: c0d1e2f
-node: node-3e91
+node: bob/node-3e91
 metric: 0.9934
 baseline_metric: 0.9979
 observation: improved | no_improvement | crashed | infra_failure

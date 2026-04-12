@@ -2,23 +2,35 @@ use std::env;
 use std::process::Command;
 
 use color_eyre::eyre::Result;
+use rand::RngExt;
 use serde::Serialize;
 
 use crate::cli::InitArgs;
-use crate::commands::{AppContext, print_value, write_node_id};
+use crate::commands::{AppContext, print_value, write_node_config};
+use crate::config::DEFAULT_RESOURCE_POLICY;
 
 #[derive(Debug, Serialize)]
 struct InitOutput {
     repo: String,
     node: String,
     github_login: String,
+    resource_policy: Option<String>,
+    effective_resource_policy: String,
+    is_default_policy: bool,
 }
 
 pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
-    let node = args.node.clone().unwrap_or_else(default_node_id);
+    let resource_policy = args
+        .resource_policy
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
     let login = ctx.github.current_login()?;
     let _ = ctx.github.auth_status()?;
     let _ = ctx.github.auth_token()?;
+    let machine_id = args.node.clone().unwrap_or_else(default_machine_id);
+    let node = format!("{login}/{machine_id}");
 
     if let Ok(false) = ctx.github.repo_has_issues() {
         eprintln!("Warning: Issues are disabled on this repository (common for forks).");
@@ -29,24 +41,44 @@ pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
     }
 
     if !ctx.cli.dry_run {
-        write_node_id(&ctx.repo_root, &node)?;
+        write_node_config(&ctx.repo_root, &node, resource_policy.as_deref())?;
     }
+
+    let (effective_resource_policy, is_default_policy) = match &resource_policy {
+        Some(policy) => (policy.clone(), false),
+        None => (DEFAULT_RESOURCE_POLICY.to_string(), true),
+    };
 
     let output = InitOutput {
         repo: ctx.repo.slug(),
         node,
         github_login: login,
+        resource_policy,
+        effective_resource_policy,
+        is_default_policy,
     };
 
     print_value(ctx, &output, |value| {
-        format!(
+        let mut text = format!(
             "Initialized polyresearch for {} as node `{}` (GitHub: {}).",
             value.repo, value.node, value.github_login
-        )
+        );
+        if value.is_default_policy {
+            text.push_str(" Using the default resource policy.");
+        } else {
+            text.push_str(" Saved the custom resource policy.");
+        }
+        text
     })
 }
 
-fn default_node_id() -> String {
+fn default_machine_id() -> String {
+    let hostname = resolve_hostname();
+    let suffix: u16 = rand::rng().random();
+    format!("{hostname}-{suffix:04x}")
+}
+
+fn resolve_hostname() -> String {
     if let Ok(hostname) = env::var("HOSTNAME") {
         if !hostname.trim().is_empty() {
             return hostname;

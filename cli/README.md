@@ -80,13 +80,18 @@ Initialize the local node identity once per repo:
 
 ```bash
 polyresearch init
+polyresearch init --resource-policy "2 GPUs, run up to 4 evals in parallel, stay under 50 API calls/min"
 ```
+
+This writes `.polyresearch-node.toml` in the repo root. The file stores a stable `node_id` plus an optional natural-language `resource_policy`. If no policy is set, the protocol default is to maximize throughput.
 
 Inspect the current state:
 
 ```bash
+polyresearch pace
 polyresearch status
 polyresearch audit
+polyresearch pace --json
 polyresearch status --json
 polyresearch status --tui
 ```
@@ -113,6 +118,7 @@ Lead flow:
 
 ```bash
 polyresearch sync
+polyresearch duties
 polyresearch generate --title "New thesis" --body "Hypothesis and rationale"
 polyresearch policy-check 93
 polyresearch decide 93
@@ -122,6 +128,15 @@ polyresearch admin reconcile-ledger
 
 Run the lead from the repository root on `main`. Launch contributors as separate agents in their own thesis worktrees.
 
+Maintainer approval (when `auto_approve` is `false` in `PROGRAM.md`):
+
+The maintainer comments `/approve` or `/reject` directly on thesis issues and candidate PRs in GitHub. Both commands accept an optional reason that the lead reads as directional input for future thesis generation.
+
+```
+/approve focus on normalization layers
+/reject this direction already failed for architectural reasons
+```
+
 ## Output modes
 
 - Default output is human-readable terminal text.
@@ -130,7 +145,8 @@ Run the lead from the repository root on `main`. Launch contributors as separate
 
 ## Command summary
 
-- `polyresearch init` -- set node identity, verify GitHub auth, detect repo
+- `polyresearch init` -- set node identity, optional resource policy, verify GitHub auth, detect repo
+- `polyresearch pace` -- show the effective resource policy alongside recent node throughput
 - `polyresearch status` -- derive thesis state, queue depth, active nodes, current best metric
 - `polyresearch audit` -- validate raw GitHub activity and report invalid or suspicious protocol events
 - `polyresearch claim` -- atomically claim a thesis and create the thesis worktree (or a branch with `--no-worktree`)
@@ -140,9 +156,10 @@ Run the lead from the repository root on `main`. Launch contributors as separate
 - `polyresearch review-claim` -- claim a PR for review
 - `polyresearch review` -- post a structured review record with env hash
 - `polyresearch sync` -- reconcile `results.tsv` from the comment trail
-- `polyresearch generate` -- open and auto-approve a thesis issue
+- `polyresearch generate` -- open a thesis issue (auto-approves when `auto_approve` is `true`, otherwise assigns to maintainer)
 - `polyresearch policy-check` -- validate PR files against the editable surface
-- `polyresearch decide` -- post the lead decision and merge/close accordingly
+- `polyresearch decide` -- post the lead decision and merge/close accordingly (waits for maintainer `/approve` when `auto_approve` is `false`)
+- `polyresearch duties` -- list blocking and advisory work items for the current node
 - `polyresearch prune` -- prune git worktree metadata and remove empty stale directories under `.worktrees`
 - `polyresearch admin ...` -- lead-only repair commands for exceptional recovery
 

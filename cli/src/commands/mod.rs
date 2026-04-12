@@ -7,6 +7,7 @@ pub mod duties;
 pub mod generate;
 pub mod guards;
 pub mod init;
+pub mod pace;
 pub mod policy_check;
 pub mod prune;
 pub mod release;
@@ -25,7 +26,7 @@ use color_eyre::eyre::{Context, Result, eyre};
 use serde::Serialize;
 
 use crate::cli::{Cli, Commands};
-use crate::config::{ProgramSpec, ProtocolConfig};
+use crate::config::{NodeConfig, ProgramSpec, ProtocolConfig};
 use crate::github::{GitHubApi, RepoRef};
 
 #[derive(Clone)]
@@ -41,6 +42,7 @@ pub struct AppContext {
 pub async fn run(ctx: AppContext) -> Result<()> {
     match &ctx.cli.command {
         Commands::Init(args) => init::run(&ctx, args).await,
+        Commands::Pace => pace::run(&ctx).await,
         Commands::Status(args) => status::run(&ctx, args).await,
         Commands::Claim(args) => claim::run(&ctx, args).await,
         Commands::Attempt(args) => attempt::run(&ctx, args).await,
@@ -71,24 +73,24 @@ where
     Ok(())
 }
 
-pub fn node_file(repo_root: &PathBuf) -> PathBuf {
-    repo_root.join(".polyresearch-node")
+pub fn read_node_config(repo_root: &PathBuf) -> Result<NodeConfig> {
+    NodeConfig::load(repo_root)
 }
 
 pub fn read_node_id(repo_root: &PathBuf) -> Result<String> {
-    let path = node_file(repo_root);
-    if !path.exists() {
-        return Err(eyre!(
-            "node identity is not configured yet; run `polyresearch init` first"
-        ));
-    }
-
-    Ok(fs::read_to_string(path)?.trim().to_string())
+    Ok(read_node_config(repo_root)?.node_id)
 }
 
 pub fn write_node_id(repo_root: &PathBuf, node: &str) -> Result<()> {
-    fs::write(node_file(repo_root), format!("{node}\n"))?;
-    Ok(())
+    write_node_config(repo_root, node, None)
+}
+
+pub fn write_node_config(
+    repo_root: &PathBuf,
+    node: &str,
+    resource_policy: Option<&str>,
+) -> Result<()> {
+    NodeConfig::new(node.to_string(), resource_policy.map(ToString::to_string)).save(repo_root)
 }
 
 pub fn current_branch(repo_root: &PathBuf) -> Result<String> {
