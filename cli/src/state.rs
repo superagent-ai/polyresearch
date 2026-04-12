@@ -65,6 +65,7 @@ pub struct ReleaseRecord {
 #[derive(Debug, Clone, Serialize)]
 pub struct AttemptRecord {
     pub thesis: u64,
+    pub node: String,
     pub branch: String,
     pub metric: f64,
     pub baseline_metric: f64,
@@ -237,6 +238,7 @@ impl ThesisState {
             .iter()
             .map(|attempt| AttemptRecord {
                 thesis: attempt.thesis,
+                node: attempt.node.clone(),
                 branch: attempt.branch.clone(),
                 metric: attempt.metric,
                 baseline_metric: attempt.baseline_metric,
@@ -583,7 +585,8 @@ mod tests {
         let mut submitted_comments = fixture.comments;
         submitted_comments.clear();
         let config = test_config(&fixture.lead_github_login);
-        let submitted = ThesisState::derive(fixture.issue, submitted_comments, &[], &config).unwrap();
+        let submitted =
+            ThesisState::derive(fixture.issue, submitted_comments, &[], &config).unwrap();
 
         assert!(matches!(submitted.phase, ThesisPhase::Submitted));
         assert_eq!(count_queue_depth(&[submitted], false), 1);

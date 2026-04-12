@@ -1,16 +1,79 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use color_eyre::eyre::{Context, Result, eyre};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_RESOURCE_POLICY: &str = "Maximize throughput. Never leave claimable theses idle while experiments could be running. Run evaluations in parallel when the evaluator supports it. Interleave duties with long-running evaluations.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricDirection {
     HigherIsBetter,
     LowerIsBetter,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeConfig {
+    pub node_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_policy: Option<String>,
+}
+
+impl NodeConfig {
+    pub fn new(node_id: impl Into<String>, resource_policy: Option<String>) -> Self {
+        Self {
+            node_id: node_id.into(),
+            resource_policy: normalize_resource_policy(resource_policy),
+        }
+    }
+
+    pub fn load(repo_root: &Path) -> Result<Self> {
+        let path = node_config_path(repo_root);
+        if !path.exists() {
+            return Err(eyre!(
+                "node identity is not configured yet; run `polyresearch init` first"
+            ));
+        }
+
+        let contents = fs::read_to_string(&path)
+            .wrap_err_with(|| format!("failed to read {}", path.display()))?;
+        let config: Self = toml::from_str(&contents)
+            .wrap_err_with(|| format!("failed to parse {}", path.display()))?;
+        if config.node_id.trim().is_empty() {
+            return Err(eyre!("node_id in {} cannot be empty", path.display()));
+        }
+
+        Ok(Self::new(config.node_id, config.resource_policy))
+    }
+
+    pub fn save(&self, repo_root: &Path) -> Result<()> {
+        let path = node_config_path(repo_root);
+        let rendered = toml::to_string_pretty(self)
+            .wrap_err_with(|| format!("failed to serialize {}", path.display()))?;
+        fs::write(&path, rendered)
+            .wrap_err_with(|| format!("failed to write {}", path.display()))?;
+        Ok(())
+    }
+
+    pub fn resource_policy(&self) -> Option<&str> {
+        self.resource_policy
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    pub fn effective_resource_policy(&self) -> (&str, bool) {
+        match self.resource_policy() {
+            Some(policy) => (policy, false),
+            None => (DEFAULT_RESOURCE_POLICY, true),
+        }
+    }
+}
+
+pub fn node_config_path(repo_root: &Path) -> PathBuf {
+    repo_root.join(".polyresearch-node.toml")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -292,4 +355,51 @@ mod tests {
         assert!(parse_bool("true").unwrap());
         assert!(!parse_bool("false").unwrap());
     }
+
+    #[test]
+    fn loads_node_config_from_toml() {
+        let repo_root = unique_temp_dir("node-config");
+        let path = node_config_path(&repo_root);
+        fs::write(
+            &path,
+            r#"node_id = "node-7f83"
+resource_policy = "Run 4 evals in parallel."
+"#,
+        )
+        .unwrap();
+
+        let config = NodeConfig::load(&repo_root).unwrap();
+        assert_eq!(config.node_id, "node-7f83");
+        assert_eq!(
+            config.resource_policy.as_deref(),
+            Some("Run 4 evals in parallel.")
+        );
+
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn defaults_resource_policy_when_missing() {
+        let config = NodeConfig::new("node-7f83", None);
+        let (policy, is_default) = config.effective_resource_policy();
+        assert!(is_default);
+        assert_eq!(policy, DEFAULT_RESOURCE_POLICY);
+    }
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("polyresearch-{name}-{unique}"));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+}
+
+fn normalize_resource_policy(resource_policy: Option<String>) -> Option<String> {
+    resource_policy.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
 }

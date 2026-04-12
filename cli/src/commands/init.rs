@@ -6,16 +6,26 @@ use rand::RngExt;
 use serde::Serialize;
 
 use crate::cli::InitArgs;
-use crate::commands::{AppContext, print_value, write_node_id};
+use crate::commands::{AppContext, print_value, write_node_config};
+use crate::config::DEFAULT_RESOURCE_POLICY;
 
 #[derive(Debug, Serialize)]
 struct InitOutput {
     repo: String,
     node: String,
     github_login: String,
+    resource_policy: Option<String>,
+    effective_resource_policy: String,
+    is_default_policy: bool,
 }
 
 pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
+    let resource_policy = args
+        .resource_policy
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
     let login = ctx.github.current_login()?;
     let _ = ctx.github.auth_status()?;
     let _ = ctx.github.auth_token()?;
@@ -31,20 +41,34 @@ pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
     }
 
     if !ctx.cli.dry_run {
-        write_node_id(&ctx.repo_root, &node)?;
+        write_node_config(&ctx.repo_root, &node, resource_policy.as_deref())?;
     }
+
+    let (effective_resource_policy, is_default_policy) = match &resource_policy {
+        Some(policy) => (policy.clone(), false),
+        None => (DEFAULT_RESOURCE_POLICY.to_string(), true),
+    };
 
     let output = InitOutput {
         repo: ctx.repo.slug(),
         node,
         github_login: login,
+        resource_policy,
+        effective_resource_policy,
+        is_default_policy,
     };
 
     print_value(ctx, &output, |value| {
-        format!(
+        let mut text = format!(
             "Initialized polyresearch for {} as node `{}` (GitHub: {}).",
             value.repo, value.node, value.github_login
-        )
+        );
+        if value.is_default_policy {
+            text.push_str(" Using the default resource policy.");
+        } else {
+            text.push_str(" Saved the custom resource policy.");
+        }
+        text
     })
 }
 

@@ -58,6 +58,8 @@ What you need:
 - If the repo has a `.polyresearch/` directory, use it for setup and execution
 - Otherwise, follow the setup instructions in `PREPARE.md`
 
+Initialize each machine or clone once with `polyresearch init`. This writes a local `.polyresearch-node.toml` file with the node ID and an optional natural-language `resource_policy`. If you do not set one, the protocol default is to maximize throughput. Agents can inspect the effective policy and recent node activity with `polyresearch pace`.
+
 Polyresearch does not mandate a specific agent, model, or sandbox. It does mandate the `polyresearch` CLI as the canonical path for protocol state changes. Bring your own agent and tooling around that boundary.
 
 ## Project structure

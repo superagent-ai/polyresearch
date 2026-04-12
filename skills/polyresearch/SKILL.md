@@ -15,7 +15,7 @@ description: >-
 
 1. Read these files in order: `POLYRESEARCH.md`, `PROGRAM.md`, `PREPARE.md`, `results.tsv`.
 2. Run `git log --oneline -20` on `main` to see recent state.
-3. Run `polyresearch init` if `.polyresearch-node` does not exist.
+3. Run `polyresearch init` if `.polyresearch-node.toml` does not exist.
 4. If `.polyresearch/` exists, run its setup. Otherwise follow `PREPARE.md`.
 5. Check your GitHub identity: `gh api user --jq '.login'`
 6. Identify your role from your instructions or `PROGRAM.md`:
@@ -41,10 +41,15 @@ LOOP FOREVER:
   0. polyresearch duties
      If BLOCKING items exist, resolve each one before continuing.
 
-  1. polyresearch status
+  1. polyresearch pace
+     Compare your effective resource policy against recent node throughput.
+     If the policy says to push harder, increase parallelism or claim rate.
+     If the policy says to stay under a hardware or API ceiling, back off.
+
+  2. polyresearch status
      Look for approved, unclaimed theses.
 
-  2. If a claimable thesis exists:
+  3. If a claimable thesis exists:
      a. polyresearch claim <issue>
      b. Read PROGRAM.md for direction and constraints.
      c. For each experiment:
@@ -61,14 +66,14 @@ LOOP FOREVER:
      e. If no improvement after exhausting ideas:
         polyresearch release <issue> --reason <reason>
 
-  3. Check for review work (PRs with policy-pass, no decision,
+  4. Check for review work (PRs with policy-pass, no decision,
      not authored by you):
      a. polyresearch review-claim <pr>
      b. Evaluate candidate SHA and base SHA per PREPARE.md.
      c. polyresearch review <pr> --metric <candidate> --baseline <base> \
           --observation <obs>
 
-  4. Repeat from step 0.
+  5. Repeat from step 0.
 ```
 
 ## The lead loop
@@ -84,10 +89,11 @@ Each iteration, before any experiments:
      - Open PRs without policy-check
      - Stale results.tsv
 
-  1. polyresearch sync          # on main branch, always first
-  2. polyresearch audit         # check for inconsistencies
+  1. polyresearch pace          # compare actual throughput vs effective policy
+  2. polyresearch sync          # on main branch, always first
+  3. polyresearch audit         # check for inconsistencies
 
-  3. Process open PRs:
+  4. Process open PRs:
      - For each PR without policy-check:
        polyresearch policy-check <pr>
      - For each PR with enough reviews and no decision:
@@ -95,7 +101,7 @@ Each iteration, before any experiments:
          The lead should assign the PR to `maintainer_github_login` while it waits.
        polyresearch decide <pr>
 
-  4. Check queue depth:
+  5. Check queue depth:
      - If below min_queue_depth:
        polyresearch generate --title "<title>" --body "<body>"
      - If `auto_approve` is `false`, generated theses are not auto-approved.
@@ -105,39 +111,32 @@ Each iteration, before any experiments:
        directional input for future thesis generation.
      - Deduplicate against existing open and closed theses.
 
-  5. Now proceed with contributor loop (experiments, etc.)
+  6. Now proceed with contributor loop (experiments, etc.)
 
-  Between experiment batches, re-run steps 0-4.
+  Between experiment batches, re-run steps 0-5.
 ```
 
-## Maximizing resource utilization
+## Resource pacing
 
-Do not leave compute idle while doing GitHub duties.
+The protocol has a default resource policy: maximize throughput. Never leave
+claimable theses idle while experiments could be running. Run evaluations in
+parallel when the evaluator supports it. Interleave duties with long-running
+evaluations.
 
-**Interleave duties with running experiments.** If an evaluation takes 30+
-minutes, launch it in the background. While it runs, execute the full duty
-cycle: `duties` > `sync` > process PRs > check queue > `generate`. Return to
-check experiment progress after.
+If `.polyresearch-node.toml` sets a `resource_policy`, that node-specific
+policy overrides the default. Treat it as a real operating constraint.
 
-**Parallel evaluations.** API latency per call (5-10s) is the bottleneck, not
-rate limits. When the evaluator supports it, run multiple evaluations
-concurrently. Each process runs sequential API calls; parallelism comes from
-running N processes.
+Use `polyresearch pace` as the feedback loop:
 
-**Parallel experiment setup.** When running N experiments in parallel:
+1. Read the effective resource policy shown by `pace`.
+2. Compare it against the throughput metrics for your node.
+3. If the policy allows more throughput than you are getting, increase
+   parallelism or claim rate.
+4. If the policy imposes a ceiling (hardware, RAM, API rate limits), stay
+   below it.
 
-1. Create N working directories. Copy evaluator files; do not symlink
-   (relative paths break).
-2. Write the prompt/config variant into each directory.
-3. Launch all N as background processes.
-4. As each completes, IMMEDIATELY post `polyresearch attempt`.
-   Do not wait for the batch.
-5. Between batches, run `polyresearch duties` to handle accumulated
-   obligations.
-
-**Never serialize what can overlap.** If you are waiting on I/O (API calls,
-evaluation runs), do GitHub work. If GitHub is current and no duties are
-blocking, start more experiments.
+Do not leave resource usage on autopilot. Re-run `pace` regularly and correct
+drift.
 
 ## Critical rules
 
