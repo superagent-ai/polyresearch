@@ -1,8 +1,9 @@
 use std::collections::HashMap;
+use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Result, eyre};
@@ -216,8 +217,44 @@ fn run_git(path: &PathBuf, args: &[&str]) {
     );
 }
 
+fn env_lock() -> &'static Mutex<()> {
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    ENV_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+struct NodeIdEnvGuard {
+    _guard: MutexGuard<'static, ()>,
+}
+
+impl NodeIdEnvGuard {
+    fn lock_clean() -> Self {
+        let guard = env_lock().lock().unwrap();
+        clear_node_id_env();
+        Self { _guard: guard }
+    }
+}
+
+impl Drop for NodeIdEnvGuard {
+    fn drop(&mut self) {
+        clear_node_id_env();
+    }
+}
+
+fn set_node_id_env(value: &str) {
+    unsafe {
+        env::set_var(polyresearch_cli::config::NODE_ID_ENV_VAR, value);
+    }
+}
+
+fn clear_node_id_env() {
+    unsafe {
+        env::remove_var(polyresearch_cli::config::NODE_ID_ENV_VAR);
+    }
+}
+
 #[tokio::test]
 async fn init_writes_node_identity() {
+    let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("init");
     let mock = Arc::new(MockGitHubClient::new(
         "lead",
@@ -257,7 +294,36 @@ async fn init_writes_node_identity() {
 }
 
 #[tokio::test]
+async fn env_override_uses_session_node_id() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("env-node-override");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Pace);
+    commands::write_node_config(&repo.path, "lead/file-node", Some("Keep CPUs saturated."))
+        .unwrap();
+    set_node_id_env("lead/env-node");
+
+    let node_config = NodeConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
+    let output = commands::pace::build_output(ctx.repo.slug(), &node_config, &repo_state);
+
+    assert_eq!(output.node_id, "lead/env-node");
+    assert_eq!(output.resource_policy, "Keep CPUs saturated.");
+    assert!(!output.is_default_policy);
+
+}
+
+#[tokio::test]
 async fn pace_reports_default_policy_and_node_metrics() {
+    let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("pace");
     let approved_fixture = load_issue_fixture("acknowledged_invalid_issue.json");
     let claimed_fixture = load_issue_fixture("claimed_no_attempts_issue.json");
@@ -312,6 +378,7 @@ async fn pace_reports_default_policy_and_node_metrics() {
 
 #[tokio::test]
 async fn status_and_audit_succeed_on_fixture_snapshot() {
+    let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("status-audit");
     let issue_fixture = load_issue_fixture("duplicate_claim_issue.json");
     let pr_fixture = load_pr_fixture("non_lead_decision_pr.json");
@@ -353,6 +420,7 @@ async fn status_and_audit_succeed_on_fixture_snapshot() {
 
 #[tokio::test]
 async fn claim_rejects_already_claimed_thesis() {
+    let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("claim-reject");
     let fixture = load_issue_fixture("duplicate_claim_issue.json");
     let mock = Arc::new(MockGitHubClient::new(
@@ -388,6 +456,7 @@ async fn claim_rejects_already_claimed_thesis() {
 
 #[tokio::test]
 async fn claim_rejects_closed_thesis() {
+    let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("claim-closed");
     let fixture = load_issue_fixture("attempt_after_closure_issue.json");
     let mock = Arc::new(MockGitHubClient::new(
@@ -423,6 +492,7 @@ async fn claim_rejects_closed_thesis() {
 
 #[tokio::test]
 async fn attempt_rejects_node_without_canonical_claim() {
+    let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("attempt-reject");
     let fixture = load_issue_fixture("duplicate_claim_issue.json");
     let mock = Arc::new(MockGitHubClient::new(
@@ -464,6 +534,7 @@ async fn attempt_rejects_node_without_canonical_claim() {
 
 #[tokio::test]
 async fn generate_is_blocked_by_dirty_audit() {
+    let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("generate-dirty");
     let fixture = load_issue_fixture("duplicate_claim_issue.json");
     let mock = Arc::new(MockGitHubClient::new(
@@ -502,6 +573,7 @@ async fn generate_is_blocked_by_dirty_audit() {
 
 #[tokio::test]
 async fn lead_only_command_rejects_non_lead_login() {
+    let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("non-lead");
     let mock = Arc::new(MockGitHubClient::new(
         "alice",
@@ -518,6 +590,7 @@ async fn lead_only_command_rejects_non_lead_login() {
 
 #[tokio::test]
 async fn valid_claim_succeeds_in_dry_run_without_writing() {
+    let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("valid-claim");
     let fixture = load_issue_fixture("acknowledged_invalid_issue.json");
     let mock = Arc::new(MockGitHubClient::new(
@@ -554,6 +627,7 @@ async fn valid_claim_succeeds_in_dry_run_without_writing() {
 
 #[tokio::test]
 async fn claim_creates_worktree_by_default() {
+    let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("claim-worktree");
     init_git_repo(&repo.path);
     let fixture = load_issue_fixture("acknowledged_invalid_issue.json");
@@ -612,6 +686,7 @@ async fn claim_creates_worktree_by_default() {
 
 #[tokio::test]
 async fn prune_removes_empty_stale_worktree_directories() {
+    let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("prune-worktrees");
     init_git_repo(&repo.path);
     let mock = Arc::new(MockGitHubClient::new(
@@ -738,6 +813,7 @@ fn observation_value_enum_accepts_snake_case() {
 
 #[tokio::test]
 async fn duties_reports_blocking_when_claim_has_no_attempts() {
+    let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("duties-claim");
     let fixture = load_issue_fixture("claimed_no_attempts_issue.json");
     let mock = Arc::new(MockGitHubClient::new(
@@ -769,6 +845,7 @@ async fn duties_reports_blocking_when_claim_has_no_attempts() {
 
 #[tokio::test]
 async fn duties_reports_blocking_when_improved_but_not_submitted() {
+    let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("duties-submit");
     let fixture = load_issue_fixture("improved_no_submit_issue.json");
     let mock = Arc::new(MockGitHubClient::new(
@@ -800,6 +877,7 @@ async fn duties_reports_blocking_when_improved_but_not_submitted() {
 
 #[tokio::test]
 async fn duties_clean_on_no_claims() {
+    let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("duties-clean");
     let fixture = load_issue_fixture("acknowledged_invalid_issue.json");
     let mock = Arc::new(MockGitHubClient::new(
@@ -829,6 +907,7 @@ async fn duties_clean_on_no_claims() {
 
 #[tokio::test]
 async fn claim_blocked_by_outstanding_duties() {
+    let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("claim-gate");
     let fixture_claimed = load_issue_fixture("claimed_no_attempts_issue.json");
     let fixture_open = load_issue_fixture("acknowledged_invalid_issue.json");

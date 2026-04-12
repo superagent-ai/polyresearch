@@ -15,15 +15,23 @@ description: >-
 
 1. Read these files in order: `POLYRESEARCH.md`, `PROGRAM.md`, `PREPARE.md`, `results.tsv`.
 2. Run `git log --oneline -20` on `main` to see recent state.
-3. Run `polyresearch init` if `.polyresearch-node.toml` does not exist.
-4. If `.polyresearch/` exists, run its setup. Otherwise follow `PREPARE.md`.
-5. Check your GitHub identity: `gh api user --jq '.login'`
-6. Identify your role from your instructions or `PROGRAM.md`:
+3. Create a distinct node ID for this session before running other `polyresearch` commands:
+   ```bash
+   LOGIN=$(gh api user --jq '.login')
+   MACHINE_ID="$(hostname -s)-$(xxd -l2 -p /dev/urandom)"
+   export POLYRESEARCH_NODE_ID="${LOGIN}/${MACHINE_ID}"
+   ```
+4. If `.polyresearch-node.toml` does not exist yet, run `polyresearch init --node "$MACHINE_ID"` to create the fallback file.
+5. If `.polyresearch/` exists, run its setup. Otherwise follow `PREPARE.md`.
+6. Check your GitHub identity: the `LOGIN` above must match the GitHub user you were asked to operate as.
+7. Identify your role from your instructions or `PROGRAM.md`:
    - If told "you are the lead," follow the lead loop.
    - Otherwise, follow the contributor loop.
-7. If the repo is a fork and issues are disabled:
+8. If the repo is a fork and issues are disabled:
    `gh api repos/{owner}/{name} --method PATCH -f has_issues=true`
-8. For any CLI command details: `polyresearch <command> --help`
+9. For any CLI command details: `polyresearch <command> --help`
+
+`POLYRESEARCH_NODE_ID` takes precedence over `.polyresearch-node.toml` for the current session. This is required when multiple agents share one checkout or when one GitHub login runs several workers in parallel.
 
 ## Core principle
 
