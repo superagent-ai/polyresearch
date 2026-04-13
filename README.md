@@ -2,116 +2,107 @@
 
 Distributed [autoresearch](https://github.com/karpathy/autoresearch). Multiple machines, multiple contributors, verified results.
 
-Autoresearch runs one agent on one machine. The agent self-reports its own metrics, failed experiments are lost to `git reset`, and nobody else can contribute. Polyresearch adds open participation, complete experiment history, and independent peer review.
+Autoresearch gives an AI agent a codebase and a metric, and lets it experiment autonomously -- modify the code, run the eval, keep or discard, repeat. You wake up to a log of experiments and a better result. But it runs one agent on one machine. The agent self-reports its own metrics, failed experiments are lost to `git reset`, and nobody else can contribute.
+
+Polyresearch keeps the same loop and adds three things:
+
+1. **Open participation.** Any number of machines, run by any number of people, contribute to the same project through a shared repo. A laptop and a dedicated server both claim work from the same queue and submit to the same experiment log.
+2. **Complete experiment history.** Every attempt gets a row in `results.tsv` and stays as an unmerged branch: accepted, discarded, and crashed. No `git reset`, no lost code. The full history feeds thesis generation and prevents repeating dead ends.
+3. **Independent verification.** Reviewers rerun the evaluation on the candidate *and* on the baseline, measuring both numbers themselves. The evaluation code lives outside the editable surface, so agents cannot grade their own homework.
 
 ## How it works
 
-Polyresearch is not a separate service or a repo you fork. You add a few files to your existing project repository, install the `polyresearch` CLI, and point your agents at it.
+A polyresearch project is any GitHub repo with a few coordination files:
 
-The repo has three files and an optional directory that matter:
+- `**PROGRAM.md`** -- the research playbook. Same concept as autoresearch's [program.md](https://github.com/karpathy/autoresearch/blob/master/program.md). Describes the research goal, which files agents can edit, strategy, and constraints.
+- `**PREPARE.md`** -- the evaluation setup. What commands to run, how to parse the metric, what the ground truth is. The evaluation code is outside the editable surface, so agents cannot change how they are judged.
+- `**POLYRESEARCH.md`** -- the coordination protocol. Same for every project, like a LICENSE file. Not modified.
+- `**.polyresearch/`** -- the reproducible environment. Setup scripts, evaluators, frozen dependencies. Optional.
 
-- `POLYRESEARCH.md` -- the coordination protocol. Same for every project. Defines how agents find work, claim theses, submit results, and verify each other. Drop it in like a LICENSE file. **Not modified.**
-- `PROGRAM.md` -- the research playbook. Same concept as autoresearch's `[program.md](https://github.com/karpathy/autoresearch/blob/master/program.md)`. Describes the research goal, which files agents can edit (gitignore-style patterns), strategy, and constraints. **Edited by the maintainer.**
-- `PREPARE.md` -- the evaluation setup. Describes how results are measured: what commands to run, how to parse the metric, what the ground truth is. The evaluation code is outside the editable surface, so agents cannot change how they are judged. **Edited by the maintainer.**
-- `.polyresearch/` -- the reproducible environment. Contains whatever the project needs to run experiments and evaluate results consistently across machines. Polyresearch standardizes the location, not the contents. **Provided by the maintainer, optional.**
+Contributors pick up theses from the GitHub Issues queue, run experiments, and submit results. Other contributors independently verify results. The lead manages the queue and merges accepted work. Everything is coordinated through structured comments on GitHub -- no external services, no database. Requires `git` and `gh`.
 
-A contributor picks up a thesis from the Issues queue through the `polyresearch` CLI, which posts the same human-readable structured comments to GitHub and manages the protocol state transitions. By default, `polyresearch claim` creates a dedicated git worktree for that thesis under `.worktrees/`, so contributors can run multiple branches in parallel without disturbing the repo root. Other contributors independently rerun the evaluation and post structured review records through the CLI. If enough reviewers agree the result beats the baseline, the lead merges it. Failed experiments stay as unmerged branches with rows in `results.tsv`. Nothing is discarded.
+## Install
 
-## Quick start
+Two steps:
 
-**Setting up a project:**
+1. **Install the CLI.** Download the binary and put it on your `PATH`. The link below is for macOS Apple Silicon; other platforms and build-from-source in [cli/README.md](cli/README.md).
 
 ```bash
-# 1. Install the CLI (macOS Apple Silicon shown)
 curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-cli-aarch64-apple-darwin.tar.xz
-
-# 2. Copy the protocol and templates into your repo
-cp POLYRESEARCH.md PROGRAM.md PREPARE.md your-repo/
-cd your-repo
-
-# 3. Edit the research playbook (goal, editable files, strategy, constraints)
-$EDITOR PROGRAM.md
-
-# 4. Edit the evaluation setup (how to run, how to parse the metric, ground truth)
-$EDITOR PREPARE.md
-
-# 5. (Optional) Add a reproducible environment
-mkdir .polyresearch/
-
-# 6. Launch one lead agent from the repo root:
-#    "You are the lead for this project."
-#
-# 7. Launch one or more contributor agents:
-#    "Do polyresearch on this project."
-#    If you do not explicitly say "you are the lead", the agent defaults to contributor.
 ```
 
-Other platforms and build-from-source instructions are in [cli/README.md](cli/README.md).
+1. **Install the agent skill.** Copy `skills/polyresearch/SKILL.md` from this repo into your agent's skill directory (e.g. `~/.claude/skills/polyresearch/`, or equivalent for your agent). The skill teaches agents the full protocol -- bootstrapping, the lead loop, the contributor loop, and all CLI usage.
 
-Share the repo. Contributors point their agents at it and join. The lead stays in the repo root on `main`; contributors work from the worktree path returned by `polyresearch claim`.
+## Usage
 
-**Contributing to a project:**
+Polyresearch has two agent roles: a **lead** and one or more **contributors**. The **maintainer** is the human who writes the research playbook and optionally reviews work.
 
-Point your agent at any repo with a `POLYRESEARCH.md` and a `polyresearch` binary. The agent reads the protocol and uses the CLI for all protocol mutations: finding theses, claiming, recording attempts, submitting candidates, reviewing, syncing, and deciding.
+### Start a new project
 
-What you need:
-
-- An agent that can read files and run shell commands (any coding agent)
-- `gh auth login`
-- `polyresearch` installed in the working environment
-- If the repo has a `.polyresearch/` directory, use it for setup and execution
-- Otherwise, follow the setup instructions in `PREPARE.md`
-
-Initialize each machine or clone once with `polyresearch init`. This writes a local `.polyresearch-node.toml` file with the node ID and an optional natural-language `resource_policy`. If you do not set one, the protocol default is to maximize throughput. Agents can inspect the effective policy and recent node activity with `polyresearch pace`.
-
-Polyresearch does not mandate a specific agent, model, or sandbox. It does mandate the `polyresearch` CLI as the canonical path for protocol state changes. Bring your own agent and tooling around that boundary.
-
-## Project structure
+Tell your lead agent to bootstrap polyresearch on any GitHub repo. The skill fetches the protocol templates, drafts `PROGRAM.md` and `PREPARE.md` by exploring the repo, and hands them to you for review.
 
 ```
-POLYRESEARCH.md     -- coordination protocol (drop-in, never edited)
-PROGRAM.md          -- research playbook (human writes and edits)
-PREPARE.md          -- evaluation setup and trust boundary (human writes, rarely changes)
-results.tsv         -- lab notebook of every experiment (lead-maintained)
-.polyresearch/      -- reproducible environment (maintainer provides, optional)
+Bootstrap polyresearch on https://github.com/owner/repo.
+You are the lead for this project.
 ```
 
-## Roles
+After you review the drafts, the lead enters its loop: sync results, process PRs, generate new theses when the queue runs low.
 
-**Maintainer.** Writes `PROGRAM.md` and `PREPARE.md`. Picks the tooling. When `auto_approve` is `false`, reviews generated theses and candidate PRs with `/approve` or `/reject` before agents can proceed.
+### Run a contributor
 
-**Contributor.** A machine running an agent. Runs experiments and reviews others' results. Many contributors per project.
+Point your agent at any repo that has been bootstrapped with polyresearch:
 
-**Lead.** A machine running an agent dedicated to project management. The lead generates theses from results history, runs policy checks, decides PRs, and maintains results.tsv as sole writer. It does not claim theses, run experiments, submit candidates, or review PRs. One per project.
+```
+Do polyresearch on https://github.com/owner/repo.
+```
 
-## Design choices
+The agent clones the repo, claims work from the issue queue, runs experiments, and submits results in a loop until you stop it. Launch as many contributor agents as you have machines.
 
-- **Just the protocol.** Three markdown files and an optional environment directory you drop into any repo. No opinions on agent, model, sandbox, or language. The maintainer picks the tooling.
-- **Structured comments as the state mechanism.** Agents coordinate through structured HTML comments on GitHub Issues and PRs. State is derived from the comment trail, not from mutable labels. Every transition is append-only, attributed, and auditable.
-- **Mandatory CLI, familiar GitHub activity.** Agents and humans use `polyresearch` for protocol mutations, but GitHub still shows the same readable issue comments, PR comments, and branch structure as before.
-- **Independent peer review.** Multiple contributors rerun the evaluation, measuring the baseline themselves. Results must agree within tolerance. No single contributor decides the outcome.
-- **Human-in-the-loop when you want it.** Set `auto_approve` to `false` and the lead waits for the maintainer to `/approve` or `/reject` each thesis and PR before proceeding. The maintainer's feedback steers future thesis generation. Flip it back to `true` when you're comfortable with the trajectory.
-- **The evaluation is the trust boundary.** `PREPARE.md` defines how results are judged. The evaluation code is outside the editable surface. Agents cannot grade their own homework.
-- **Failed experiments are data.** Every attempt stays as an unmerged branch with a row in `results.tsv` and a structured attempt comment on the thesis issue. No `git reset`, no lost code. The lead reads the full history to generate new theses and avoid dead ends.
-- **The environment is the maintainer's choice.** `.polyresearch/` is the standard location for the reproducible environment. Polyresearch standardizes where it lives, not what goes in it.
+### Run on a remote machine
+
+The agent runs on your local machine. The experiments run on a remote server (e.g. a cloud instance with GPUs). Set up the repo, CLI, and `gh` auth on the remote, then tell your agent:
+
+```
+Do polyresearch on https://github.com/owner/repo.
+Run all evaluations and experiments over SSH on user@remote-host.
+```
+
+Your local machine only needs the agent; the remote server does the compute.
+
+## CLI
+
+The `polyresearch` CLI handles all protocol state transitions: claiming theses, posting attempts, submitting candidates, syncing results, and more. Agents use it -- not humans. The skill teaches agents every command, so you don't need to learn them yourself.
+
+Full command reference in [cli/README.md](cli/README.md).
+
+## Design
+
+**Protocol, not a platform.** Three markdown files and an optional environment directory dropped into any repo. No opinions on agent, model, sandbox, or language.
+
+**Structured comments as state.** Agents coordinate through structured HTML comments on GitHub Issues and PRs. State is derived from the comment trail, not from labels or a database. Every transition is append-only and auditable.
+
+**Claim-based work distribution.** Theses live on GitHub Issues. Contributors claim them atomically through the CLI. Stale claims expire after a configurable timeout and return to the queue.
+
+**The evaluation is the trust boundary.** `PREPARE.md` defines how results are judged. The evaluation code lives outside the editable surface. Agents cannot modify the evaluator or the scoring logic.
+
+**Peer review.** When enabled, reviewers independently check out the candidate and the baseline, run the evaluation themselves, and post their own measurements. The lead only merges when reviewers agree.
+
+**Human-in-the-loop.** Set `auto_approve: false` and the lead waits for the maintainer to `/approve` or `/reject` each thesis and PR. Maintainer feedback steers future thesis generation.
+
+**Failed experiments are data.** Every attempt gets a row in `results.tsv` and stays as an unmerged branch. The lead reads the full history to generate new theses and avoid dead ends.
+
+**Resource pacing.** Each node can set a natural-language `resource_policy`. The `polyresearch pace` command compares the policy against recent throughput so agents can adjust their parallelism.
 
 ## Examples
 
-The `[examples/](examples/)` directory contains three ready-to-run polyresearch projects. Each one is a self-contained repo layout you can copy, point your agents at, and start running experiments immediately.
+
+| Example                                                    | What it does                                                                                                  |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| [corewar](examples/corewar/)                               | Evolve a Redcode warrior against a frozen gauntlet. Free to evaluate, fast iteration, deterministic results.  |
+| [jailbreakbench-defense](examples/jailbreakbench-defense/) | Harden a system prompt against real jailbreak attacks. Cheap eval, large prompt-design search space.          |
+| [pokeragent](examples/pokeragent/)                         | Build a poker agent through prompt and tool optimization. Two-dimensional search space, game-theoretic depth. |
 
 
-| Example                                                    | What it optimizes                            | Editable surface              | Eval cost       | Eval time |
-| ---------------------------------------------------------- | -------------------------------------------- | ----------------------------- | --------------- | --------- |
-| [corewar](examples/corewar/)                               | Redcode warrior for a battle gauntlet        | `warrior.red`                 | Free (CPU only) | 1-4 min   |
-| [jailbreakbench-defense](examples/jailbreakbench-defense/) | System prompt against adversarial jailbreaks | `system_prompt.md`            | ~$0.07          | 15-20 min |
-| [pokeragent](examples/pokeragent/)                         | Poker agent prompt and tool suite            | `system_prompt.md` + `tools/` | ~$0.50          | 20-35 min |
+## License
 
-
-The examples were chosen to cover different points on the cost/complexity spectrum while all sharing the same properties that make polyresearch useful: large search spaces, cheap-to-verify results, and problems where throwing more machines at the search (rather than spending more time on one machine) produces better outcomes. See each example's README for why it fits.
-
-## Docs
-
-- [Concept notes](../CONCEPT.md)
-- [Design document](../DESIGN.md)
-- [Future considerations](../FUTURE.md)
-
+MIT
