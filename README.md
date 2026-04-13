@@ -105,4 +105,6 @@ Full command reference in [cli/README.md](cli/README.md).
 
 ## License
 
-MIT
+MIT 
+
+By Superagent Technologies, Inc.
