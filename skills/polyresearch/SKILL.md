@@ -35,7 +35,17 @@ description: >-
 
 ## Bootstrap new projects
 
-If a repo has `POLYRESEARCH.md` but `PROGRAM.md` or `PREPARE.md` are missing, or still contain placeholders such as `replace-me`, draft both files before you try to claim or generate work. Use the stock `PROGRAM.md` and `PREPARE.md` files as templates; they already define the sections. Explore the repo, fill in both drafts, and hand them to the maintainer for review before launching agents.
+When bootstrapping a new project, fetch the three template files directly from the polyresearch repo:
+
+```
+https://raw.githubusercontent.com/superagent-ai/polyresearch/main/POLYRESEARCH.md
+https://raw.githubusercontent.com/superagent-ai/polyresearch/main/PROGRAM.md
+https://raw.githubusercontent.com/superagent-ai/polyresearch/main/PREPARE.md
+```
+
+Download these into the target project root. Then explore the repo, fill in `PROGRAM.md` (research goal, editable surface, config values) and `PREPARE.md` (how to run and score experiments), and hand both drafts to the maintainer for review before launching agents.
+
+If `PROGRAM.md` or `PREPARE.md` already exist but still contain placeholders such as `replace-me`, they still need to be filled in.
 
 ## Core principle
 
