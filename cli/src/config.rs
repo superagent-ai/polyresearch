@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -258,10 +259,7 @@ impl ProgramSpec {
     pub fn editable_globset(&self) -> Result<GlobSet> {
         let mut builder = GlobSetBuilder::new();
         for pattern in &self.can_modify {
-            builder.add(
-                Glob::new(pattern)
-                    .wrap_err_with(|| format!("invalid editable glob pattern `{pattern}`"))?,
-            );
+            builder.add(compile_program_glob(pattern, "editable")?);
         }
         Ok(builder.build()?)
     }
@@ -273,7 +271,7 @@ impl ProgramSpec {
 
     pub fn is_protected(&self, file_path: &str) -> bool {
         self.cannot_modify.iter().any(|pattern| {
-            Glob::new(pattern)
+            compile_program_glob(pattern, "protected")
                 .map(|glob| glob.compile_matcher().is_match(file_path))
                 .unwrap_or(false)
         })
@@ -295,21 +293,50 @@ fn parse_markdown_list(contents: &str, heading: &str) -> Vec<String> {
             continue;
         }
 
-        if let Some(item) = trimmed.strip_prefix("- ") {
-            let value = item
-                .split(" - ")
-                .next()
-                .unwrap_or(item)
-                .trim()
-                .trim_matches('`')
-                .to_string();
-            if !value.is_empty() {
-                items.push(value);
-            }
+        if let Some(item) = trimmed.strip_prefix("- ").and_then(parse_markdown_item) {
+            items.push(item);
         }
     }
 
     items
+}
+
+fn parse_markdown_item(item: &str) -> Option<String> {
+    extract_backtick_content(item).or_else(|| {
+        let value = strip_markdown_item_description(item)
+            .trim()
+            .trim_matches('`')
+            .to_string();
+        (!value.is_empty()).then_some(value)
+    })
+}
+
+fn extract_backtick_content(item: &str) -> Option<String> {
+    let start = item.find('`')?;
+    let end = item[start + 1..].find('`')? + start + 1;
+    let content = item[start + 1..end].trim().to_string();
+    (!content.is_empty()).then_some(content)
+}
+
+fn strip_markdown_item_description(item: &str) -> &str {
+    [" — ", " – ", " - "]
+        .iter()
+        .find_map(|separator| item.split_once(separator).map(|(value, _)| value))
+        .unwrap_or(item)
+}
+
+fn compile_program_glob(pattern: &str, label: &str) -> Result<Glob> {
+    let normalized = normalize_program_pattern(pattern);
+    Glob::new(normalized.as_ref())
+        .wrap_err_with(|| format!("invalid {label} glob pattern `{pattern}`"))
+}
+
+fn normalize_program_pattern(pattern: &str) -> Cow<'_, str> {
+    if pattern.ends_with('/') {
+        Cow::Owned(format!("{pattern}**"))
+    } else {
+        Cow::Borrowed(pattern)
+    }
 }
 
 fn parse_duration(value: &str) -> Result<Duration> {
@@ -391,17 +418,62 @@ mod tests {
     fn parses_markdown_lists() {
         let contents = r#"
 ## What you CAN modify
-- `system_prompt.md` - update the prompt
-- `tools/**/*.py`
+- `lib/` — the entire lib directory
+- tools/**/*.py - helper scripts
+- scripts/**/*.sh – shell helpers
 
 ## What you CANNOT modify
-- `PREPARE.md`
+- `PREPARE.md` — trust boundary
+- docs/** - generated docs
 "#;
 
         assert_eq!(
             parse_markdown_list(contents, "## What you CAN modify"),
-            vec!["system_prompt.md".to_string(), "tools/**/*.py".to_string()]
+            vec![
+                "lib/".to_string(),
+                "tools/**/*.py".to_string(),
+                "scripts/**/*.sh".to_string()
+            ]
         );
+        assert_eq!(
+            parse_markdown_list(contents, "## What you CANNOT modify"),
+            vec!["PREPARE.md".to_string(), "docs/**".to_string()]
+        );
+    }
+
+    #[test]
+    fn extracts_backtick_content_before_description() {
+        assert_eq!(
+            parse_markdown_item("`lib/` — the entire lib directory"),
+            Some("lib/".to_string())
+        );
+    }
+
+    #[test]
+    fn editable_directory_patterns_match_descendants() {
+        let program = ProgramSpec {
+            can_modify: vec!["lib/".to_string()],
+            cannot_modify: Vec::new(),
+        };
+
+        assert!(program.is_editable("lib/rules/indent.js").unwrap());
+        assert!(
+            program
+                .is_editable("lib/linter/source-code-traverser.js")
+                .unwrap()
+        );
+        assert!(!program.is_editable("tests/lib/rules/indent.js").unwrap());
+    }
+
+    #[test]
+    fn protected_directory_patterns_match_descendants() {
+        let program = ProgramSpec {
+            can_modify: vec!["lib/".to_string()],
+            cannot_modify: vec!["lib/generated/".to_string()],
+        };
+
+        assert!(program.is_protected("lib/generated/config.js"));
+        assert!(!program.is_protected("lib/rules/indent.js"));
     }
 
     #[test]
