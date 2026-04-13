@@ -302,11 +302,9 @@ fn parse_markdown_list(contents: &str, heading: &str) -> Vec<String> {
 }
 
 fn parse_markdown_item(item: &str) -> Option<String> {
-    extract_backtick_content(item).or_else(|| {
-        let value = strip_markdown_item_description(item)
-            .trim()
-            .trim_matches('`')
-            .to_string();
+    let pattern = strip_markdown_item_description(item).trim();
+    extract_backtick_content(pattern).or_else(|| {
+        let value = pattern.trim_matches('`').to_string();
         (!value.is_empty()).then_some(value)
     })
 }
@@ -446,6 +444,14 @@ mod tests {
         assert_eq!(
             parse_markdown_item("`lib/` — the entire lib directory"),
             Some("lib/".to_string())
+        );
+    }
+
+    #[test]
+    fn ignores_backticks_in_description_when_pattern_is_not_wrapped() {
+        assert_eq!(
+            parse_markdown_item("docs/** - generated from `source`"),
+            Some("docs/**".to_string())
         );
     }
 
