@@ -319,7 +319,9 @@ fn extract_backtick_content(item: &str) -> Option<String> {
 fn strip_markdown_item_description(item: &str) -> &str {
     [" — ", " – ", " - "]
         .iter()
-        .find_map(|separator| item.split_once(separator).map(|(value, _)| value))
+        .filter_map(|separator| item.find(separator).map(|index| (index, separator)))
+        .min_by_key(|(index, _)| *index)
+        .map(|(index, _)| &item[..index])
         .unwrap_or(item)
 }
 
@@ -452,6 +454,14 @@ mod tests {
         assert_eq!(
             parse_markdown_item("docs/** - generated from `source`"),
             Some("docs/**".to_string())
+        );
+    }
+
+    #[test]
+    fn splits_on_the_earliest_separator_position() {
+        assert_eq!(
+            parse_markdown_item("tools/**/*.py - utilities — note"),
+            Some("tools/**/*.py".to_string())
         );
     }
 
