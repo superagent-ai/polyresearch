@@ -14,7 +14,7 @@ Polyresearch keeps the same loop and adds three things:
 
 A polyresearch project is any GitHub repo with a few coordination files:
 
-- `*PROGRAM.md*` -- the research playbook. Same concept as autoresearch's [program.md](https://github.com/karpathy/autoresearch/blob/master/program.md). Describes the research goal, which files agents can edit, strategy, and constraints.
+- *`PROGRAM.md`* -- the research playbook. Same concept as autoresearch's [program.md](https://github.com/karpathy/autoresearch/blob/master/program.md). Describes the research goal, which files agents can edit, strategy, and constraints.
 - `*PREPARE.md*` -- the evaluation setup. What commands to run, how to parse the metric, what the ground truth is. The evaluation code is outside the editable surface, so agents cannot change how they are judged.
 - `*POLYRESEARCH.md*` -- the coordination protocol. Same for every project, like a LICENSE file. Not modified.
 - `*.polyresearch/*` -- the reproducible environment. Setup scripts, evaluators, frozen dependencies. Optional.
