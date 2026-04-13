@@ -26,6 +26,9 @@ pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
     if pr_state.decision.is_some() {
         return Err(eyre!("PR #{} already has a decision", args.pr));
     }
+    if pr_state.policy_pass {
+        return Err(eyre!("PR #{} already has a policy-pass", args.pr));
+    }
 
     let files = ctx.github.list_pull_request_files(args.pr)?;
     let violations = files
