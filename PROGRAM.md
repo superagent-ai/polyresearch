@@ -14,6 +14,7 @@ assignment_timeout: 24h
 review_timeout: 12h
 min_queue_depth: 5
 max_queue_depth: 10
+cli_version: 0.3.1
 
 ## Goal
 

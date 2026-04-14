@@ -149,6 +149,7 @@ pub struct ProtocolConfig {
     pub review_timeout: Duration,
     pub min_queue_depth: usize,
     pub max_queue_depth: Option<usize>,
+    pub cli_version: Option<String>,
 }
 
 impl Default for ProtocolConfig {
@@ -164,6 +165,7 @@ impl Default for ProtocolConfig {
             review_timeout: Duration::from_secs(12 * 60 * 60),
             min_queue_depth: 5,
             max_queue_depth: None,
+            cli_version: None,
         }
     }
 }
@@ -241,6 +243,9 @@ impl ProtocolConfig {
                             format!("invalid max_queue_depth value `{value}`")
                         })?);
                 }
+                "cli_version" => {
+                    config.cli_version = Some(value.to_string());
+                }
                 _ => {}
             }
         }
@@ -263,6 +268,18 @@ impl ProtocolConfig {
         self.maintainer_github_login
             .as_deref()
             .ok_or_else(|| eyre!("maintainer_github_login is required in PROGRAM.md"))
+    }
+
+    pub fn check_cli_version(&self, current: &str) -> Result<()> {
+        let Some(required) = &self.cli_version else {
+            return Ok(());
+        };
+        if current == required {
+            return Ok(());
+        }
+        Err(eyre!(
+            "this project requires polyresearch CLI v{required}, but you are running v{current}"
+        ))
     }
 }
 
@@ -709,6 +726,62 @@ Do something.
         assert_eq!(config.lead_github_login.as_deref(), Some("alice"));
 
         fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn loads_cli_version_from_program() {
+        let repo_root = unique_temp_dir("cli-version-load");
+        fs::write(
+            repo_root.join("PROGRAM.md"),
+            "# Research Program\n\ncli_version: 1.2.3\n\n## Goal\n\nDo something.\n",
+        )
+        .unwrap();
+
+        let config = ProtocolConfig::load(&repo_root).unwrap();
+        assert_eq!(config.cli_version.as_deref(), Some("1.2.3"));
+
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn cli_version_defaults_to_none() {
+        let repo_root = unique_temp_dir("cli-version-none");
+        fs::write(
+            repo_root.join("PROGRAM.md"),
+            "# Research Program\n\nlead_github_login: alice\n\n## Goal\n\nDo something.\n",
+        )
+        .unwrap();
+
+        let config = ProtocolConfig::load(&repo_root).unwrap();
+        assert!(config.cli_version.is_none());
+
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn check_cli_version_passes_when_matching() {
+        let config = ProtocolConfig {
+            cli_version: Some("1.2.3".to_string()),
+            ..Default::default()
+        };
+        assert!(config.check_cli_version("1.2.3").is_ok());
+    }
+
+    #[test]
+    fn check_cli_version_fails_on_mismatch() {
+        let config = ProtocolConfig {
+            cli_version: Some("2.0.0".to_string()),
+            ..Default::default()
+        };
+        let err = config.check_cli_version("1.2.3").unwrap_err();
+        assert!(err.to_string().contains("v2.0.0"));
+        assert!(err.to_string().contains("v1.2.3"));
+    }
+
+    #[test]
+    fn check_cli_version_skipped_when_unset() {
+        let config = ProtocolConfig::default();
+        assert!(config.check_cli_version("0.0.0").is_ok());
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {
