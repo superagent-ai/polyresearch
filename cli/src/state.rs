@@ -13,6 +13,7 @@ use crate::validation::{AuditFinding, ProtocolEnvelope, validate_issue, validate
 #[derive(Debug, Clone, Serialize)]
 pub struct RepositoryState {
     pub theses: Vec<ThesisState>,
+    pub pull_request_count: usize,
     pub active_nodes: Vec<String>,
     pub queue_depth: usize,
     pub current_best_accepted_metric: Option<f64>,
@@ -129,6 +130,17 @@ impl RepositoryState {
         let pr_numbers = prs.iter().map(|pr| pr.number).collect::<Vec<_>>();
         let (mut issue_comments, mut pr_comments) =
             fetch_all_comments(Arc::clone(github), &issue_numbers, &pr_numbers).await?;
+        Self::derive_from_fetched(issues, prs, &mut issue_comments, &mut pr_comments, config)
+    }
+
+    pub fn derive_from_fetched(
+        issues: Vec<Issue>,
+        prs: Vec<PullRequest>,
+        issue_comments: &mut std::collections::HashMap<u64, Vec<IssueComment>>,
+        pr_comments: &mut std::collections::HashMap<u64, Vec<IssueComment>>,
+        config: &ProtocolConfig,
+    ) -> Result<Self> {
+        let pull_request_count = prs.len();
         let pr_states = prs
             .into_iter()
             .map(|pr| {
@@ -183,6 +195,7 @@ impl RepositoryState {
 
         Ok(Self {
             theses,
+            pull_request_count,
             active_nodes,
             queue_depth,
             current_best_accepted_metric,

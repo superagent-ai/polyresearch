@@ -12,10 +12,12 @@ use polyresearch_cli::cli::{
 };
 use polyresearch_cli::commands;
 use polyresearch_cli::comments::{Observation, ReleaseReason};
-use polyresearch_cli::config::{MetricDirection, NodeConfig, ProgramSpec, ProtocolConfig};
+use polyresearch_cli::config::{
+    DEFAULT_API_BUDGET, MetricDirection, NodeConfig, ProgramSpec, ProtocolConfig,
+};
 use polyresearch_cli::github::{
     CommentUser, GitHubApi, Issue, IssueComment, IssueListState, PullRequest, PullRequestFile,
-    PullRequestListState, RepoRef,
+    PullRequestListState, RateLimitBucket, RateLimitResources, RateLimitStatus, RepoRef,
 };
 use polyresearch_cli::state::{ReleaseRecord, RepositoryState, ThesisPhase, ThesisState};
 use serde::Deserialize;
@@ -78,6 +80,10 @@ impl GitHubApi for MockGitHubClient {
 
     fn auth_token(&self) -> Result<String> {
         Ok("test-token".to_string())
+    }
+
+    fn get_rate_limit_status(&self) -> Result<RateLimitStatus> {
+        Ok(default_rate_limit_status(4_000))
     }
 
     fn repo_has_issues(&self) -> Result<bool> {
@@ -291,6 +297,7 @@ async fn init_writes_node_identity() {
         config.resource_policy.as_deref(),
         Some("Use 2 GPUs and keep them busy.")
     );
+    assert_eq!(config.api_budget, DEFAULT_API_BUDGET);
 }
 
 #[tokio::test]
@@ -313,11 +320,18 @@ async fn env_override_uses_session_node_id() {
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
         .await
         .unwrap();
-    let output = commands::pace::build_output(ctx.repo.slug(), &node_config, &repo_state);
+    let output = commands::pace::build_output(
+        ctx.repo.slug(),
+        ctx.api_budget,
+        &node_config,
+        &repo_state,
+        &default_rate_limit_status(4_000),
+    );
 
     assert_eq!(output.node_id, "lead/env-node");
     assert_eq!(output.resource_policy, "Keep CPUs saturated.");
     assert!(!output.is_default_policy);
+    assert_eq!(output.rate_limit.configured_budget, DEFAULT_API_BUDGET);
 }
 
 #[tokio::test]
@@ -364,7 +378,13 @@ async fn pace_reports_default_policy_and_node_metrics() {
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
         .await
         .unwrap();
-    let output = commands::pace::build_output(ctx.repo.slug(), &node_config, &repo_state);
+    let output = commands::pace::build_output(
+        ctx.repo.slug(),
+        ctx.api_budget,
+        &node_config,
+        &repo_state,
+        &default_rate_limit_status(3_847),
+    );
 
     assert_eq!(output.node_id, "test-node");
     assert!(output.is_default_policy);
@@ -373,6 +393,112 @@ async fn pace_reports_default_policy_and_node_metrics() {
     assert_eq!(output.claimable_theses, 1);
     assert_eq!(output.active_claims, 2);
     assert_eq!(output.idle_minutes, Some(0));
+    assert_eq!(output.rate_limit.derive_cost, 5);
+    assert_eq!(output.rate_limit.commands_left, 769);
+    assert!(!output.rate_limit.is_low);
+}
+
+#[tokio::test]
+async fn pace_reports_low_when_quota_near_exhaustion() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("pace-low");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Pace);
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let node_config = NodeConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
+    let output = commands::pace::build_output(
+        ctx.repo.slug(),
+        ctx.api_budget,
+        &node_config,
+        &repo_state,
+        &default_rate_limit_status(3),
+    );
+
+    assert_eq!(output.rate_limit.derive_cost, 2);
+    assert_eq!(output.rate_limit.commands_left, 1);
+    assert!(output.rate_limit.is_low);
+}
+
+#[tokio::test]
+async fn pace_reports_exhausted_when_quota_below_derive_cost() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("pace-exhausted");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Pace);
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let node_config = NodeConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
+    let output = commands::pace::build_output(
+        ctx.repo.slug(),
+        ctx.api_budget,
+        &node_config,
+        &repo_state,
+        &default_rate_limit_status(1),
+    );
+
+    assert_eq!(output.rate_limit.derive_cost, 2);
+    assert_eq!(output.rate_limit.commands_left, 0);
+    assert!(output.rate_limit.is_low);
+    assert!(output.rate_limit.remaining < output.rate_limit.derive_cost);
+}
+
+#[tokio::test]
+async fn init_preserves_custom_api_budget() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("init-budget");
+    let toml_path = repo.path.join(".polyresearch-node.toml");
+    fs::write(&toml_path, "node_id = \"old/node\"\napi_budget = 1000\n").unwrap();
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead",
+        false,
+        Commands::Init(InitArgs {
+            node: Some("new-node".to_string()),
+            resource_policy: None,
+        }),
+    );
+
+    commands::init::run(
+        &ctx,
+        &InitArgs {
+            node: Some("new-node".to_string()),
+            resource_policy: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let config: NodeConfig = toml::from_str(&fs::read_to_string(&toml_path).unwrap()).unwrap();
+    assert_eq!(config.node_id, "lead/new-node");
+    assert_eq!(config.api_budget, 1_000);
 }
 
 #[tokio::test]
@@ -925,6 +1051,7 @@ async fn duties_reports_metric_floor_and_stale_queue_for_lead() {
             make_approved_thesis(2),
             make_approved_thesis(3),
         ],
+        0,
         3,
         Some(25.8),
     );
@@ -962,6 +1089,7 @@ async fn duties_reports_no_claimable_work_for_contributor_at_metric_floor() {
             make_approved_thesis(2),
             make_approved_thesis(3),
         ],
+        0,
         3,
         Some(25.8),
     );
@@ -1003,7 +1131,7 @@ async fn duties_reports_no_claimable_work_when_all_theses_were_released_by_node(
         created_at: chrono::Utc::now(),
     });
 
-    let repo_state = make_repo_state(vec![thesis_one, thesis_two], 2, None);
+    let repo_state = make_repo_state(vec![thesis_one, thesis_two], 0, 2, None);
     let report = commands::duties::check(&ctx, &repo_state).unwrap();
 
     assert!(
@@ -1029,7 +1157,7 @@ async fn duties_reports_waiting_for_approval_when_queue_has_only_submitted_these
     ctx.config.auto_approve = false;
     commands::write_node_id(&repo.path, "node-a").unwrap();
 
-    let repo_state = make_repo_state(vec![make_submitted_thesis(1)], 1, None);
+    let repo_state = make_repo_state(vec![make_submitted_thesis(1)], 0, 1, None);
     let report = commands::duties::check(&ctx, &repo_state).unwrap();
 
     assert!(
@@ -1116,6 +1244,7 @@ fn make_ctx(
             name: "test-repo".to_string(),
         },
         github,
+        api_budget: DEFAULT_API_BUDGET,
         config: ProtocolConfig {
             required_confirmations: 0,
             metric_tolerance: Some(0.01),
@@ -1137,11 +1266,13 @@ fn make_ctx(
 
 fn make_repo_state(
     theses: Vec<ThesisState>,
+    pull_request_count: usize,
     queue_depth: usize,
     current_best_accepted_metric: Option<f64>,
 ) -> RepositoryState {
     RepositoryState {
         theses,
+        pull_request_count,
         active_nodes: vec![],
         queue_depth,
         current_best_accepted_metric,
@@ -1177,6 +1308,19 @@ fn make_approved_thesis(number: u64) -> ThesisState {
         pull_requests: vec![],
         best_attempt_metric: None,
         findings: vec![],
+    }
+}
+
+fn default_rate_limit_status(remaining: u64) -> RateLimitStatus {
+    RateLimitStatus {
+        resources: RateLimitResources {
+            core: RateLimitBucket {
+                limit: DEFAULT_API_BUDGET,
+                remaining,
+                used: DEFAULT_API_BUDGET.saturating_sub(remaining),
+                reset: (chrono::Utc::now() + chrono::Duration::minutes(42)).timestamp() as u64,
+            },
+        },
     }
 }
 

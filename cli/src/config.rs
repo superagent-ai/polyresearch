@@ -9,6 +9,7 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_RESOURCE_POLICY: &str = "Maximize throughput. Never leave claimable theses idle while experiments could be running. Run evaluations in parallel when the evaluator supports it. Interleave duties with long-running evaluations.";
+pub const DEFAULT_API_BUDGET: u64 = 5_000;
 pub const NODE_ID_ENV_VAR: &str = "POLYRESEARCH_NODE_ID";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,13 +24,20 @@ pub struct NodeConfig {
     pub node_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_policy: Option<String>,
+    #[serde(default = "default_api_budget")]
+    pub api_budget: u64,
 }
 
 impl NodeConfig {
-    pub fn new(node_id: impl Into<String>, resource_policy: Option<String>) -> Self {
+    pub fn new(
+        node_id: impl Into<String>,
+        resource_policy: Option<String>,
+        api_budget: u64,
+    ) -> Self {
         Self {
             node_id: node_id.into(),
             resource_policy: normalize_resource_policy(resource_policy),
+            api_budget: normalize_api_budget(api_budget),
         }
     }
 
@@ -60,10 +68,25 @@ impl NodeConfig {
             }
         };
 
-        Ok(Self::new(
-            node_id,
-            file_config.and_then(|config| config.resource_policy),
-        ))
+        let resource_policy = file_config
+            .as_ref()
+            .and_then(|config| config.resource_policy.clone());
+        let api_budget = file_config
+            .as_ref()
+            .map(|config| config.api_budget)
+            .unwrap_or(DEFAULT_API_BUDGET);
+
+        Ok(Self::new(node_id, resource_policy, api_budget))
+    }
+
+    pub fn load_api_budget(repo_root: &Path) -> u64 {
+        let path = node_config_path(repo_root);
+        let budget = fs::read_to_string(&path)
+            .ok()
+            .and_then(|contents| toml::from_str::<NodeConfig>(&contents).ok())
+            .map(|config| config.api_budget)
+            .unwrap_or(DEFAULT_API_BUDGET);
+        normalize_api_budget(budget)
     }
 
     pub fn save(&self, repo_root: &Path) -> Result<()> {
@@ -87,6 +110,10 @@ impl NodeConfig {
             None => (DEFAULT_RESOURCE_POLICY, true),
         }
     }
+
+    pub fn effective_api_budget(&self) -> u64 {
+        normalize_api_budget(self.api_budget)
+    }
 }
 
 pub fn node_config_path(repo_root: &Path) -> PathBuf {
@@ -97,6 +124,10 @@ fn load_node_config_from_file(path: &Path) -> Result<NodeConfig> {
     let contents =
         fs::read_to_string(path).wrap_err_with(|| format!("failed to read {}", path.display()))?;
     toml::from_str(&contents).wrap_err_with(|| format!("failed to parse {}", path.display()))
+}
+
+fn default_api_budget() -> u64 {
+    DEFAULT_API_BUDGET
 }
 
 fn node_id_override() -> Option<String> {
@@ -507,6 +538,7 @@ mod tests {
             &path,
             r#"node_id = "node-7f83"
 resource_policy = "Run 4 evals in parallel."
+api_budget = 15000
 "#,
         )
         .unwrap();
@@ -517,6 +549,7 @@ resource_policy = "Run 4 evals in parallel."
             config.resource_policy.as_deref(),
             Some("Run 4 evals in parallel.")
         );
+        assert_eq!(config.api_budget, 15_000);
 
         fs::remove_dir_all(repo_root).unwrap();
     }
@@ -575,10 +608,54 @@ resource_policy = "Run 4 evals in parallel."
 
     #[test]
     fn defaults_resource_policy_when_missing() {
-        let config = NodeConfig::new("node-7f83", None);
+        let config = NodeConfig::new("node-7f83", None, DEFAULT_API_BUDGET);
         let (policy, is_default) = config.effective_resource_policy();
         assert!(is_default);
         assert_eq!(policy, DEFAULT_RESOURCE_POLICY);
+    }
+
+    #[test]
+    fn defaults_api_budget_when_missing() {
+        let config = NodeConfig::new("node-7f83", None, 0);
+        assert_eq!(config.effective_api_budget(), DEFAULT_API_BUDGET);
+    }
+
+    #[test]
+    fn load_api_budget_reads_custom_value() {
+        let repo_root = unique_temp_dir("budget-custom");
+        fs::write(
+            node_config_path(&repo_root),
+            "node_id = \"n\"\napi_budget = 1000\n",
+        )
+        .unwrap();
+
+        assert_eq!(NodeConfig::load_api_budget(&repo_root), 1_000);
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn load_api_budget_defaults_when_file_missing() {
+        let repo_root = unique_temp_dir("budget-missing");
+        assert_eq!(NodeConfig::load_api_budget(&repo_root), DEFAULT_API_BUDGET);
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn load_api_budget_defaults_on_corrupt_file() {
+        let repo_root = unique_temp_dir("budget-corrupt");
+        fs::write(node_config_path(&repo_root), "not valid toml {{{{").unwrap();
+
+        assert_eq!(NodeConfig::load_api_budget(&repo_root), DEFAULT_API_BUDGET);
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn load_api_budget_defaults_when_field_absent() {
+        let repo_root = unique_temp_dir("budget-absent");
+        fs::write(node_config_path(&repo_root), "node_id = \"n\"\n").unwrap();
+
+        assert_eq!(NodeConfig::load_api_budget(&repo_root), DEFAULT_API_BUDGET);
+        fs::remove_dir_all(repo_root).unwrap();
     }
 
     #[test]
@@ -650,4 +727,11 @@ fn normalize_resource_policy(resource_policy: Option<String>) -> Option<String> 
         let trimmed = value.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     })
+}
+
+fn normalize_api_budget(api_budget: u64) -> u64 {
+    match api_budget {
+        0 => DEFAULT_API_BUDGET,
+        value => value,
+    }
 }

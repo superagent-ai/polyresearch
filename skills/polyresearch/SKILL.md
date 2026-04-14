@@ -97,6 +97,8 @@ LOOP FOREVER:
      g. When the thesis is released or later resolved:
         git worktree remove <worktree-path>
         Return to the repo root before claiming again.
+        Immediately continue from step 0. Do not end the session after one
+        thesis cycle.
 
   4. Check for review work (PRs with policy-pass, no decision,
      not authored by you):
@@ -168,6 +170,8 @@ if any wording differs.
 - Post `polyresearch attempt` after EVERY experiment. Never batch.
 - Run `polyresearch submit` immediately when you observe `improved`.
   Do not "keep trying."
+- After `submit` or `release`, finish cleanup and then continue the loop from
+  step 0. Ending the session after one thesis cycle is a protocol violation.
 - Lead: process the PR backlog before any other work. Period.
 - Lead: re-run `polyresearch sync` after any decision that closes a thesis.
 - Never modify files in `.polyresearch/` or files outside the editable surface

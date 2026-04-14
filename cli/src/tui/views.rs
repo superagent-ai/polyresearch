@@ -239,7 +239,13 @@ fn draw_detail(
             .pull_requests
             .iter()
             .filter(|pr| pr.pr.state == "OPEN")
-            .map(|pr| format!("#{} {}", pr.pr.number, pr.maintainer_status(ctx.config.auto_approve)))
+            .map(|pr| {
+                format!(
+                    "#{} {}",
+                    pr.pr.number,
+                    pr.maintainer_status(ctx.config.auto_approve)
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ");
         format!(

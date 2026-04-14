@@ -1,5 +1,6 @@
 use std::env;
 use std::path::PathBuf;
+use std::process;
 use std::sync::Arc;
 
 use clap::Parser;
@@ -7,7 +8,7 @@ use color_eyre::eyre::{Context, Result};
 use polyresearch_cli::cli::Cli;
 use polyresearch_cli::commands;
 use polyresearch_cli::commands::AppContext;
-use polyresearch_cli::config::{ProgramSpec, ProtocolConfig};
+use polyresearch_cli::config::{NodeConfig, ProgramSpec, ProtocolConfig};
 use polyresearch_cli::github::{GitHubApi, GitHubClient, RepoRef};
 
 #[tokio::main]
@@ -19,6 +20,7 @@ async fn main() -> Result<()> {
     let repo_root = discover_repo_root(&cwd)?;
     let repo = RepoRef::discover(cli.repo.as_deref(), &repo_root)?;
     let github: Arc<dyn GitHubApi> = Arc::new(GitHubClient::new(repo.clone()));
+    let api_budget = NodeConfig::load_api_budget(&repo_root);
     let config = ProtocolConfig::load(&repo_root)?;
     let program = ProgramSpec::load(&repo_root, &config)?;
 
@@ -27,11 +29,21 @@ async fn main() -> Result<()> {
         repo_root,
         repo,
         github,
+        api_budget,
         config,
         program,
     };
 
-    commands::run(ctx).await
+    match commands::run(ctx).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if let Some(exit) = error.downcast_ref::<commands::ProcessExit>() {
+                eprintln!("{}", exit.message);
+                process::exit(exit.code);
+            }
+            Err(error)
+        }
+    }
 }
 
 fn discover_repo_root(start: &PathBuf) -> Result<PathBuf> {

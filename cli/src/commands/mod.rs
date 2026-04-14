@@ -36,9 +36,24 @@ pub struct AppContext {
     pub repo_root: PathBuf,
     pub repo: RepoRef,
     pub github: Arc<dyn GitHubApi>,
+    pub api_budget: u64,
     pub config: ProtocolConfig,
     pub program: ProgramSpec,
 }
+
+#[derive(Debug)]
+pub struct ProcessExit {
+    pub code: i32,
+    pub message: String,
+}
+
+impl std::fmt::Display for ProcessExit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for ProcessExit {}
 
 pub async fn run(ctx: AppContext) -> Result<()> {
     match &ctx.cli.command {
@@ -75,6 +90,14 @@ where
     Ok(())
 }
 
+pub fn exit_with(code: i32, message: impl Into<String>) -> Result<()> {
+    Err(ProcessExit {
+        code,
+        message: message.into(),
+    }
+    .into())
+}
+
 pub fn read_node_config(repo_root: &PathBuf) -> Result<NodeConfig> {
     NodeConfig::load(repo_root)
 }
@@ -92,7 +115,13 @@ pub fn write_node_config(
     node: &str,
     resource_policy: Option<&str>,
 ) -> Result<()> {
-    NodeConfig::new(node.to_string(), resource_policy.map(ToString::to_string)).save(repo_root)
+    let existing_budget = NodeConfig::load_api_budget(repo_root);
+    NodeConfig::new(
+        node.to_string(),
+        resource_policy.map(ToString::to_string),
+        existing_budget,
+    )
+    .save(repo_root)
 }
 
 pub fn current_branch(repo_root: &PathBuf) -> Result<String> {

@@ -3,11 +3,18 @@ use std::env;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Context, Result, eyre};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Semaphore;
+
+const COMMENT_FETCH_CONCURRENCY_LIMIT: usize = 5;
+const TRANSIENT_RETRY_DELAYS_SECS: [u64; 3] = [5, 10, 20];
+const SECONDARY_RETRY_DELAYS_SECS: [u64; 3] = [60, 120, 240];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoRef {
@@ -73,6 +80,7 @@ pub trait GitHubApi: Send + Sync {
     fn current_login(&self) -> Result<String>;
     fn auth_status(&self) -> Result<String>;
     fn auth_token(&self) -> Result<String>;
+    fn get_rate_limit_status(&self) -> Result<RateLimitStatus>;
     fn repo_has_issues(&self) -> Result<bool>;
     fn list_thesis_issues(&self, state: IssueListState) -> Result<Vec<Issue>>;
     fn list_issue_comments(&self, issue_number: u64) -> Result<Vec<IssueComment>>;
@@ -133,6 +141,10 @@ impl GitHubClient {
         }
 
         Ok(String::from_utf8(output.stdout)?.trim().to_string())
+    }
+
+    pub fn get_rate_limit_status(&self) -> Result<RateLimitStatus> {
+        self.gh_api_json_typed("GET", "rate_limit", &[])
     }
 
     pub fn repo_has_issues(&self) -> Result<bool> {
@@ -368,6 +380,7 @@ impl GitHubClient {
         endpoint: &str,
         fields: &[(&str, &str)],
     ) -> Result<serde_json::Value> {
+        let idempotent = method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("HEAD");
         let mut command = Command::new("gh");
         command.arg("api");
         command.arg("--method").arg(method);
@@ -375,19 +388,19 @@ impl GitHubClient {
         for (key, value) in fields {
             command.arg("-f").arg(format!("{key}={value}"));
         }
-        run_json_command(command)
+        run_json_command(command, idempotent)
     }
 
     fn gh_json<const N: usize>(&self, args: [&str; N]) -> Result<serde_json::Value> {
         let mut command = Command::new("gh");
         command.args(args);
-        run_json_command(command)
+        run_json_command(command, true)
     }
 
     fn gh_output<const N: usize>(&self, args: [&str; N]) -> Result<String> {
         let mut command = Command::new("gh");
         command.args(args);
-        run_text_command(command)
+        run_text_command(command, false)
     }
 }
 
@@ -402,6 +415,10 @@ impl GitHubApi for GitHubClient {
 
     fn auth_token(&self) -> Result<String> {
         GitHubClient::auth_token(self)
+    }
+
+    fn get_rate_limit_status(&self) -> Result<RateLimitStatus> {
+        GitHubClient::get_rate_limit_status(self)
     }
 
     fn repo_has_issues(&self) -> Result<bool> {
@@ -489,23 +506,42 @@ pub async fn fetch_all_comments(
     HashMap<u64, Vec<IssueComment>>,
     HashMap<u64, Vec<IssueComment>>,
 )> {
+    let limiter = Arc::new(Semaphore::new(COMMENT_FETCH_CONCURRENCY_LIMIT));
     let mut issue_tasks = tokio::task::JoinSet::new();
     for issue_number in issue_numbers.iter().copied() {
         let github = Arc::clone(&github);
-        issue_tasks.spawn_blocking(move || {
-            github
-                .list_issue_comments(issue_number)
-                .map(|comments| (issue_number, comments))
+        let limiter = Arc::clone(&limiter);
+        issue_tasks.spawn(async move {
+            let _permit = limiter
+                .acquire_owned()
+                .await
+                .map_err(|_error| eyre!("GitHub comment fetch limiter was closed"))?;
+            tokio::task::spawn_blocking(move || {
+                github
+                    .list_issue_comments(issue_number)
+                    .map(|comments| (issue_number, comments))
+            })
+            .await
+            .map_err(|err| eyre!("issue comment fetch task failed: {err}"))?
         });
     }
 
     let mut pr_tasks = tokio::task::JoinSet::new();
     for pr_number in pr_numbers.iter().copied() {
         let github = Arc::clone(&github);
-        pr_tasks.spawn_blocking(move || {
-            github
-                .list_pull_request_comments(pr_number)
-                .map(|comments| (pr_number, comments))
+        let limiter = Arc::clone(&limiter);
+        pr_tasks.spawn(async move {
+            let _permit = limiter
+                .acquire_owned()
+                .await
+                .map_err(|_error| eyre!("GitHub comment fetch limiter was closed"))?;
+            tokio::task::spawn_blocking(move || {
+                github
+                    .list_pull_request_comments(pr_number)
+                    .map(|comments| (pr_number, comments))
+            })
+            .await
+            .map_err(|err| eyre!("pull request comment fetch task failed: {err}"))?
         });
     }
 
@@ -648,34 +684,249 @@ pub struct PullRequestFile {
     pub filename: String,
 }
 
-fn run_json_command(mut command: Command) -> Result<serde_json::Value> {
-    let output = command
-        .output()
-        .wrap_err("failed to run GitHub CLI command")?;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitStatus {
+    pub resources: RateLimitResources,
+}
 
-    if !output.status.success() {
-        return Err(eyre!(
-            "GitHub CLI command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitResources {
+    pub core: RateLimitBucket,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitBucket {
+    pub limit: u64,
+    pub remaining: u64,
+    pub reset: u64,
+    pub used: u64,
+}
+
+impl RateLimitBucket {
+    pub fn reset_at(&self) -> Option<DateTime<Utc>> {
+        DateTime::from_timestamp(self.reset as i64, 0)
     }
+}
 
-    let stdout = String::from_utf8(output.stdout)?;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RateLimitKind {
+    Primary,
+    Secondary,
+}
+
+impl std::fmt::Display for RateLimitKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Primary => write!(f, "primary"),
+            Self::Secondary => write!(f, "secondary"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum GitHubCliError {
+    RateLimited {
+        kind: RateLimitKind,
+        retry_after_secs: u64,
+        attempts: usize,
+        stderr: String,
+    },
+}
+
+impl std::fmt::Display for GitHubCliError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RateLimited {
+                kind,
+                retry_after_secs,
+                attempts,
+                stderr,
+            } => write!(
+                f,
+                "GitHub API {kind} rate limit hit after {attempts} retries. Retry after about {retry_after_secs}s. Last error: {stderr}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for GitHubCliError {}
+
+fn run_json_command(mut command: Command, idempotent: bool) -> Result<serde_json::Value> {
+    let stdout = run_command_with_retries(&mut command, idempotent)?;
     Ok(serde_json::from_str(&stdout)
         .wrap_err_with(|| format!("failed to parse GitHub CLI JSON output: {stdout}"))?)
 }
 
-fn run_text_command(mut command: Command) -> Result<String> {
-    let output = command
-        .output()
-        .wrap_err("failed to run GitHub CLI command")?;
+fn run_text_command(mut command: Command, idempotent: bool) -> Result<String> {
+    run_command_with_retries(&mut command, idempotent)
+}
 
-    if !output.status.success() {
-        return Err(eyre!(
-            "GitHub CLI command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
+fn run_command_with_retries(command: &mut Command, idempotent: bool) -> Result<String> {
+    let max_possible_retries = TRANSIENT_RETRY_DELAYS_SECS
+        .len()
+        .max(SECONDARY_RETRY_DELAYS_SECS.len());
+    for attempt in 0..=max_possible_retries {
+        let output = clone_command(command)
+            .output()
+            .wrap_err("failed to run GitHub CLI command")?;
+
+        if output.status.success() {
+            return Ok(String::from_utf8(output.stdout)?);
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let Some(retry) = classify_retry(&stderr, idempotent) else {
+            return Err(eyre!("GitHub CLI command failed: {stderr}"));
+        };
+
+        let retry_after = match retry {
+            RetryReason::Transient => Duration::from_secs(
+                TRANSIENT_RETRY_DELAYS_SECS
+                    [attempt.min(TRANSIENT_RETRY_DELAYS_SECS.len().saturating_sub(1))],
+            ),
+            RetryReason::RateLimited(kind) => resolve_rate_limit_delay(kind, attempt, &stderr)
+                .unwrap_or_else(|| {
+                    Duration::from_secs(
+                        SECONDARY_RETRY_DELAYS_SECS
+                            [attempt.min(SECONDARY_RETRY_DELAYS_SECS.len().saturating_sub(1))],
+                    )
+                }),
+        };
+
+        let max_retries = match retry {
+            RetryReason::Transient => TRANSIENT_RETRY_DELAYS_SECS.len(),
+            RetryReason::RateLimited(_) => SECONDARY_RETRY_DELAYS_SECS.len(),
+        };
+
+        if attempt >= max_retries {
+            return match retry {
+                RetryReason::Transient => Err(eyre!("GitHub CLI command failed: {stderr}")),
+                RetryReason::RateLimited(kind) => Err(GitHubCliError::RateLimited {
+                    kind,
+                    retry_after_secs: retry_after.as_secs(),
+                    attempts: attempt,
+                    stderr,
+                }
+                .into()),
+            };
+        }
+
+        eprintln!(
+            "GitHub CLI command hit a {} condition. Retrying in {}s...",
+            retry,
+            retry_after.as_secs()
+        );
+        thread::sleep(retry_after);
     }
 
-    Ok(String::from_utf8(output.stdout)?)
+    Err(eyre!("GitHub CLI command failed after retries"))
+}
+
+fn clone_command(command: &Command) -> Command {
+    let mut cloned = Command::new(command.get_program());
+    cloned.args(command.get_args());
+    if let Some(current_dir) = command.get_current_dir() {
+        cloned.current_dir(current_dir);
+    }
+    for (key, value) in command.get_envs() {
+        match value {
+            Some(value) => {
+                cloned.env(key, value);
+            }
+            None => {
+                cloned.env_remove(key);
+            }
+        }
+    }
+    cloned
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetryReason {
+    RateLimited(RateLimitKind),
+    Transient,
+}
+
+impl std::fmt::Display for RetryReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RateLimited(kind) => write!(f, "{kind} rate limit"),
+            Self::Transient => write!(f, "transient error"),
+        }
+    }
+}
+
+fn classify_retry(stderr: &str, idempotent: bool) -> Option<RetryReason> {
+    let lowered = stderr.to_ascii_lowercase();
+    if idempotent
+        && (lowered.contains("http 502")
+            || lowered.contains("http 503")
+            || lowered.contains("bad gateway")
+            || lowered.contains("service unavailable"))
+    {
+        return Some(RetryReason::Transient);
+    }
+
+    if lowered.contains("secondary rate limit") || lowered.contains("abuse detection") {
+        return Some(RetryReason::RateLimited(RateLimitKind::Secondary));
+    }
+
+    if lowered.contains("api rate limit exceeded")
+        || lowered.contains("rate limit exceeded")
+        || lowered.contains("http 429")
+    {
+        let kind = current_rate_limit_status()
+            .map(|status| {
+                if status.resources.core.remaining == 0 {
+                    RateLimitKind::Primary
+                } else {
+                    RateLimitKind::Secondary
+                }
+            })
+            .unwrap_or(RateLimitKind::Primary);
+        return Some(RetryReason::RateLimited(kind));
+    }
+
+    None
+}
+
+fn resolve_rate_limit_delay(kind: RateLimitKind, attempt: usize, stderr: &str) -> Option<Duration> {
+    match kind {
+        RateLimitKind::Primary => current_rate_limit_status().and_then(|status| {
+            status.resources.core.reset_at().map(|reset_at| {
+                let wait = (reset_at - Utc::now())
+                    .to_std()
+                    .unwrap_or_else(|_| Duration::from_secs(0));
+                wait + Duration::from_secs(1)
+            })
+        }),
+        RateLimitKind::Secondary => parse_retry_after(stderr).or_else(|| {
+            Some(Duration::from_secs(
+                SECONDARY_RETRY_DELAYS_SECS
+                    [attempt.min(SECONDARY_RETRY_DELAYS_SECS.len().saturating_sub(1))],
+            ))
+        }),
+    }
+}
+
+fn current_rate_limit_status() -> Option<RateLimitStatus> {
+    let mut command = Command::new("gh");
+    command.args(["api", "rate_limit"]);
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    serde_json::from_slice(&output.stdout).ok()
+}
+
+fn parse_retry_after(stderr: &str) -> Option<Duration> {
+    let lowered = stderr.to_ascii_lowercase();
+    let retry_after_index = lowered.find("retry-after")?;
+    let digits = lowered[retry_after_index..]
+        .chars()
+        .skip_while(|character| !character.is_ascii_digit())
+        .take_while(|character| character.is_ascii_digit())
+        .collect::<String>();
+    let seconds = digits.parse::<u64>().ok()?;
+    Some(Duration::from_secs(seconds))
 }
