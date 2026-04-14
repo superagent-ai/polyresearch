@@ -2,7 +2,7 @@ use chrono::{DateTime, Duration, Utc};
 use color_eyre::eyre::Result;
 use serde::Serialize;
 
-use crate::commands::{AppContext, exit_with, print_value, read_node_config};
+use crate::commands::{AppContext, exit_with, node_active_claims, print_value, read_node_config};
 use crate::config::NodeConfig;
 use crate::github::RateLimitStatus;
 use crate::state::{RepositoryState, ThesisPhase};
@@ -15,6 +15,7 @@ pub struct PaceOutput {
     pub node_id: String,
     pub resource_policy: String,
     pub is_default_policy: bool,
+    pub sub_agents: usize,
     pub api_budget: u64,
     pub rate_limit: PaceRateLimit,
     pub attempts_last_hour: usize,
@@ -22,6 +23,7 @@ pub struct PaceOutput {
     pub idle_minutes: Option<i64>,
     pub claimable_theses: usize,
     pub active_claims: usize,
+    pub free_slots: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -70,7 +72,7 @@ pub async fn run(ctx: &AppContext) -> Result<()> {
             })
             .unwrap_or_else(|| "unknown".to_string());
         rendered.push_str(&format!(
-            "\n\nAPI budget:\n  Configured budget:           {}/hr\n  GitHub core limit:           {}/hr\n  Remaining quota:             {}\n  Used quota:                  {}\n  Resets at:                   {}\n  Cost per command:            {} calls ({} issues + {} PRs + 2 lists)\n  Commands left:               ~{}\n  Near limit:                  {}\n\nThroughput ({}):\n  Attempts last hour:          {}\n  Attempts last 4 hours:       {}\n  Minutes since last activity: {}\n  Claimable theses idle:       {}\n  Active claims:               {}",
+            "\n\nAPI budget:\n  Configured budget:           {}/hr\n  GitHub core limit:           {}/hr\n  Remaining quota:             {}\n  Used quota:                  {}\n  Resets at:                   {}\n  Cost per command:            {} calls ({} issues + {} PRs + 2 lists)\n  Commands left:               ~{}\n  Near limit:                  {}\n\nThroughput ({}):\n  Configured sub-agents:       {}\n  Active claims:               {}\n  Free slots:                  {}\n  Attempts last hour:          {}\n  Attempts last 4 hours:       {}\n  Minutes since last activity: {}\n  Claimable theses idle:       {}",
             value.rate_limit.configured_budget,
             value.rate_limit.limit,
             value.rate_limit.remaining,
@@ -82,11 +84,13 @@ pub async fn run(ctx: &AppContext) -> Result<()> {
             value.rate_limit.commands_left,
             if value.rate_limit.is_low { "yes" } else { "no" },
             value.node_id,
+            value.sub_agents,
+            value.active_claims,
+            value.free_slots,
             value.attempts_last_hour,
             value.attempts_last_4_hours,
             idle,
-            value.claimable_theses,
-            value.active_claims
+            value.claimable_theses
         ));
         rendered
     })?;
@@ -146,12 +150,8 @@ pub fn build_output(
             thesis.issue.state == "OPEN" && matches!(thesis.phase, ThesisPhase::Approved)
         })
         .count();
-    let active_claims = repo_state
-        .theses
-        .iter()
-        .flat_map(|thesis| thesis.active_claims.iter())
-        .filter(|claim| claim.node == node_id)
-        .count();
+    let active_claims = node_active_claims(repo_state, &node_id);
+    let free_slots = node_config.sub_agents.saturating_sub(active_claims);
     let idle_minutes = last_activity(repo_state, &node_id)
         .map(|timestamp| now.signed_duration_since(timestamp).num_minutes().max(0));
     let issue_count = repo_state.theses.len();
@@ -163,6 +163,7 @@ pub fn build_output(
         node_id,
         resource_policy: resource_policy.to_string(),
         is_default_policy,
+        sub_agents: node_config.sub_agents,
         api_budget,
         rate_limit: PaceRateLimit {
             configured_budget: api_budget,
@@ -181,6 +182,7 @@ pub fn build_output(
         idle_minutes,
         claimable_theses,
         active_claims,
+        free_slots,
     }
 }
 

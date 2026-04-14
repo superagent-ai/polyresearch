@@ -6,8 +6,8 @@ use rand::RngExt;
 use serde::Serialize;
 
 use crate::cli::InitArgs;
-use crate::commands::{AppContext, print_value, write_node_config};
-use crate::config::DEFAULT_RESOURCE_POLICY;
+use crate::commands::{AppContext, print_value, read_node_config, write_node_config};
+use crate::config::{DEFAULT_RESOURCE_POLICY, DEFAULT_SUB_AGENTS};
 
 #[derive(Debug, Serialize)]
 struct InitOutput {
@@ -17,10 +17,11 @@ struct InitOutput {
     resource_policy: Option<String>,
     effective_resource_policy: String,
     is_default_policy: bool,
+    sub_agents: usize,
 }
 
 pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
-    let resource_policy = args
+    let requested_resource_policy = args
         .resource_policy
         .as_ref()
         .map(|value| value.trim())
@@ -31,6 +32,17 @@ pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
     let _ = ctx.github.auth_token()?;
     let machine_id = args.node.clone().unwrap_or_else(default_machine_id);
     let node = format!("{login}/{machine_id}");
+    let existing_config = read_node_config(&ctx.repo_root).ok();
+    let resource_policy = requested_resource_policy.or_else(|| {
+        existing_config
+            .as_ref()
+            .and_then(|config| config.resource_policy.clone())
+    });
+    let existing_sub_agents = existing_config
+        .as_ref()
+        .map(|config| config.sub_agents)
+        .unwrap_or(DEFAULT_SUB_AGENTS);
+    let sub_agents = args.sub_agents.unwrap_or(existing_sub_agents).max(1);
 
     if let Ok(false) = ctx.github.repo_has_issues() {
         eprintln!("Warning: Issues are disabled on this repository (common for forks).");
@@ -41,7 +53,12 @@ pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
     }
 
     if !ctx.cli.dry_run {
-        write_node_config(&ctx.repo_root, &node, resource_policy.as_deref())?;
+        write_node_config(
+            &ctx.repo_root,
+            &node,
+            resource_policy.as_deref(),
+            Some(sub_agents),
+        )?;
     }
 
     let (effective_resource_policy, is_default_policy) = match &resource_policy {
@@ -56,6 +73,7 @@ pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
         resource_policy,
         effective_resource_policy,
         is_default_policy,
+        sub_agents,
     };
 
     print_value(ctx, &output, |value| {
@@ -68,6 +86,7 @@ pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
         } else {
             text.push_str(" Saved the custom resource policy.");
         }
+        text.push_str(&format!(" Sub-agents: {}.", value.sub_agents));
         text
     })
 }

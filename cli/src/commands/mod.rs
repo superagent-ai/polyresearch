@@ -2,6 +2,7 @@ pub mod admin;
 pub mod annotate;
 pub mod attempt;
 pub mod audit;
+pub mod batch_claim;
 pub mod claim;
 pub mod decide;
 pub mod duties;
@@ -27,8 +28,9 @@ use color_eyre::eyre::{Context, Result, eyre};
 use serde::Serialize;
 
 use crate::cli::{Cli, Commands};
-use crate::config::{NodeConfig, ProgramSpec, ProtocolConfig};
+use crate::config::{DEFAULT_SUB_AGENTS, NodeConfig, ProgramSpec, ProtocolConfig};
 use crate::github::{GitHubApi, RepoRef};
+use crate::state::RepositoryState;
 
 #[derive(Clone)]
 pub struct AppContext {
@@ -61,6 +63,7 @@ pub async fn run(ctx: AppContext) -> Result<()> {
         Commands::Pace => pace::run(&ctx).await,
         Commands::Status(args) => status::run(&ctx, args).await,
         Commands::Claim(args) => claim::run(&ctx, args).await,
+        Commands::BatchClaim(args) => batch_claim::run(&ctx, args).await,
         Commands::Attempt(args) => attempt::run(&ctx, args).await,
         Commands::Annotate(args) => annotate::run(&ctx, args).await,
         Commands::Release(args) => release::run(&ctx, args).await,
@@ -107,21 +110,52 @@ pub fn read_node_id(repo_root: &PathBuf) -> Result<String> {
 }
 
 pub fn write_node_id(repo_root: &PathBuf, node: &str) -> Result<()> {
-    write_node_config(repo_root, node, None)
+    write_node_config(repo_root, node, None, None)
 }
 
 pub fn write_node_config(
     repo_root: &PathBuf,
     node: &str,
     resource_policy: Option<&str>,
+    sub_agents: Option<usize>,
 ) -> Result<()> {
-    let existing_budget = NodeConfig::load_api_budget(repo_root);
+    let existing = NodeConfig::load(repo_root).ok();
+    let existing_resource_policy = existing
+        .as_ref()
+        .and_then(|config| config.resource_policy.as_deref())
+        .map(ToString::to_string);
+    let existing_budget = existing
+        .as_ref()
+        .map(|config| config.api_budget)
+        .unwrap_or_else(|| NodeConfig::load_api_budget(repo_root));
+    let existing_sub_agents = existing
+        .as_ref()
+        .map(|config| config.sub_agents)
+        .unwrap_or(DEFAULT_SUB_AGENTS);
     NodeConfig::new(
         node.to_string(),
-        resource_policy.map(ToString::to_string),
+        resource_policy
+            .map(ToString::to_string)
+            .or(existing_resource_policy),
         existing_budget,
+        sub_agents.unwrap_or(existing_sub_agents),
     )
     .save(repo_root)
+}
+
+pub fn configured_sub_agents(repo_root: &PathBuf) -> usize {
+    read_node_config(repo_root)
+        .map(|config| config.sub_agents)
+        .unwrap_or(DEFAULT_SUB_AGENTS)
+}
+
+pub fn node_active_claims(repo_state: &RepositoryState, node_id: &str) -> usize {
+    repo_state
+        .theses
+        .iter()
+        .flat_map(|thesis| thesis.active_claims.iter())
+        .filter(|claim| claim.node == node_id)
+        .count()
 }
 
 pub fn current_branch(repo_root: &PathBuf) -> Result<String> {

@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Result, eyre};
 use polyresearch_cli::cli::{
-    AttemptArgs, Cli, Commands, GenerateArgs, InitArgs, IssueArgs, StatusArgs,
+    AttemptArgs, BatchClaimArgs, Cli, Commands, GenerateArgs, InitArgs, IssueArgs, StatusArgs,
 };
 use polyresearch_cli::commands;
 use polyresearch_cli::comments::{Observation, ReleaseReason};
@@ -234,7 +234,7 @@ struct NodeIdEnvGuard {
 
 impl NodeIdEnvGuard {
     fn lock_clean() -> Self {
-        let guard = env_lock().lock().unwrap();
+        let guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         clear_node_id_env();
         Self { _guard: guard }
     }
@@ -277,6 +277,7 @@ async fn init_writes_node_identity() {
         Commands::Init(InitArgs {
             node: Some("test-node".to_string()),
             resource_policy: Some("Use 2 GPUs and keep them busy.".to_string()),
+            sub_agents: Some(4),
         }),
     );
 
@@ -285,6 +286,7 @@ async fn init_writes_node_identity() {
         &InitArgs {
             node: Some("test-node".to_string()),
             resource_policy: Some("Use 2 GPUs and keep them busy.".to_string()),
+            sub_agents: Some(4),
         },
     )
     .await
@@ -298,6 +300,7 @@ async fn init_writes_node_identity() {
         Some("Use 2 GPUs and keep them busy.")
     );
     assert_eq!(config.api_budget, DEFAULT_API_BUDGET);
+    assert_eq!(config.sub_agents, 4);
 }
 
 #[tokio::test]
@@ -312,8 +315,13 @@ async fn env_override_uses_session_node_id() {
         HashMap::new(),
     ));
     let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Pace);
-    commands::write_node_config(&repo.path, "lead/file-node", Some("Keep CPUs saturated."))
-        .unwrap();
+    commands::write_node_config(
+        &repo.path,
+        "lead/file-node",
+        Some("Keep CPUs saturated."),
+        Some(6),
+    )
+    .unwrap();
     set_node_id_env("lead/env-node");
 
     let node_config = NodeConfig::load(&repo.path).unwrap();
@@ -331,6 +339,8 @@ async fn env_override_uses_session_node_id() {
     assert_eq!(output.node_id, "lead/env-node");
     assert_eq!(output.resource_policy, "Keep CPUs saturated.");
     assert!(!output.is_default_policy);
+    assert_eq!(output.sub_agents, 6);
+    assert_eq!(output.free_slots, 6);
     assert_eq!(output.rate_limit.configured_budget, DEFAULT_API_BUDGET);
 }
 
@@ -392,6 +402,8 @@ async fn pace_reports_default_policy_and_node_metrics() {
     assert_eq!(output.attempts_last_4_hours, 1);
     assert_eq!(output.claimable_theses, 1);
     assert_eq!(output.active_claims, 2);
+    assert_eq!(output.sub_agents, 1);
+    assert_eq!(output.free_slots, 0);
     assert_eq!(output.idle_minutes, Some(0));
     assert_eq!(output.rate_limit.derive_cost, 5);
     assert_eq!(output.rate_limit.commands_left, 769);
@@ -483,6 +495,7 @@ async fn init_preserves_custom_api_budget() {
         Commands::Init(InitArgs {
             node: Some("new-node".to_string()),
             resource_policy: None,
+            sub_agents: None,
         }),
     );
 
@@ -491,6 +504,7 @@ async fn init_preserves_custom_api_budget() {
         &InitArgs {
             node: Some("new-node".to_string()),
             resource_policy: None,
+            sub_agents: None,
         },
     )
     .await
@@ -499,6 +513,57 @@ async fn init_preserves_custom_api_budget() {
     let config: NodeConfig = toml::from_str(&fs::read_to_string(&toml_path).unwrap()).unwrap();
     assert_eq!(config.node_id, "lead/new-node");
     assert_eq!(config.api_budget, 1_000);
+    assert_eq!(config.sub_agents, 1);
+}
+
+#[tokio::test]
+async fn init_preserves_existing_resource_policy_and_updates_sub_agents() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("init-resource-policy");
+    let toml_path = repo.path.join(".polyresearch-node.toml");
+    fs::write(
+        &toml_path,
+        "node_id = \"old/node\"\nresource_policy = \"Keep CPUs saturated.\"\nsub_agents = 2\n",
+    )
+    .unwrap();
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead",
+        false,
+        Commands::Init(InitArgs {
+            node: Some("new-node".to_string()),
+            resource_policy: None,
+            sub_agents: Some(8),
+        }),
+    );
+
+    commands::init::run(
+        &ctx,
+        &InitArgs {
+            node: Some("new-node".to_string()),
+            resource_policy: None,
+            sub_agents: Some(8),
+        },
+    )
+    .await
+    .unwrap();
+
+    let config: NodeConfig = toml::from_str(&fs::read_to_string(&toml_path).unwrap()).unwrap();
+    assert_eq!(config.node_id, "lead/new-node");
+    assert_eq!(
+        config.resource_policy.as_deref(),
+        Some("Keep CPUs saturated.")
+    );
+    assert_eq!(config.sub_agents, 8);
 }
 
 #[tokio::test]
@@ -812,6 +877,158 @@ async fn claim_creates_worktree_by_default() {
 }
 
 #[tokio::test]
+async fn batch_claim_fills_remaining_capacity_only() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("batch-claim");
+    init_git_repo(&repo.path);
+    let fixture_claimed = load_issue_fixture("claimed_no_attempts_issue.json");
+    let fixture_one = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mut fixture_two = load_issue_fixture("acknowledged_invalid_issue.json");
+    fixture_two.issue.number = fixture_one.issue.number + 1;
+    fixture_two.issue.title = "Second thesis".to_string();
+    for comment in &mut fixture_two.comments {
+        comment.body = comment
+            .body
+            .replace("#14", "#15")
+            .replace("thesis: 14", "thesis: 15")
+            .replace("issue #14", "issue #15")
+            .replace("target: issue #14", "target: issue #15");
+    }
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![
+            fixture_claimed.issue.clone(),
+            fixture_one.issue.clone(),
+            fixture_two.issue.clone(),
+        ],
+        HashMap::from([
+            (
+                fixture_claimed.issue.number,
+                fixture_claimed.comments.clone(),
+            ),
+            (fixture_one.issue.number, fixture_one.comments.clone()),
+            (fixture_two.issue.number, fixture_two.comments.clone()),
+        ]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture_one.lead_github_login,
+        false,
+        Commands::BatchClaim(BatchClaimArgs {
+            count: None,
+            no_worktree: false,
+        }),
+    );
+    commands::write_node_config(&repo.path, "test-node", None, Some(2)).unwrap();
+
+    commands::batch_claim::run(
+        &ctx,
+        &BatchClaimArgs {
+            count: None,
+            no_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let first_worktree = repo.path.join(".worktrees").join(format!(
+        "{}-{}",
+        fixture_one.issue.number,
+        commands::slugify(&fixture_one.issue.title)
+    ));
+    assert!(first_worktree.exists());
+    assert_eq!(
+        mock.posted_issue_comments.lock().unwrap().len(),
+        1,
+        "should only claim one additional thesis because one slot was already occupied"
+    );
+}
+
+#[tokio::test]
+async fn batch_claim_rejects_no_worktree() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("batch-claim-no-worktree");
+    init_git_repo(&repo.path);
+    let fixture = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        true,
+        Commands::BatchClaim(BatchClaimArgs {
+            count: Some(1),
+            no_worktree: true,
+        }),
+    );
+    commands::write_node_config(&repo.path, "node-a", None, Some(2)).unwrap();
+
+    let error = commands::batch_claim::run(
+        &ctx,
+        &BatchClaimArgs {
+            count: Some(1),
+            no_worktree: true,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("requires separate worktrees"));
+}
+
+#[tokio::test]
+async fn batch_claim_noops_when_already_at_capacity() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("batch-claim-capacity");
+    let fixture_claimed = load_issue_fixture("claimed_no_attempts_issue.json");
+    let fixture_open = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture_claimed.issue.clone(), fixture_open.issue.clone()],
+        HashMap::from([
+            (
+                fixture_claimed.issue.number,
+                fixture_claimed.comments.clone(),
+            ),
+            (fixture_open.issue.number, fixture_open.comments.clone()),
+        ]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture_open.lead_github_login,
+        false,
+        Commands::BatchClaim(BatchClaimArgs {
+            count: None,
+            no_worktree: false,
+        }),
+    );
+    commands::write_node_config(&repo.path, "test-node", None, Some(1)).unwrap();
+
+    commands::batch_claim::run(
+        &ctx,
+        &BatchClaimArgs {
+            count: None,
+            no_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(mock.posted_issue_comments.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn prune_removes_empty_stale_worktree_directories() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("prune-worktrees");
@@ -939,7 +1156,7 @@ fn observation_value_enum_accepts_snake_case() {
 // --- B5: Duties command ---
 
 #[tokio::test]
-async fn duties_reports_blocking_when_claim_has_no_attempts() {
+async fn duties_reports_advisory_when_claim_has_no_attempts() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("duties-claim");
     let fixture = load_issue_fixture("claimed_no_attempts_issue.json");
@@ -963,10 +1180,9 @@ async fn duties_reports_blocking_when_claim_has_no_attempts() {
         .await
         .unwrap();
     let report = commands::duties::check(&ctx, &repo_state).unwrap();
-    assert!(!report.clean, "should have blocking duties");
     assert!(
-        report.blocking.iter().any(|d| d.category == "claim"),
-        "should report a claim-related blocking duty"
+        report.advisory.iter().any(|d| d.category == "attempt"),
+        "should report a claim-without-attempt advisory"
     );
 }
 
@@ -1028,6 +1244,50 @@ async fn duties_clean_on_no_claims() {
         .unwrap();
     let report = commands::duties::check(&ctx, &repo_state).unwrap();
     assert!(report.clean, "should have no blocking duties");
+}
+
+#[tokio::test]
+async fn duties_reports_free_slots_when_under_capacity() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("duties-capacity");
+    let approved_fixture = load_issue_fixture("acknowledged_invalid_issue.json");
+    let claimed_fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![
+            approved_fixture.issue.clone(),
+            claimed_fixture.issue.clone(),
+        ],
+        HashMap::from([
+            (
+                approved_fixture.issue.number,
+                approved_fixture.comments.clone(),
+            ),
+            (
+                claimed_fixture.issue.number,
+                claimed_fixture.comments.clone(),
+            ),
+        ]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &approved_fixture.lead_github_login,
+        false,
+        Commands::Duties,
+    );
+    commands::write_node_config(&repo.path, "test-node", None, Some(3)).unwrap();
+
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
+    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+    assert!(
+        report.advisory.iter().any(|d| d.category == "capacity"),
+        "should report free slots under configured sub-agent capacity"
+    );
 }
 
 #[tokio::test]
@@ -1179,9 +1439,10 @@ async fn duties_reports_waiting_for_approval_when_queue_has_only_submitted_these
 // --- B6: Duty gate on claim ---
 
 #[tokio::test]
-async fn claim_blocked_by_outstanding_duties() {
+async fn claim_allows_additional_claims_under_sub_agent_capacity() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("claim-gate");
+    init_git_repo(&repo.path);
     let fixture_claimed = load_issue_fixture("claimed_no_attempts_issue.json");
     let fixture_open = load_issue_fixture("acknowledged_invalid_issue.json");
     let mock = Arc::new(MockGitHubClient::new(
@@ -1207,7 +1468,49 @@ async fn claim_blocked_by_outstanding_duties() {
             no_worktree: false,
         }),
     );
-    commands::write_node_id(&repo.path, "test-node").unwrap();
+    commands::write_node_config(&repo.path, "test-node", None, Some(2)).unwrap();
+
+    commands::claim::run(
+        &ctx,
+        &IssueArgs {
+            issue: fixture_open.issue.number,
+            no_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn claim_blocks_when_already_at_sub_agent_capacity() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("claim-capacity");
+    let fixture_claimed = load_issue_fixture("claimed_no_attempts_issue.json");
+    let fixture_open = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture_claimed.issue.clone(), fixture_open.issue.clone()],
+        HashMap::from([
+            (
+                fixture_claimed.issue.number,
+                fixture_claimed.comments.clone(),
+            ),
+            (fixture_open.issue.number, fixture_open.comments.clone()),
+        ]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture_claimed.lead_github_login,
+        true,
+        Commands::Claim(IssueArgs {
+            issue: fixture_open.issue.number,
+            no_worktree: false,
+        }),
+    );
+    commands::write_node_config(&repo.path, "test-node", None, Some(1)).unwrap();
 
     let error = commands::claim::run(
         &ctx,
@@ -1219,8 +1522,8 @@ async fn claim_blocked_by_outstanding_duties() {
     .await
     .unwrap_err();
     assert!(
-        error.to_string().contains("blocking duties"),
-        "claim should be blocked by outstanding duties, got: {error}"
+        error.to_string().contains("configured sub-agent capacity"),
+        "claim should be blocked by capacity, got: {error}"
     );
 }
 

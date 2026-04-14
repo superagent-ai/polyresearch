@@ -26,6 +26,7 @@ pub enum Commands {
     Pace,
     Status(StatusArgs),
     Claim(IssueArgs),
+    BatchClaim(BatchClaimArgs),
     Attempt(AttemptArgs),
     Annotate(AnnotateArgs),
     Release(ReleaseArgs),
@@ -49,6 +50,9 @@ pub struct InitArgs {
 
     #[arg(long)]
     pub resource_policy: Option<String>,
+
+    #[arg(long)]
+    pub sub_agents: Option<usize>,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -60,6 +64,15 @@ pub struct StatusArgs {
 #[derive(Debug, Args, Clone)]
 pub struct IssueArgs {
     pub issue: u64,
+
+    #[arg(long)]
+    pub no_worktree: bool,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct BatchClaimArgs {
+    #[arg(long)]
+    pub count: Option<usize>,
 
     #[arg(long)]
     pub no_worktree: bool,
