@@ -119,11 +119,10 @@ Full command reference in [cli/README.md](cli/README.md).
 ## Examples
 
 
-| Example                                                    | What it does                                                                                                  |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| [corewar](examples/corewar/)                               | Evolve a Redcode warrior against a frozen gauntlet. Free to evaluate, fast iteration, deterministic results.  |
-| [jailbreakbench-defense](examples/jailbreakbench-defense/) | Harden a system prompt against real jailbreak attacks. Cheap eval, large prompt-design search space.          |
-| [pokeragent](examples/pokeragent/)                         | Build a poker agent through prompt and tool optimization. Two-dimensional search space, game-theoretic depth. |
+| Example                                      | What it does                                                                                                 |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| [corewar](examples/corewar/)                 | Evolve a Redcode warrior against a frozen gauntlet. Free to evaluate, fast iteration, deterministic results. |
+| [eslint](examples/eslint/)                   | Optimize ESLint's core linting performance on a dual-workload benchmark. Real-world codebase, V8-level depth. |
 
 
 ## License
