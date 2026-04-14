@@ -26,7 +26,7 @@ auto_approve: true
 metric_tolerance: 0.01
 metric_direction: higher_is_better
 min_queue_depth: 5
-cli_version: 0.3.1
+cli_version: 0.3.2
 ```
 
 **Parameter reference:**
