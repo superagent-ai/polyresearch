@@ -985,6 +985,43 @@ async fn batch_claim_rejects_no_worktree() {
 }
 
 #[tokio::test]
+async fn batch_claim_rejects_zero_count() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("batch-claim-zero");
+    init_git_repo(&repo.path);
+    let fixture = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        true,
+        Commands::BatchClaim(BatchClaimArgs {
+            count: Some(0),
+            no_worktree: false,
+        }),
+    );
+    commands::write_node_config(&repo.path, "node-a", None, Some(2)).unwrap();
+
+    let error = commands::batch_claim::run(
+        &ctx,
+        &BatchClaimArgs {
+            count: Some(0),
+            no_worktree: false,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("count must be at least 1"));
+}
+
+#[tokio::test]
 async fn batch_claim_noops_when_already_at_capacity() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("batch-claim-capacity");

@@ -45,6 +45,9 @@ pub async fn run(ctx: &AppContext, args: &BatchClaimArgs) -> Result<()> {
     let sub_agents = configured_sub_agents(&ctx.repo_root);
     let active_claims = node_active_claims(&repo_state, &node);
     let available_slots = sub_agents.saturating_sub(active_claims);
+    if matches!(args.count, Some(0)) {
+        return Err(eyre!("batch-claim count must be at least 1"));
+    }
     let requested = args.count.unwrap_or(available_slots);
     let claim_count = requested.min(available_slots);
 
