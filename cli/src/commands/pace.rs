@@ -40,8 +40,8 @@ pub struct PaceRateLimit {
 
 pub async fn run(ctx: &AppContext) -> Result<()> {
     let node_config = read_node_config(&ctx.repo_root)?;
-    let rate_limit = ctx.github.get_rate_limit_status()?;
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
+    let rate_limit = ctx.github.get_rate_limit_status()?;
     let output = build_output(
         ctx.repo.slug(),
         ctx.api_budget,

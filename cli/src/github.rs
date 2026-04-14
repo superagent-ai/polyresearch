@@ -761,7 +761,10 @@ fn run_text_command(mut command: Command) -> Result<String> {
 }
 
 fn run_command_with_retries(command: &mut Command) -> Result<String> {
-    for attempt in 0..=TRANSIENT_RETRY_DELAYS_SECS.len() {
+    let max_possible_retries = TRANSIENT_RETRY_DELAYS_SECS
+        .len()
+        .max(SECONDARY_RETRY_DELAYS_SECS.len());
+    for attempt in 0..=max_possible_retries {
         let output = clone_command(command)
             .output()
             .wrap_err("failed to run GitHub CLI command")?;
