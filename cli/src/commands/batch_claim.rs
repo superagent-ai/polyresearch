@@ -88,7 +88,25 @@ pub async fn run(ctx: &AppContext, args: &BatchClaimArgs) -> Result<()> {
 
     let mut claims = Vec::with_capacity(theses.len());
     for thesis in theses {
-        claims.push(claim_selected_thesis(ctx, thesis, &node, false)?);
+        match claim_selected_thesis(ctx, thesis, &node, false) {
+            Ok(claim) => claims.push(claim),
+            Err(error) => {
+                if claims.is_empty() {
+                    return Err(error);
+                }
+                let claimed = claims
+                    .iter()
+                    .map(|claim| format!("#{}", claim.issue))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(eyre!(
+                    "batch-claim partially succeeded; claimed theses {} before failing on thesis #{}: {}",
+                    claimed,
+                    thesis.issue.number,
+                    error
+                ));
+            }
+        }
     }
 
     let output = BatchClaimOutput {

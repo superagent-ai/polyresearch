@@ -948,6 +948,79 @@ async fn batch_claim_fills_remaining_capacity_only() {
 }
 
 #[tokio::test]
+async fn batch_claim_reports_partial_success_when_later_claim_fails() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("batch-claim-partial");
+    init_git_repo(&repo.path);
+    let fixture_one = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mut fixture_two = load_issue_fixture("acknowledged_invalid_issue.json");
+    fixture_two.issue.number = fixture_one.issue.number + 1;
+    fixture_two.issue.title = "Second thesis".to_string();
+    for comment in &mut fixture_two.comments {
+        comment.body = comment
+            .body
+            .replace("#14", "#15")
+            .replace("thesis: 14", "thesis: 15")
+            .replace("issue #14", "issue #15")
+            .replace("target: issue #14", "target: issue #15");
+    }
+    let blocking_worktree = repo.path.join(".worktrees").join(format!(
+        "{}-{}",
+        fixture_two.issue.number,
+        commands::slugify(&fixture_two.issue.title)
+    ));
+    fs::create_dir_all(&blocking_worktree).unwrap();
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture_one.issue.clone(), fixture_two.issue.clone()],
+        HashMap::from([
+            (fixture_one.issue.number, fixture_one.comments.clone()),
+            (fixture_two.issue.number, fixture_two.comments.clone()),
+        ]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture_one.lead_github_login,
+        false,
+        Commands::BatchClaim(BatchClaimArgs {
+            count: Some(2),
+            no_worktree: false,
+        }),
+    );
+    commands::write_node_config(&repo.path, "node-a", None, Some(2)).unwrap();
+
+    let error = commands::batch_claim::run(
+        &ctx,
+        &BatchClaimArgs {
+            count: Some(2),
+            no_worktree: false,
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.to_string().contains("partially succeeded"));
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("#{}", fixture_one.issue.number))
+    );
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("#{}", fixture_two.issue.number))
+    );
+    assert_eq!(
+        mock.posted_issue_comments.lock().unwrap().len(),
+        1,
+        "first claim should have been posted before the second claim failed"
+    );
+}
+
+#[tokio::test]
 async fn batch_claim_rejects_no_worktree() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("batch-claim-no-worktree");
