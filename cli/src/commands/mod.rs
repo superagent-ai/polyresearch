@@ -119,6 +119,10 @@ pub fn write_node_config(
     sub_agents: Option<usize>,
 ) -> Result<()> {
     let existing = NodeConfig::load(repo_root).ok();
+    let existing_resource_policy = existing
+        .as_ref()
+        .and_then(|config| config.resource_policy.as_deref())
+        .map(ToString::to_string);
     let existing_budget = existing
         .as_ref()
         .map(|config| config.api_budget)
@@ -129,7 +133,9 @@ pub fn write_node_config(
         .unwrap_or(crate::config::DEFAULT_SUB_AGENTS);
     NodeConfig::new(
         node.to_string(),
-        resource_policy.map(ToString::to_string),
+        resource_policy
+            .map(ToString::to_string)
+            .or(existing_resource_policy),
         existing_budget,
         sub_agents.unwrap_or(existing_sub_agents),
     )

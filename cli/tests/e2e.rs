@@ -517,6 +517,56 @@ async fn init_preserves_custom_api_budget() {
 }
 
 #[tokio::test]
+async fn init_preserves_existing_resource_policy_when_not_specified() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("init-resource-policy");
+    let toml_path = repo.path.join(".polyresearch-node.toml");
+    fs::write(
+        &toml_path,
+        "node_id = \"old/node\"\nresource_policy = \"Keep CPUs saturated.\"\nsub_agents = 2\n",
+    )
+    .unwrap();
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead",
+        false,
+        Commands::Init(InitArgs {
+            node: Some("new-node".to_string()),
+            resource_policy: None,
+            sub_agents: Some(8),
+        }),
+    );
+
+    commands::init::run(
+        &ctx,
+        &InitArgs {
+            node: Some("new-node".to_string()),
+            resource_policy: None,
+            sub_agents: Some(8),
+        },
+    )
+    .await
+    .unwrap();
+
+    let config: NodeConfig = toml::from_str(&fs::read_to_string(&toml_path).unwrap()).unwrap();
+    assert_eq!(config.node_id, "lead/new-node");
+    assert_eq!(
+        config.resource_policy.as_deref(),
+        Some("Keep CPUs saturated.")
+    );
+    assert_eq!(config.sub_agents, 8);
+}
+
+#[tokio::test]
 async fn status_and_audit_succeed_on_fixture_snapshot() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("status-audit");
