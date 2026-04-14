@@ -102,10 +102,6 @@ pub fn read_node_config(repo_root: &PathBuf) -> Result<NodeConfig> {
     NodeConfig::load(repo_root)
 }
 
-pub fn read_api_budget(repo_root: &PathBuf) -> Result<u64> {
-    NodeConfig::load_api_budget(repo_root)
-}
-
 pub fn read_node_id(repo_root: &PathBuf) -> Result<String> {
     Ok(read_node_config(repo_root)?.node_id)
 }
@@ -119,10 +115,11 @@ pub fn write_node_config(
     node: &str,
     resource_policy: Option<&str>,
 ) -> Result<()> {
+    let existing_budget = NodeConfig::load_api_budget(repo_root).unwrap_or(DEFAULT_API_BUDGET);
     NodeConfig::new(
         node.to_string(),
         resource_policy.map(ToString::to_string),
-        DEFAULT_API_BUDGET,
+        existing_budget,
     )
     .save(repo_root)
 }
