@@ -961,6 +961,7 @@ mod tests {
             review_timeout: std::time::Duration::from_secs(12 * 60 * 60),
             min_queue_depth: 5,
             max_queue_depth: Some(10),
+            cli_version: None,
         }
     }
 }

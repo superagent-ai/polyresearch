@@ -22,6 +22,7 @@ async fn main() -> Result<()> {
     let github: Arc<dyn GitHubApi> = Arc::new(GitHubClient::new(repo.clone()));
     let api_budget = NodeConfig::load_api_budget(&repo_root);
     let config = ProtocolConfig::load(&repo_root)?;
+    config.check_cli_version(env!("CARGO_PKG_VERSION"))?;
     let program = ProgramSpec::load(&repo_root, &config)?;
 
     let ctx = AppContext {

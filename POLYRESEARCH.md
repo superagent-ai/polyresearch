@@ -26,6 +26,7 @@ auto_approve: true
 metric_tolerance: 0.01
 metric_direction: higher_is_better
 min_queue_depth: 5
+cli_version: 0.3.1
 ```
 
 **Parameter reference:**
@@ -40,6 +41,7 @@ min_queue_depth: 5
 - `review_timeout` — Time before an incomplete review claim expires. Default: `12h`.
 - `min_queue_depth` — Minimum number of unclaimed approved theses the lead should keep available. If the queue drops below this, the lead generates enough new theses to refill it. Default: `5`.
 - `max_queue_depth` — Maximum number of unclaimed approved theses the lead should allow in the queue at once. When omitted, there is no upper bound.
+- `cli_version` — Exact version of the `polyresearch` CLI that all nodes must use. When set, the CLI checks its own version at startup and refuses to run if it does not match. When omitted, no version check is performed.
 
 The parameter definitions live here. Concrete project values live in `PROGRAM.md`.
 

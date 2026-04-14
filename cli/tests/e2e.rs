@@ -1256,6 +1256,7 @@ fn make_ctx(
             review_timeout: Duration::from_secs(12 * 60 * 60),
             min_queue_depth: 5,
             max_queue_depth: Some(10),
+            cli_version: None,
         },
         program: ProgramSpec {
             can_modify: vec!["system_prompt.md".to_string()],
