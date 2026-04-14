@@ -89,20 +89,24 @@ Each node keeps a local `.polyresearch-node.toml` file at the repo root:
 
 ```toml
 node_id = "alice/mac.lan-a3f2"
-resource_policy = "8-core machine with 2 GPUs. Run up to 4 parallel evaluations. Keep GPUs saturated. Stay under 50 API calls/min."
+sub_agents = 4
+resource_policy = "18-core machine. Run 4 evaluations in parallel. Stay under 50 API calls/min."
 ```
 
 - `node_id` identifies the machine or worker. Keep it stable for the lifetime of that worker or agent session.
+- `sub_agents` is the number of theses this node should work on in parallel. Set it to the number of evaluations the hardware can run simultaneously without interference.
 - `resource_policy` is optional natural language guidance for that node only. It is not project state.
-- Set or update it with `polyresearch init --resource-policy "..."`.
+- Set or update both with `polyresearch init --sub-agents N --resource-policy "..."`.
 - `POLYRESEARCH_NODE_ID` overrides `node_id` for the current process. Use it when multiple agents share one checkout or when one GitHub login needs several concurrent nodes.
 - If `POLYRESEARCH_NODE_ID` is unset, the CLI falls back to `.polyresearch-node.toml`.
 
-If `resource_policy` is absent, the default policy applies:
+Sub-agents exist to improve hardware utilization. A contributor that works on one thesis at a time only runs one evaluation at a time. On a multi-core server or multi-GPU machine, the rest of the hardware sits idle. When `sub_agents` is greater than 1, the contributor should claim multiple theses, dispatch one sub-agent per thesis, and keep the hardware busy while still using one GitHub login and one visible contributor session.
 
-> Maximize throughput. Never leave claimable theses idle while experiments could be running. Run evaluations in parallel when the evaluator supports it. Interleave duties with long-running evaluations.
+Without sub-agents (`sub_agents = 1` or absent), follow the normal contributor loop below.
 
-Run `polyresearch pace` regularly. It prints the effective resource policy alongside recent node activity so the agent can compare expectation vs reality and adjust parallelism or claim rate.
+With sub-agents (`sub_agents > 1`), the contributor still owns the work. The contributor claims multiple theses with `polyresearch batch-claim`, dispatches one sub-agent per thesis, waits for results, then posts all attempt records, submits improvements, and releases non-improvements. Sub-agents do not interact with GitHub directly.
+
+Run `polyresearch pace` regularly. It prints the node's `sub_agents` setting, optional `resource_policy`, and recent activity so the contributor can compare intent vs. reality and adjust throughput.
 
 ---
 
@@ -162,6 +166,25 @@ LOOP FOREVER:
 6. Repeat from step 0.
 
 If there are no theses to claim and no PRs to review, wait briefly and check again.
+
+### Contributor loop with sub-agents
+
+When `.polyresearch-node.toml` sets `sub_agents` greater than 1, use this variant instead of claiming one thesis at a time:
+
+1. Run `polyresearch duties` and resolve blocking items.
+2. Run `polyresearch pace`.
+3. Run `polyresearch batch-claim`. It claims up to `sub_agents` theses and creates one worktree per thesis.
+4. Dispatch one sub-agent per claimed thesis. Each sub-agent:
+   - Works only in its assigned worktree.
+   - Reads `PROGRAM.md` and `PREPARE.md`.
+   - Designs and runs experiments.
+   - Returns metrics, observations, and summaries to the contributor.
+   - Does not run `polyresearch` commands and does not talk to GitHub.
+5. Wait for all sub-agents to finish.
+6. For each returned result, run `polyresearch attempt`.
+7. If a thesis improved, run `polyresearch submit` for it immediately.
+8. If a thesis did not improve, run `polyresearch release` for it.
+9. Repeat from step 1.
 
 **NEVER STOP.** Once the loop has begun, do not pause to ask the human if you should continue. Do not ask "should I keep going?" or "is this a good stopping point?" The human might be asleep or away and expects you to work indefinitely until manually stopped. If you run out of ideas during experimentation, think harder — re-read PROGRAM.md, study results.tsv for patterns in what worked and failed, try combining previous near-misses, try more radical changes. The loop runs until the human interrupts you.
 

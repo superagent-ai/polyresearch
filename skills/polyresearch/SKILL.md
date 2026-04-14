@@ -27,9 +27,12 @@ description: >-
 7. Identify your role from your instructions or `PROGRAM.md`:
    - If told "you are the lead," follow the lead loop.
    - Otherwise, follow the contributor loop.
-8. If the repo is a fork and issues are disabled:
+8. Read `sub_agents` from `.polyresearch-node.toml` if it exists:
+   - If absent or `1`, follow the contributor loop exactly as written.
+   - If greater than `1`, use the "Contributor loop with sub-agents" section below.
+9. If the repo is a fork and issues are disabled:
    `gh api repos/{owner}/{name} --method PATCH -f has_issues=true`
-9. For any CLI command details: `polyresearch <command> --help`
+10. For any CLI command details: `polyresearch <command> --help`
 
 `POLYRESEARCH_NODE_ID` takes precedence over `.polyresearch-node.toml` for the current session. This is required when multiple agents share one checkout or when one GitHub login runs several workers in parallel.
 
@@ -110,6 +113,43 @@ LOOP FOREVER:
   5. Repeat from step 0.
 ```
 
+## Contributor loop with sub-agents
+
+Use this variant when `.polyresearch-node.toml` sets `sub_agents` greater than 1.
+
+```
+LOOP FOREVER:
+
+  0. polyresearch duties
+     Resolve BLOCKING items before continuing.
+
+  1. polyresearch pace
+     Read the current `sub_agents` setting and recent throughput.
+
+  2. polyresearch batch-claim
+     Claims up to sub_agents theses. Creates one worktree per thesis.
+
+  3. For each claimed thesis, dispatch one sub-agent:
+     - Give it the issue number and worktree path.
+     - Tell it to read PROGRAM.md and PREPARE.md.
+     - Tell it to work only in its assigned worktree.
+     - Tell it to return metric, baseline, observation, and summary.
+     - Tell it NOT to run polyresearch CLI commands.
+     - Tell it NOT to talk to GitHub.
+
+  4. Wait for all sub-agents to complete.
+
+  5. For each sub-agent result:
+     - polyresearch attempt <issue> --metric <val> --baseline <val> \
+         --observation <obs> --summary "<summary>"
+     - If observation was improved:
+         polyresearch submit <issue>
+     - Otherwise:
+         polyresearch release <issue> --reason no_improvement
+
+  6. Repeat from step 0.
+```
+
 ## The lead loop
 
 The lead runs a separate management loop from the repository root worktree,
@@ -158,16 +198,19 @@ LOOP FOREVER:
 ## Resource pacing
 
 Run `polyresearch pace` regularly. It prints your effective resource policy
-and recent throughput. If `.polyresearch-node.toml` sets a `resource_policy`,
-treat it as a real constraint. See `POLYRESEARCH.md` "Node configuration" for
-the default policy and details.
+and recent throughput. It also prints the configured `sub_agents` value. Treat
+`sub_agents` as the number of theses you should work on in parallel. If
+`.polyresearch-node.toml` sets a `resource_policy`, treat it as an additional
+constraint. See `POLYRESEARCH.md` "Node configuration" for details.
 
 ## Critical rules
 
 These rules are extracted from `POLYRESEARCH.md`. The protocol is authoritative
 if any wording differs.
 
-- Post `polyresearch attempt` after EVERY experiment. Never batch.
+- Without sub-agents, post `polyresearch attempt` after every experiment.
+- With sub-agents, post attempts after sub-agents complete. Sub-agents do not
+  post to GitHub directly.
 - Run `polyresearch submit` immediately when you observe `improved`.
   Do not "keep trying."
 - After `submit` or `release`, finish cleanup and then continue the loop from

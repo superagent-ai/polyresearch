@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Result, eyre};
 use polyresearch_cli::cli::{
-    AttemptArgs, Cli, Commands, GenerateArgs, InitArgs, IssueArgs, StatusArgs,
+    AttemptArgs, BatchClaimArgs, Cli, Commands, GenerateArgs, InitArgs, IssueArgs, StatusArgs,
 };
 use polyresearch_cli::commands;
 use polyresearch_cli::comments::{Observation, ReleaseReason};
@@ -234,7 +234,7 @@ struct NodeIdEnvGuard {
 
 impl NodeIdEnvGuard {
     fn lock_clean() -> Self {
-        let guard = env_lock().lock().unwrap();
+        let guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
         clear_node_id_env();
         Self { _guard: guard }
     }
@@ -277,6 +277,7 @@ async fn init_writes_node_identity() {
         Commands::Init(InitArgs {
             node: Some("test-node".to_string()),
             resource_policy: Some("Use 2 GPUs and keep them busy.".to_string()),
+            sub_agents: Some(4),
         }),
     );
 
@@ -285,6 +286,7 @@ async fn init_writes_node_identity() {
         &InitArgs {
             node: Some("test-node".to_string()),
             resource_policy: Some("Use 2 GPUs and keep them busy.".to_string()),
+            sub_agents: Some(4),
         },
     )
     .await
@@ -298,6 +300,7 @@ async fn init_writes_node_identity() {
         Some("Use 2 GPUs and keep them busy.")
     );
     assert_eq!(config.api_budget, DEFAULT_API_BUDGET);
+    assert_eq!(config.sub_agents, 4);
 }
 
 #[tokio::test]
@@ -312,8 +315,13 @@ async fn env_override_uses_session_node_id() {
         HashMap::new(),
     ));
     let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Pace);
-    commands::write_node_config(&repo.path, "lead/file-node", Some("Keep CPUs saturated."))
-        .unwrap();
+    commands::write_node_config(
+        &repo.path,
+        "lead/file-node",
+        Some("Keep CPUs saturated."),
+        Some(6),
+    )
+    .unwrap();
     set_node_id_env("lead/env-node");
 
     let node_config = NodeConfig::load(&repo.path).unwrap();
@@ -329,8 +337,11 @@ async fn env_override_uses_session_node_id() {
     );
 
     assert_eq!(output.node_id, "lead/env-node");
-    assert_eq!(output.resource_policy, "Keep CPUs saturated.");
-    assert!(!output.is_default_policy);
+    assert_eq!(
+        output.resource_policy.as_deref(),
+        Some("Keep CPUs saturated.")
+    );
+    assert_eq!(output.sub_agents, 6);
     assert_eq!(output.rate_limit.configured_budget, DEFAULT_API_BUDGET);
 }
 
@@ -387,7 +398,8 @@ async fn pace_reports_default_policy_and_node_metrics() {
     );
 
     assert_eq!(output.node_id, "test-node");
-    assert!(output.is_default_policy);
+    assert_eq!(output.resource_policy, None);
+    assert_eq!(output.sub_agents, 1);
     assert_eq!(output.attempts_last_hour, 1);
     assert_eq!(output.attempts_last_4_hours, 1);
     assert_eq!(output.claimable_theses, 1);
@@ -483,6 +495,7 @@ async fn init_preserves_custom_api_budget() {
         Commands::Init(InitArgs {
             node: Some("new-node".to_string()),
             resource_policy: None,
+            sub_agents: None,
         }),
     );
 
@@ -491,6 +504,7 @@ async fn init_preserves_custom_api_budget() {
         &InitArgs {
             node: Some("new-node".to_string()),
             resource_policy: None,
+            sub_agents: None,
         },
     )
     .await
@@ -499,6 +513,7 @@ async fn init_preserves_custom_api_budget() {
     let config: NodeConfig = toml::from_str(&fs::read_to_string(&toml_path).unwrap()).unwrap();
     assert_eq!(config.node_id, "lead/new-node");
     assert_eq!(config.api_budget, 1_000);
+    assert_eq!(config.sub_agents, 1);
 }
 
 #[tokio::test]
@@ -809,6 +824,71 @@ async fn claim_creates_worktree_by_default() {
         expected_branch
     );
     assert_eq!(mock.posted_issue_comments.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn batch_claim_claims_multiple_theses_and_creates_worktrees() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("batch-claim");
+    init_git_repo(&repo.path);
+    let fixture_one = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mut fixture_two = load_issue_fixture("acknowledged_invalid_issue.json");
+    fixture_two.issue.number = fixture_one.issue.number + 1;
+    fixture_two.issue.title = "Second thesis".to_string();
+    for comment in &mut fixture_two.comments {
+        comment.body = comment
+            .body
+            .replace("#14", "#15")
+            .replace("thesis: 14", "thesis: 15")
+            .replace("issue #14", "issue #15")
+            .replace("target: issue #14", "target: issue #15");
+    }
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture_one.issue.clone(), fixture_two.issue.clone()],
+        HashMap::from([
+            (fixture_one.issue.number, fixture_one.comments.clone()),
+            (fixture_two.issue.number, fixture_two.comments.clone()),
+        ]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture_one.lead_github_login,
+        false,
+        Commands::BatchClaim(BatchClaimArgs {
+            count: Some(2),
+            no_worktree: false,
+        }),
+    );
+    commands::write_node_config(&repo.path, "node-a", None, Some(2)).unwrap();
+
+    commands::batch_claim::run(
+        &ctx,
+        &BatchClaimArgs {
+            count: Some(2),
+            no_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let first_worktree = repo.path.join(".worktrees").join(format!(
+        "{}-{}",
+        fixture_one.issue.number,
+        commands::slugify(&fixture_one.issue.title)
+    ));
+    let second_worktree = repo.path.join(".worktrees").join(format!(
+        "{}-{}",
+        fixture_two.issue.number,
+        commands::slugify(&fixture_two.issue.title)
+    ));
+
+    assert!(first_worktree.exists());
+    assert!(second_worktree.exists());
+    assert_eq!(mock.posted_issue_comments.lock().unwrap().len(), 2);
 }
 
 #[tokio::test]

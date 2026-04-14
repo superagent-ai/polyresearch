@@ -58,9 +58,17 @@ Do polyresearch on https://github.com/owner/repo.
 
 The agent clones the repo, claims work from the issue queue, runs experiments, and submits results in a loop until you stop it. Launch as many contributor agents as you have machines.
 
+### Hardware utilization
+
+A single contributor agent working on one thesis at a time only runs one evaluation at a time. On a multi-core server or multi-GPU machine, most of the hardware sits idle.
+
+Polyresearch can use sub-agents to keep that hardware busy. Set `sub_agents` in `.polyresearch-node.toml` to the number of evaluations the machine can run at once. The contributor then claims multiple theses, dispatches one sub-agent per thesis, and posts results in batches. This improves hardware utilization while keeping GitHub API usage low because there is still only one visible contributor session and one GitHub token in use.
+
 ### Run on a remote machine
 
-The agent runs on your local machine. The experiments run on a remote server (e.g. a cloud instance with GPUs). Set up the repo, CLI, and `gh` auth on the remote, then tell your agent:
+#### Pattern A: Remote evaluation over SSH
+
+The agent runs on your local machine. The experiments run on a remote server. Set up the repo, CLI, and `gh` auth on the remote, then tell your agent:
 
 ```
 Do polyresearch on https://github.com/owner/repo.
@@ -68,6 +76,21 @@ Run all evaluations and experiments over SSH on user@remote-host.
 ```
 
 Your local machine only needs the agent; the remote server does the compute.
+
+#### Pattern B: Run the agent on the server
+
+This is the recommended pattern for parallel sub-agents. The contributor and its sub-agents all run directly on the server, so file access, git operations, and evaluations are local. There is no SSH relay in the middle.
+
+Use `tmux` so the session survives disconnects:
+
+```bash
+ssh user@remote-host
+tmux new-session -s polyresearch
+claude -p "Do polyresearch on https://github.com/owner/repo."
+# Detach with Ctrl-B D. Reconnect with: tmux attach -t polyresearch
+```
+
+Detaching means the process keeps running after your SSH session closes. `tmux` creates a persistent terminal session on the server. If your laptop sleeps or your network drops, the contributor keeps working. Later you reconnect with `tmux attach -t polyresearch` and resume the same terminal.
 
 ## CLI
 

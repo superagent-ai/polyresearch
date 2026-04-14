@@ -13,8 +13,8 @@ const RATE_LIMIT_EXIT_CODE: i32 = 75;
 pub struct PaceOutput {
     pub repo: String,
     pub node_id: String,
-    pub resource_policy: String,
-    pub is_default_policy: bool,
+    pub resource_policy: Option<String>,
+    pub sub_agents: usize,
     pub api_budget: u64,
     pub rate_limit: PaceRateLimit,
     pub attempts_last_hour: usize,
@@ -51,12 +51,13 @@ pub async fn run(ctx: &AppContext) -> Result<()> {
     );
 
     print_value(ctx, &output, |value| {
-        let resource_label = if value.is_default_policy {
-            "Resource policy (default)"
+        let mut rendered = format!("Sub-agents: {}", value.sub_agents);
+        if let Some(policy) = &value.resource_policy {
+            rendered.push_str("\n\n");
+            rendered.push_str(&format_wrapped_policy("Resource policy", policy));
         } else {
-            "Resource policy"
-        };
-        let mut rendered = format_wrapped_policy(resource_label, &value.resource_policy);
+            rendered.push_str("\n\nResource policy: No resource policy set.");
+        }
         let idle = value
             .idle_minutes
             .map(|minutes| minutes.to_string())
@@ -123,7 +124,7 @@ pub fn build_output(
     let one_hour_ago = now - Duration::hours(1);
     let four_hours_ago = now - Duration::hours(4);
     let node_id = node_config.node_id.clone();
-    let (resource_policy, is_default_policy) = node_config.effective_resource_policy();
+    let resource_policy = node_config.effective_resource_policy().map(str::to_string);
 
     let attempts = repo_state
         .theses
@@ -161,8 +162,8 @@ pub fn build_output(
     PaceOutput {
         repo,
         node_id,
-        resource_policy: resource_policy.to_string(),
-        is_default_policy,
+        resource_policy,
+        sub_agents: node_config.sub_agents,
         api_budget,
         rate_limit: PaceRateLimit {
             configured_budget: api_budget,

@@ -80,10 +80,10 @@ Initialize the local node identity once per repo:
 
 ```bash
 polyresearch init
-polyresearch init --resource-policy "2 GPUs, run up to 4 evals in parallel, stay under 50 API calls/min"
+polyresearch init --sub-agents 4 --resource-policy "Run 4 evals in parallel, stay under 50 API calls/min"
 ```
 
-This writes `.polyresearch-node.toml` in the repo root. The file stores a stable `node_id` plus an optional natural-language `resource_policy`. If no policy is set, the protocol default is to maximize throughput.
+This writes `.polyresearch-node.toml` in the repo root. The file stores a stable `node_id`, a `sub_agents` count, and an optional natural-language `resource_policy`.
 
 Inspect the current state:
 
@@ -103,9 +103,12 @@ polyresearch claim 88
 polyresearch attempt 88 --metric 0.6244 --baseline 0.5000 --observation improved --summary "River all-in with two pair+"
 polyresearch submit 88
 polyresearch release 88 --reason no_improvement
+polyresearch batch-claim --count 4
 ```
 
 By default, `polyresearch claim` creates a dedicated worktree at `.worktrees/<issue>-<slug>/` from `main` and prints the path. Change into that worktree before editing or running evaluations. Pass `--no-worktree` only if you intentionally want the legacy single-working-tree checkout flow.
+
+`polyresearch batch-claim` is the parallel version for contributors using sub-agents. It claims multiple theses at once, creates one worktree per thesis, and returns them as a JSON array when used with `--json`.
 
 Review flow:
 
@@ -145,11 +148,12 @@ The maintainer comments `/approve` or `/reject` directly on thesis issues and ca
 
 ## Command summary
 
-- `polyresearch init` -- set node identity, optional resource policy, verify GitHub auth, detect repo
-- `polyresearch pace` -- show the effective resource policy alongside recent node throughput
+- `polyresearch init` -- set node identity, sub-agent count, optional resource policy, verify GitHub auth, detect repo
+- `polyresearch pace` -- show the configured sub-agent count, optional resource policy, and recent node throughput
 - `polyresearch status` -- derive thesis state, queue depth, active nodes, current best metric
 - `polyresearch audit` -- validate raw GitHub activity and report invalid or suspicious protocol events
 - `polyresearch claim` -- atomically claim a thesis and create the thesis worktree (or a branch with `--no-worktree`)
+- `polyresearch batch-claim` -- claim multiple theses at once and create one worktree per thesis
 - `polyresearch attempt` -- post a structured attempt comment from the current branch
 - `polyresearch release` -- release a claim with a structured reason
 - `polyresearch submit` -- push the branch and open a candidate PR

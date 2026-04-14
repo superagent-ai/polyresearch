@@ -8,8 +8,8 @@ use color_eyre::eyre::{Context, Result, eyre};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_RESOURCE_POLICY: &str = "Maximize throughput. Never leave claimable theses idle while experiments could be running. Run evaluations in parallel when the evaluator supports it. Interleave duties with long-running evaluations.";
 pub const DEFAULT_API_BUDGET: u64 = 5_000;
+pub const DEFAULT_SUB_AGENTS: usize = 1;
 pub const NODE_ID_ENV_VAR: &str = "POLYRESEARCH_NODE_ID";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +26,8 @@ pub struct NodeConfig {
     pub resource_policy: Option<String>,
     #[serde(default = "default_api_budget")]
     pub api_budget: u64,
+    #[serde(default = "default_sub_agents")]
+    pub sub_agents: usize,
 }
 
 impl NodeConfig {
@@ -33,11 +35,13 @@ impl NodeConfig {
         node_id: impl Into<String>,
         resource_policy: Option<String>,
         api_budget: u64,
+        sub_agents: usize,
     ) -> Self {
         Self {
             node_id: node_id.into(),
             resource_policy: normalize_resource_policy(resource_policy),
             api_budget: normalize_api_budget(api_budget),
+            sub_agents: normalize_sub_agents(sub_agents),
         }
     }
 
@@ -76,7 +80,12 @@ impl NodeConfig {
             .map(|config| config.api_budget)
             .unwrap_or(DEFAULT_API_BUDGET);
 
-        Ok(Self::new(node_id, resource_policy, api_budget))
+        let sub_agents = file_config
+            .as_ref()
+            .map(|config| config.sub_agents)
+            .unwrap_or(DEFAULT_SUB_AGENTS);
+
+        Ok(Self::new(node_id, resource_policy, api_budget, sub_agents))
     }
 
     pub fn load_api_budget(repo_root: &Path) -> u64 {
@@ -104,11 +113,8 @@ impl NodeConfig {
             .filter(|value| !value.trim().is_empty())
     }
 
-    pub fn effective_resource_policy(&self) -> (&str, bool) {
-        match self.resource_policy() {
-            Some(policy) => (policy, false),
-            None => (DEFAULT_RESOURCE_POLICY, true),
-        }
+    pub fn effective_resource_policy(&self) -> Option<&str> {
+        self.resource_policy()
     }
 
     pub fn effective_api_budget(&self) -> u64 {
@@ -128,6 +134,10 @@ fn load_node_config_from_file(path: &Path) -> Result<NodeConfig> {
 
 fn default_api_budget() -> u64 {
     DEFAULT_API_BUDGET
+}
+
+fn default_sub_agents() -> usize {
+    DEFAULT_SUB_AGENTS
 }
 
 fn node_id_override() -> Option<String> {
@@ -556,6 +566,7 @@ mod tests {
             r#"node_id = "node-7f83"
 resource_policy = "Run 4 evals in parallel."
 api_budget = 15000
+sub_agents = 6
 "#,
         )
         .unwrap();
@@ -567,6 +578,7 @@ api_budget = 15000
             Some("Run 4 evals in parallel.")
         );
         assert_eq!(config.api_budget, 15_000);
+        assert_eq!(config.sub_agents, 6);
 
         fs::remove_dir_all(repo_root).unwrap();
     }
@@ -591,6 +603,7 @@ resource_policy = "Run 4 evals in parallel."
             config.resource_policy.as_deref(),
             Some("Run 4 evals in parallel.")
         );
+        assert_eq!(config.sub_agents, DEFAULT_SUB_AGENTS);
 
         fs::remove_dir_all(repo_root).unwrap();
     }
@@ -604,6 +617,7 @@ resource_policy = "Run 4 evals in parallel."
         let config = NodeConfig::load(&repo_root).unwrap();
         assert_eq!(config.node_id, "env-node");
         assert_eq!(config.resource_policy, None);
+        assert_eq!(config.sub_agents, DEFAULT_SUB_AGENTS);
 
         fs::remove_dir_all(repo_root).unwrap();
     }
@@ -619,22 +633,27 @@ resource_policy = "Run 4 evals in parallel."
         let config = NodeConfig::load(&repo_root).unwrap();
         assert_eq!(config.node_id, "env-node");
         assert_eq!(config.resource_policy, None);
+        assert_eq!(config.sub_agents, DEFAULT_SUB_AGENTS);
 
         fs::remove_dir_all(repo_root).unwrap();
     }
 
     #[test]
     fn defaults_resource_policy_when_missing() {
-        let config = NodeConfig::new("node-7f83", None, DEFAULT_API_BUDGET);
-        let (policy, is_default) = config.effective_resource_policy();
-        assert!(is_default);
-        assert_eq!(policy, DEFAULT_RESOURCE_POLICY);
+        let config = NodeConfig::new("node-7f83", None, DEFAULT_API_BUDGET, DEFAULT_SUB_AGENTS);
+        assert_eq!(config.effective_resource_policy(), None);
     }
 
     #[test]
     fn defaults_api_budget_when_missing() {
-        let config = NodeConfig::new("node-7f83", None, 0);
+        let config = NodeConfig::new("node-7f83", None, 0, DEFAULT_SUB_AGENTS);
         assert_eq!(config.effective_api_budget(), DEFAULT_API_BUDGET);
+    }
+
+    #[test]
+    fn defaults_sub_agents_when_zero() {
+        let config = NodeConfig::new("node-7f83", None, DEFAULT_API_BUDGET, 0);
+        assert_eq!(config.sub_agents, DEFAULT_SUB_AGENTS);
     }
 
     #[test]
@@ -800,6 +819,13 @@ fn normalize_resource_policy(resource_policy: Option<String>) -> Option<String> 
         let trimmed = value.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     })
+}
+
+fn normalize_sub_agents(sub_agents: usize) -> usize {
+    match sub_agents {
+        0 => DEFAULT_SUB_AGENTS,
+        value => value,
+    }
 }
 
 fn normalize_api_budget(api_budget: u64) -> u64 {
