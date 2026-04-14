@@ -156,10 +156,7 @@ pub fn build_output(
         .map(|timestamp| now.signed_duration_since(timestamp).num_minutes().max(0));
     let issue_count = repo_state.theses.len();
     let derive_cost = 2 + issue_count as u64 + repo_state.pull_request_count as u64;
-    let commands_left = match derive_cost {
-        0 => 0,
-        _ => rate_limit.resources.core.remaining / derive_cost,
-    };
+    let commands_left = rate_limit.resources.core.remaining / derive_cost;
 
     PaceOutput {
         repo,

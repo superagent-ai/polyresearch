@@ -8,7 +8,7 @@ use color_eyre::eyre::{Context, Result};
 use polyresearch_cli::cli::Cli;
 use polyresearch_cli::commands;
 use polyresearch_cli::commands::AppContext;
-use polyresearch_cli::config::{DEFAULT_API_BUDGET, NodeConfig, ProgramSpec, ProtocolConfig};
+use polyresearch_cli::config::{NodeConfig, ProgramSpec, ProtocolConfig};
 use polyresearch_cli::github::{GitHubApi, GitHubClient, RepoRef};
 
 #[tokio::main]
@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
     let repo_root = discover_repo_root(&cwd)?;
     let repo = RepoRef::discover(cli.repo.as_deref(), &repo_root)?;
     let github: Arc<dyn GitHubApi> = Arc::new(GitHubClient::new(repo.clone()));
-    let api_budget = NodeConfig::load_api_budget(&repo_root).unwrap_or(DEFAULT_API_BUDGET);
+    let api_budget = NodeConfig::load_api_budget(&repo_root);
     let config = ProtocolConfig::load(&repo_root)?;
     let program = ProgramSpec::load(&repo_root, &config)?;
 

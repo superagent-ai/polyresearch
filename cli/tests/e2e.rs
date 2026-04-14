@@ -395,6 +395,110 @@ async fn pace_reports_default_policy_and_node_metrics() {
     assert_eq!(output.idle_minutes, Some(0));
     assert_eq!(output.rate_limit.derive_cost, 5);
     assert_eq!(output.rate_limit.commands_left, 769);
+    assert!(!output.rate_limit.is_low);
+}
+
+#[tokio::test]
+async fn pace_reports_low_when_quota_near_exhaustion() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("pace-low");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Pace);
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let node_config = NodeConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
+    let output = commands::pace::build_output(
+        ctx.repo.slug(),
+        ctx.api_budget,
+        &node_config,
+        &repo_state,
+        &default_rate_limit_status(3),
+    );
+
+    assert_eq!(output.rate_limit.derive_cost, 2);
+    assert_eq!(output.rate_limit.commands_left, 1);
+    assert!(output.rate_limit.is_low);
+}
+
+#[tokio::test]
+async fn pace_reports_exhausted_when_quota_below_derive_cost() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("pace-exhausted");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Pace);
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let node_config = NodeConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
+    let output = commands::pace::build_output(
+        ctx.repo.slug(),
+        ctx.api_budget,
+        &node_config,
+        &repo_state,
+        &default_rate_limit_status(1),
+    );
+
+    assert_eq!(output.rate_limit.derive_cost, 2);
+    assert_eq!(output.rate_limit.commands_left, 0);
+    assert!(output.rate_limit.is_low);
+    assert!(output.rate_limit.remaining < output.rate_limit.derive_cost);
+}
+
+#[tokio::test]
+async fn init_preserves_custom_api_budget() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("init-budget");
+    let toml_path = repo.path.join(".polyresearch-node.toml");
+    fs::write(&toml_path, "node_id = \"old/node\"\napi_budget = 1000\n").unwrap();
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead",
+        false,
+        Commands::Init(InitArgs {
+            node: Some("new-node".to_string()),
+            resource_policy: None,
+        }),
+    );
+
+    commands::init::run(
+        &ctx,
+        &InitArgs {
+            node: Some("new-node".to_string()),
+            resource_policy: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let config: NodeConfig = toml::from_str(&fs::read_to_string(&toml_path).unwrap()).unwrap();
+    assert_eq!(config.node_id, "lead/new-node");
+    assert_eq!(config.api_budget, 1_000);
 }
 
 #[tokio::test]

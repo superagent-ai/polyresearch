@@ -27,7 +27,7 @@ use color_eyre::eyre::{Context, Result, eyre};
 use serde::Serialize;
 
 use crate::cli::{Cli, Commands};
-use crate::config::{DEFAULT_API_BUDGET, NodeConfig, ProgramSpec, ProtocolConfig};
+use crate::config::{NodeConfig, ProgramSpec, ProtocolConfig};
 use crate::github::{GitHubApi, RepoRef};
 
 #[derive(Clone)]
@@ -115,7 +115,7 @@ pub fn write_node_config(
     node: &str,
     resource_policy: Option<&str>,
 ) -> Result<()> {
-    let existing_budget = NodeConfig::load_api_budget(repo_root).unwrap_or(DEFAULT_API_BUDGET);
+    let existing_budget = NodeConfig::load_api_budget(repo_root);
     NodeConfig::new(
         node.to_string(),
         resource_policy.map(ToString::to_string),
