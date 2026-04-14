@@ -380,6 +380,7 @@ impl GitHubClient {
         endpoint: &str,
         fields: &[(&str, &str)],
     ) -> Result<serde_json::Value> {
+        let idempotent = method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("HEAD");
         let mut command = Command::new("gh");
         command.arg("api");
         command.arg("--method").arg(method);
@@ -387,19 +388,19 @@ impl GitHubClient {
         for (key, value) in fields {
             command.arg("-f").arg(format!("{key}={value}"));
         }
-        run_json_command(command)
+        run_json_command(command, idempotent)
     }
 
     fn gh_json<const N: usize>(&self, args: [&str; N]) -> Result<serde_json::Value> {
         let mut command = Command::new("gh");
         command.args(args);
-        run_json_command(command)
+        run_json_command(command, true)
     }
 
     fn gh_output<const N: usize>(&self, args: [&str; N]) -> Result<String> {
         let mut command = Command::new("gh");
         command.args(args);
-        run_text_command(command)
+        run_text_command(command, false)
     }
 }
 
@@ -750,17 +751,17 @@ impl std::fmt::Display for GitHubCliError {
 
 impl std::error::Error for GitHubCliError {}
 
-fn run_json_command(mut command: Command) -> Result<serde_json::Value> {
-    let stdout = run_command_with_retries(&mut command)?;
+fn run_json_command(mut command: Command, idempotent: bool) -> Result<serde_json::Value> {
+    let stdout = run_command_with_retries(&mut command, idempotent)?;
     Ok(serde_json::from_str(&stdout)
         .wrap_err_with(|| format!("failed to parse GitHub CLI JSON output: {stdout}"))?)
 }
 
-fn run_text_command(mut command: Command) -> Result<String> {
-    run_command_with_retries(&mut command)
+fn run_text_command(mut command: Command, idempotent: bool) -> Result<String> {
+    run_command_with_retries(&mut command, idempotent)
 }
 
-fn run_command_with_retries(command: &mut Command) -> Result<String> {
+fn run_command_with_retries(command: &mut Command, idempotent: bool) -> Result<String> {
     let max_possible_retries = TRANSIENT_RETRY_DELAYS_SECS
         .len()
         .max(SECONDARY_RETRY_DELAYS_SECS.len());
@@ -774,7 +775,7 @@ fn run_command_with_retries(command: &mut Command) -> Result<String> {
         }
 
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let Some(retry) = classify_retry(&stderr) else {
+        let Some(retry) = classify_retry(&stderr, idempotent) else {
             return Err(eyre!("GitHub CLI command failed: {stderr}"));
         };
 
@@ -855,12 +856,13 @@ impl std::fmt::Display for RetryReason {
     }
 }
 
-fn classify_retry(stderr: &str) -> Option<RetryReason> {
+fn classify_retry(stderr: &str, idempotent: bool) -> Option<RetryReason> {
     let lowered = stderr.to_ascii_lowercase();
-    if lowered.contains("http 502")
-        || lowered.contains("http 503")
-        || lowered.contains("bad gateway")
-        || lowered.contains("service unavailable")
+    if idempotent
+        && (lowered.contains("http 502")
+            || lowered.contains("http 503")
+            || lowered.contains("bad gateway")
+            || lowered.contains("service unavailable"))
     {
         return Some(RetryReason::Transient);
     }
