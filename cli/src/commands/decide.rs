@@ -4,7 +4,7 @@ use color_eyre::eyre::{Context, Result, eyre};
 use serde::Serialize;
 
 use crate::cli::PrArgs;
-use crate::commands::guards::{ensure_lead_ready, require_decidable_pr};
+use crate::commands::guards::{ensure_current_ledger, ensure_lead, require_decidable_pr};
 use crate::commands::{AppContext, print_value};
 use crate::comments::{Observation, Outcome, ProtocolComment};
 use crate::ledger::Ledger;
@@ -19,8 +19,9 @@ struct DecideOutput {
 }
 
 pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
+    ensure_lead(ctx)?;
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
-    let (_login, ledger) = ensure_lead_ready(ctx, &repo_state)?;
+    let ledger = ensure_current_ledger(ctx, &repo_state)?;
     let (thesis, pr_state) = require_decidable_pr(&repo_state, args.pr)?;
 
     let candidate_sha = pr_state.pr.head_ref_oid.clone().unwrap_or_default();

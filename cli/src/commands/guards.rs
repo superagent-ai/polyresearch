@@ -142,11 +142,12 @@ pub fn ensure_clean_audit(repo_state: &RepositoryState, action: &str) -> Result<
     Ok(())
 }
 
-pub fn ensure_lead_ready(
+/// Checks that the audit is clean and results.tsv is current.
+/// Call after `ensure_lead` and `RepositoryState::derive`.
+pub fn ensure_current_ledger(
     ctx: &AppContext,
     repo_state: &RepositoryState,
-) -> Result<(String, Ledger)> {
-    let login = ensure_lead(ctx)?;
+) -> Result<Ledger> {
     ensure_clean_audit(repo_state, "proceed")?;
     let ledger = Ledger::load(&ctx.repo_root)?;
     if !ledger.is_current(repo_state) {
@@ -154,7 +155,7 @@ pub fn ensure_lead_ready(
             "results.tsv is stale; run `polyresearch sync` before proceeding"
         ));
     }
-    Ok((login, ledger))
+    Ok(ledger)
 }
 
 /// After a release with `no_improvement`, re-derive state and close the issue

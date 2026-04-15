@@ -3,7 +3,7 @@ use serde::Serialize;
 
 use crate::cli::GenerateArgs;
 use crate::commands::duties;
-use crate::commands::guards::ensure_lead_ready;
+use crate::commands::guards::{ensure_current_ledger, ensure_lead};
 use crate::commands::{AppContext, print_value};
 use crate::comments::ProtocolComment;
 use crate::state::RepositoryState;
@@ -18,8 +18,9 @@ struct GenerateOutput {
 }
 
 pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
+    ensure_lead(ctx)?;
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
-    let _ = ensure_lead_ready(ctx, &repo_state)?;
+    let _ = ensure_current_ledger(ctx, &repo_state)?;
 
     let duty_report = duties::check(ctx, &repo_state)?;
     let lead_blocking: Vec<_> = duty_report
