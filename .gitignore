@@ -9,4 +9,3 @@ target/
 cli/target/
 *.log
 .worktrees/
-launch/
