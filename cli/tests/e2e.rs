@@ -7,23 +7,23 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Result, eyre};
-use polyresearch_cli::cli::{
+use polyresearch::cli::{
     AttemptArgs, BatchClaimArgs, Cli, Commands, GenerateArgs, InitArgs, IssueArgs, StatusArgs,
 };
-use polyresearch_cli::commands;
-use polyresearch_cli::comments::{Observation, ReleaseReason};
-use polyresearch_cli::config::{
+use polyresearch::commands;
+use polyresearch::comments::{Observation, ReleaseReason};
+use polyresearch::config::{
     DEFAULT_API_BUDGET, MetricDirection, NodeConfig, ProgramSpec, ProtocolConfig,
 };
-use polyresearch_cli::github::{
+use polyresearch::github::{
     CommentUser, GitHubApi, Issue, IssueComment, IssueListState, PullRequest, PullRequestFile,
     PullRequestListState, RateLimitBucket, RateLimitResources, RateLimitStatus, RepoRef,
 };
-use polyresearch_cli::state::{ReleaseRecord, RepositoryState, ThesisPhase, ThesisState};
+use polyresearch::state::{ReleaseRecord, RepositoryState, ThesisPhase, ThesisState};
 use serde::Deserialize;
 
 #[allow(unused_imports)]
-use polyresearch_cli::commands::duties;
+use polyresearch::commands::duties;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -248,13 +248,13 @@ impl Drop for NodeIdEnvGuard {
 
 fn set_node_id_env(value: &str) {
     unsafe {
-        env::set_var(polyresearch_cli::config::NODE_ID_ENV_VAR, value);
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, value);
     }
 }
 
 fn clear_node_id_env() {
     unsafe {
-        env::remove_var(polyresearch_cli::config::NODE_ID_ENV_VAR);
+        env::remove_var(polyresearch::config::NODE_ID_ENV_VAR);
     }
 }
 
@@ -1217,7 +1217,7 @@ fn pull_request_deserializes_state_case_insensitive() {
 
 #[test]
 fn comment_parser_skips_email_quoted_blocks() {
-    use polyresearch_cli::comments::ProtocolComment;
+    use polyresearch::comments::ProtocolComment;
 
     let quoted_body = r#"On Tue, Apr 8, 2026, Alice wrote:
 
@@ -1237,7 +1237,7 @@ fn comment_parser_skips_email_quoted_blocks() {
 
 #[test]
 fn comment_parser_handles_malformed_fields_gracefully() {
-    use polyresearch_cli::comments::ProtocolComment;
+    use polyresearch::comments::ProtocolComment;
 
     let body = "<!-- polyresearch:claim\ngarbage line with no colon\n-->";
     let result = ProtocolComment::parse(body).unwrap();
@@ -1252,7 +1252,7 @@ fn comment_parser_handles_malformed_fields_gracefully() {
 #[test]
 fn observation_value_enum_accepts_snake_case() {
     use clap::ValueEnum;
-    use polyresearch_cli::comments::Observation;
+    use polyresearch::comments::Observation;
 
     let variants: Vec<_> = Observation::value_variants()
         .iter()

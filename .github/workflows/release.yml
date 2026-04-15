@@ -69,10 +69,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          archive="target/distrib/polyresearch-cli-${{ matrix.target }}.tar.xz"
+          archive="target/distrib/polyresearch-${{ matrix.target }}.tar.xz"
           tmpdir="$(mktemp -d)"
           tar -xJf "$archive" -C "$tmpdir"
-          archive_root="$tmpdir/polyresearch-cli-${{ matrix.target }}"
+          archive_root="$tmpdir/polyresearch-${{ matrix.target }}"
 
           "$archive_root/polyresearch" --help >/dev/null
 
@@ -112,8 +112,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist-artifacts
-          cp "target/distrib/polyresearch-cli-${{ matrix.target }}.tar.xz" dist-artifacts/
-          cp "target/distrib/polyresearch-cli-${{ matrix.target }}.tar.xz.sha256" dist-artifacts/
+          cp "target/distrib/polyresearch-${{ matrix.target }}.tar.xz" dist-artifacts/
+          cp "target/distrib/polyresearch-${{ matrix.target }}.tar.xz.sha256" dist-artifacts/
 
       - uses: actions/upload-artifact@v6
         with:
