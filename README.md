@@ -25,10 +25,10 @@ Contributors pick up theses from the GitHub Issues queue, run experiments, and s
 
 Two steps:
 
-1. **Install the CLI.** Download the binary and put it on your `PATH`. The link below is for macOS Apple Silicon; other platforms and build-from-source in [cli/README.md](cli/README.md).
+1. **Install the CLI.** If you have Rust, `cargo install polyresearch`. Otherwise, download the binary and put it on your `PATH`. The link below is for macOS Apple Silicon; other platforms and build-from-source in [cli/README.md](cli/README.md).
 
 ```bash
-curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-cli-aarch64-apple-darwin.tar.xz
+curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-aarch64-apple-darwin.tar.xz
 ```
 
 1. **Install the agent skill.** Copy `skills/polyresearch/SKILL.md` from this repo into your agent's skill directory (e.g. `~/.claude/skills/polyresearch/`, or equivalent for your agent). The skill teaches agents the full protocol -- bootstrapping, the lead loop, the contributor loop, and all CLI usage.

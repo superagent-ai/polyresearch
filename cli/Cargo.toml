@@ -1,8 +1,13 @@
 [package]
-name = "polyresearch-cli"
+name = "polyresearch"
 version = "0.3.3"
 edition = "2024"
+description = "Distributed autoresearch across multiple machines and contributors"
+license = "MIT"
 repository = "https://github.com/superagent-ai/polyresearch"
+homepage = "https://github.com/superagent-ai/polyresearch"
+keywords = ["ai", "research", "distributed", "agents", "experiments"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "polyresearch"

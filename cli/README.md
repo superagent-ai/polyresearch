@@ -21,34 +21,40 @@ The default install path is to download a pre-built archive from [GitHub Release
 
 | OS | Architecture | Archive |
 | --- | --- | --- |
-| macOS | Apple Silicon | `polyresearch-cli-aarch64-apple-darwin.tar.xz` |
-| macOS | Intel | `polyresearch-cli-x86_64-apple-darwin.tar.xz` |
-| Linux | x86_64 (glibc) | `polyresearch-cli-x86_64-unknown-linux-gnu.tar.xz` |
+| macOS | Apple Silicon | `polyresearch-aarch64-apple-darwin.tar.xz` |
+| macOS | Intel | `polyresearch-x86_64-apple-darwin.tar.xz` |
+| Linux | x86_64 (glibc) | `polyresearch-x86_64-unknown-linux-gnu.tar.xz` |
 
 Each archive expands to a directory containing `polyresearch` and `README.md`. Move `polyresearch` somewhere on your `PATH`, such as `~/.local/bin` or `/usr/local/bin`.
 
 **macOS (Apple Silicon):**
 
 ```bash
-curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-cli-aarch64-apple-darwin.tar.xz
-tar -xJf polyresearch-cli-aarch64-apple-darwin.tar.xz
-sudo cp polyresearch-cli-aarch64-apple-darwin/polyresearch /usr/local/bin/
+curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-aarch64-apple-darwin.tar.xz
+tar -xJf polyresearch-aarch64-apple-darwin.tar.xz
+sudo cp polyresearch-aarch64-apple-darwin/polyresearch /usr/local/bin/
 ```
 
 **macOS (Intel):**
 
 ```bash
-curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-cli-x86_64-apple-darwin.tar.xz
-tar -xJf polyresearch-cli-x86_64-apple-darwin.tar.xz
-sudo cp polyresearch-cli-x86_64-apple-darwin/polyresearch /usr/local/bin/
+curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-x86_64-apple-darwin.tar.xz
+tar -xJf polyresearch-x86_64-apple-darwin.tar.xz
+sudo cp polyresearch-x86_64-apple-darwin/polyresearch /usr/local/bin/
 ```
 
 **Linux (x86_64):**
 
 ```bash
-curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-cli-x86_64-unknown-linux-gnu.tar.xz
-tar -xJf polyresearch-cli-x86_64-unknown-linux-gnu.tar.xz
-sudo cp polyresearch-cli-x86_64-unknown-linux-gnu/polyresearch /usr/local/bin/
+curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-x86_64-unknown-linux-gnu.tar.xz
+tar -xJf polyresearch-x86_64-unknown-linux-gnu.tar.xz
+sudo cp polyresearch-x86_64-unknown-linux-gnu/polyresearch /usr/local/bin/
+```
+
+### Install from crates.io
+
+```bash
+cargo install polyresearch
 ```
 
 ### Build from source
@@ -58,8 +64,6 @@ From the repo root:
 ```bash
 cargo install --path cli
 ```
-
-That installs the `polyresearch` binary from [cli/Cargo.toml](cli/Cargo.toml).
 
 ## Requirements
 

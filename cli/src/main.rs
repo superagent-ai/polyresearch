@@ -5,11 +5,11 @@ use std::sync::Arc;
 
 use clap::Parser;
 use color_eyre::eyre::{Context, Result};
-use polyresearch_cli::cli::Cli;
-use polyresearch_cli::commands;
-use polyresearch_cli::commands::AppContext;
-use polyresearch_cli::config::{NodeConfig, ProgramSpec, ProtocolConfig};
-use polyresearch_cli::github::{GitHubApi, GitHubClient, RepoRef};
+use polyresearch::cli::Cli;
+use polyresearch::commands;
+use polyresearch::commands::AppContext;
+use polyresearch::config::{NodeConfig, ProgramSpec, ProtocolConfig};
+use polyresearch::github::{GitHubApi, GitHubClient, RepoRef};
 
 #[tokio::main]
 async fn main() -> Result<()> {
