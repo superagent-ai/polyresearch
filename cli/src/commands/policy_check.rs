@@ -2,7 +2,7 @@ use color_eyre::eyre::{Result, eyre};
 use serde::Serialize;
 
 use crate::cli::PrArgs;
-use crate::commands::guards::{ensure_clean_audit, ensure_lead, require_pull_request};
+use crate::commands::guards::{ensure_lead_ready, require_pull_request};
 use crate::commands::{AppContext, print_value};
 use crate::comments::{Outcome, ProtocolComment};
 use crate::state::{RepositoryState, parse_thesis_number_from_branch};
@@ -16,9 +16,8 @@ struct PolicyCheckOutput {
 }
 
 pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
-    ensure_lead(ctx)?;
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
-    ensure_clean_audit(&repo_state, "policy-check PRs")?;
+    ensure_lead_ready(ctx, &repo_state)?;
     let pr = ctx.github.get_pull_request(args.pr)?;
     let thesis_number = parse_thesis_number_from_branch(&pr.head_ref_name);
 

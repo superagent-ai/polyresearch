@@ -3,10 +3,9 @@ use serde::Serialize;
 
 use crate::cli::GenerateArgs;
 use crate::commands::duties;
-use crate::commands::guards::{ensure_clean_audit, ensure_lead};
+use crate::commands::guards::ensure_lead_ready;
 use crate::commands::{AppContext, print_value};
 use crate::comments::ProtocolComment;
-use crate::ledger::Ledger;
 use crate::state::RepositoryState;
 
 #[derive(Debug, Serialize)]
@@ -19,9 +18,8 @@ struct GenerateOutput {
 }
 
 pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
-    ensure_lead(ctx)?;
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
-    ensure_clean_audit(&repo_state, "generate theses")?;
+    ensure_lead_ready(ctx, &repo_state)?;
 
     let duty_report = duties::check(ctx, &repo_state)?;
     let lead_blocking: Vec<_> = duty_report
@@ -37,12 +35,6 @@ pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
         return Err(eyre!(
             "cannot generate theses while PRs need processing:\n{}",
             items.join("\n")
-        ));
-    }
-    let ledger = Ledger::load(&ctx.repo_root)?;
-    if !ledger.is_current(&repo_state) {
-        return Err(eyre!(
-            "results.tsv is stale; run `polyresearch sync` before generating new theses"
         ));
     }
 

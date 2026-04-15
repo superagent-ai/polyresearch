@@ -1,6 +1,7 @@
 use color_eyre::eyre::{Result, eyre};
 
 use crate::commands::AppContext;
+use crate::ledger::Ledger;
 use crate::state::{PullRequestState, RepositoryState, ThesisPhase, ThesisState};
 
 pub fn ensure_lead(ctx: &AppContext) -> Result<String> {
@@ -138,4 +139,16 @@ pub fn ensure_clean_audit(repo_state: &RepositoryState, action: &str) -> Result<
         ));
     }
     Ok(())
+}
+
+pub fn ensure_lead_ready(ctx: &AppContext, repo_state: &RepositoryState) -> Result<String> {
+    let login = ensure_lead(ctx)?;
+    ensure_clean_audit(repo_state, "proceed")?;
+    let ledger = Ledger::load(&ctx.repo_root)?;
+    if !ledger.is_current(repo_state) {
+        return Err(eyre!(
+            "results.tsv is stale; run `polyresearch sync` before proceeding"
+        ));
+    }
+    Ok(login)
 }

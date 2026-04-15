@@ -218,7 +218,7 @@ You are the sole writer. This step runs first on every lead-loop iteration. Do n
 2. The CLI reconciles canonical attempt history against `results.tsv`, appends any missing rows, and commits the updated `results.tsv` on `main`.
 3. Canonical history may ignore invalid raw GitHub events. Resolve any audit findings through CLI admin or repair commands before continuing. A dirty audit blocks `policy-check`, `decide`, and `generate`.
 
-Only after results.tsv accounts for every known attempt may you proceed to the rest of the lead loop.
+Only after results.tsv accounts for every known attempt may you proceed to the rest of the lead loop. The CLI enforces this: `decide`, `policy-check`, and `generate` refuse to run when `results.tsv` is stale.
 
 After any new thesis resolution later in the same iteration, append those rows before the next iteration begins.
 
@@ -329,7 +329,7 @@ Scan the comment trail on the issue to reconstruct the current state:
 
 No mutable labels to get out of sync. The comment trail is the truth.
 
-Exhausted theses stay open for history, but they are not claimable and do not count toward queue depth.
+The CLI closes exhausted theses automatically. They do not count toward queue depth. Use `polyresearch admin reopen-thesis` to reverse if needed.
 
 When `auto_approve` is `false`, a generated thesis stays in **Submitted** until the maintainer comments `/approve`.
 
