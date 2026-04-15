@@ -17,7 +17,16 @@ This CLI centralizes that logic so every machine uses the same implementation an
 
 ## Install
 
-The default install path is to download a pre-built archive from [GitHub Releases](https://github.com/superagent-ai/polyresearch/releases).
+```bash
+cargo install polyresearch
+```
+
+### Other install options
+
+<details>
+<summary>Download a pre-built binary</summary>
+
+Pre-built archives are available from [GitHub Releases](https://github.com/superagent-ai/polyresearch/releases).
 
 | OS | Architecture | Archive |
 | --- | --- | --- |
@@ -51,19 +60,18 @@ tar -xJf polyresearch-x86_64-unknown-linux-gnu.tar.xz
 sudo cp polyresearch-x86_64-unknown-linux-gnu/polyresearch /usr/local/bin/
 ```
 
-### Install from crates.io
+</details>
 
-```bash
-cargo install polyresearch
-```
-
-### Build from source
+<details>
+<summary>Build from source</summary>
 
 From the repo root:
 
 ```bash
 cargo install --path cli
 ```
+
+</details>
 
 ## Requirements
 
