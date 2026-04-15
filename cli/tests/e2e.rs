@@ -8,7 +8,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Result, eyre};
 use polyresearch::cli::{
-    AttemptArgs, BatchClaimArgs, Cli, Commands, GenerateArgs, InitArgs, IssueArgs, StatusArgs,
+    AttemptArgs, BatchClaimArgs, Cli, Commands, GenerateArgs, InitArgs, IssueArgs, PrArgs,
+    ReleaseArgs, StatusArgs,
 };
 use polyresearch::commands;
 use polyresearch::comments::{Observation, ReleaseReason};
@@ -48,6 +49,7 @@ struct MockGitHubClient {
     pull_requests: Vec<PullRequest>,
     pr_comments: HashMap<u64, Vec<IssueComment>>,
     posted_issue_comments: Mutex<Vec<(u64, String)>>,
+    closed_issues: Mutex<Vec<u64>>,
 }
 
 impl MockGitHubClient {
@@ -65,6 +67,7 @@ impl MockGitHubClient {
             pull_requests,
             pr_comments,
             posted_issue_comments: Mutex::new(Vec::new()),
+            closed_issues: Mutex::new(Vec::new()),
         }
     }
 }
@@ -95,11 +98,31 @@ impl GitHubApi for MockGitHubClient {
     }
 
     fn list_issue_comments(&self, issue_number: u64) -> Result<Vec<IssueComment>> {
-        Ok(self
+        let mut comments = self
             .issue_comments
             .get(&issue_number)
             .cloned()
-            .unwrap_or_default())
+            .unwrap_or_default();
+        let latest = comments
+            .iter()
+            .map(|c| c.created_at)
+            .max()
+            .unwrap_or_else(chrono::Utc::now);
+        let posted = self.posted_issue_comments.lock().unwrap();
+        for (idx, (num, body)) in posted.iter().enumerate() {
+            if *num == issue_number {
+                comments.push(IssueComment {
+                    id: 50_000 + idx as u64,
+                    body: body.clone(),
+                    user: CommentUser {
+                        login: self.current_login.clone(),
+                    },
+                    created_at: latest + chrono::Duration::seconds(1 + idx as i64),
+                    updated_at: None,
+                });
+            }
+        }
+        Ok(comments)
     }
 
     fn create_issue(&self, _title: &str, _body: &str, _labels: &[&str]) -> Result<Issue> {
@@ -126,8 +149,19 @@ impl GitHubApi for MockGitHubClient {
         Ok(())
     }
 
-    fn close_issue(&self, _issue_number: u64) -> Result<Issue> {
-        Err(eyre!("unexpected close_issue call in test"))
+    fn close_issue(&self, issue_number: u64) -> Result<Issue> {
+        self.closed_issues.lock().unwrap().push(issue_number);
+        Ok(Issue {
+            number: issue_number,
+            title: String::new(),
+            body: None,
+            state: "CLOSED".to_string(),
+            labels: vec![],
+            created_at: chrono::Utc::now(),
+            closed_at: Some(chrono::Utc::now()),
+            author: None,
+            url: None,
+        })
     }
 
     fn reopen_issue(&self, _issue_number: u64) -> Result<Issue> {
@@ -759,7 +793,7 @@ async fn generate_is_blocked_by_dirty_audit() {
     assert!(
         error
             .to_string()
-            .contains("cannot generate theses while audit findings are present")
+            .contains("cannot proceed while audit findings are present")
     );
 }
 
@@ -1786,6 +1820,192 @@ async fn duties_reports_idle_advisory_when_queue_empty_for_contributor() {
     );
 }
 
+// --- Release closes exhausted thesis ---
+
+#[tokio::test]
+async fn release_closes_exhausted_thesis_on_no_improvement() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("release-close-exhausted");
+    let fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture.lead_github_login,
+        false,
+        Commands::Release(ReleaseArgs {
+            issue: fixture.issue.number,
+            reason: ReleaseReason::NoImprovement,
+        }),
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    commands::release::run(
+        &ctx,
+        &ReleaseArgs {
+            issue: fixture.issue.number,
+            reason: ReleaseReason::NoImprovement,
+        },
+    )
+    .await
+    .unwrap();
+
+    let closed = mock.closed_issues.lock().unwrap();
+    assert_eq!(
+        closed.as_slice(),
+        &[fixture.issue.number],
+        "release with no_improvement should close the exhausted thesis"
+    );
+}
+
+#[tokio::test]
+async fn release_does_not_close_on_timeout() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("release-no-close-timeout");
+    let fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture.lead_github_login,
+        false,
+        Commands::Release(ReleaseArgs {
+            issue: fixture.issue.number,
+            reason: ReleaseReason::Timeout,
+        }),
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    commands::release::run(
+        &ctx,
+        &ReleaseArgs {
+            issue: fixture.issue.number,
+            reason: ReleaseReason::Timeout,
+        },
+    )
+    .await
+    .unwrap();
+
+    let closed = mock.closed_issues.lock().unwrap();
+    assert!(
+        closed.is_empty(),
+        "release with timeout should not close the thesis"
+    );
+}
+
+#[tokio::test]
+async fn release_does_not_close_on_infra_failure() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("release-no-close-infra");
+    let fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture.lead_github_login,
+        false,
+        Commands::Release(ReleaseArgs {
+            issue: fixture.issue.number,
+            reason: ReleaseReason::InfraFailure,
+        }),
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    commands::release::run(
+        &ctx,
+        &ReleaseArgs {
+            issue: fixture.issue.number,
+            reason: ReleaseReason::InfraFailure,
+        },
+    )
+    .await
+    .unwrap();
+
+    let closed = mock.closed_issues.lock().unwrap();
+    assert!(
+        closed.is_empty(),
+        "release with infra_failure should not close the thesis"
+    );
+}
+
+// --- Lead commands reject stale ledger ---
+
+#[tokio::test]
+async fn decide_rejects_stale_ledger() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("decide-stale-ledger");
+    let fixture = load_issue_fixture("released_with_attempt_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        true,
+        Commands::Decide(PrArgs { pr: 99 }),
+    );
+
+    let error = commands::decide::run(&ctx, &PrArgs { pr: 99 })
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("results.tsv is stale"),
+        "decide should reject when results.tsv is stale, got: {error}"
+    );
+}
+
+#[tokio::test]
+async fn policy_check_rejects_stale_ledger() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("policy-check-stale-ledger");
+    let fixture = load_issue_fixture("released_with_attempt_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        true,
+        Commands::PolicyCheck(PrArgs { pr: 99 }),
+    );
+
+    let error = commands::policy_check::run(&ctx, &PrArgs { pr: 99 })
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("results.tsv is stale"),
+        "policy-check should reject when results.tsv is stale, got: {error}"
+    );
+}
+
 fn load_issue_fixture(name: &str) -> IssueFixture {
     serde_json::from_str(include_fixture(name)).unwrap()
 }
@@ -1806,6 +2026,12 @@ fn include_fixture(name: &str) -> &'static str {
         }
         "claimed_no_attempts_issue.json" => {
             include_str!("fixtures/claimed_no_attempts_issue.json")
+        }
+        "exhausted_thesis_issue.json" => {
+            include_str!("fixtures/exhausted_thesis_issue.json")
+        }
+        "released_with_attempt_issue.json" => {
+            include_str!("fixtures/released_with_attempt_issue.json")
         }
         "improved_no_submit_issue.json" => {
             include_str!("fixtures/improved_no_submit_issue.json")

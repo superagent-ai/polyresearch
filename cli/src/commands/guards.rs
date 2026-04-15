@@ -1,6 +1,8 @@
 use color_eyre::eyre::{Result, eyre};
 
 use crate::commands::AppContext;
+use crate::comments::ReleaseReason;
+use crate::ledger::Ledger;
 use crate::state::{PullRequestState, RepositoryState, ThesisPhase, ThesisState};
 
 pub fn ensure_lead(ctx: &AppContext) -> Result<String> {
@@ -136,6 +138,41 @@ pub fn ensure_clean_audit(repo_state: &RepositoryState, action: &str) -> Result<
             "cannot {} while audit findings are present; run `polyresearch audit` and resolve them through `polyresearch admin ...` first",
             action
         ));
+    }
+    Ok(())
+}
+
+/// Checks that the audit is clean and results.tsv is current.
+/// Call after `ensure_lead` and `RepositoryState::derive`.
+pub fn ensure_current_ledger(
+    ctx: &AppContext,
+    repo_state: &RepositoryState,
+) -> Result<Ledger> {
+    ensure_clean_audit(repo_state, "proceed")?;
+    let ledger = Ledger::load(&ctx.repo_root)?;
+    if !ledger.is_current(repo_state) {
+        return Err(eyre!(
+            "results.tsv is stale; run `polyresearch sync` before proceeding"
+        ));
+    }
+    Ok(ledger)
+}
+
+/// After a release with `no_improvement`, re-derive state and close the issue
+/// if the thesis has become Exhausted (no remaining active claims).
+pub async fn close_if_exhausted(
+    ctx: &AppContext,
+    issue: u64,
+    reason: ReleaseReason,
+) -> Result<()> {
+    if reason != ReleaseReason::NoImprovement {
+        return Ok(());
+    }
+    let updated = RepositoryState::derive(&ctx.github, &ctx.config).await?;
+    if let Some(t) = updated.theses.iter().find(|t| t.issue.number == issue) {
+        if matches!(t.phase, ThesisPhase::Exhausted) {
+            ctx.github.close_issue(issue)?;
+        }
     }
     Ok(())
 }
