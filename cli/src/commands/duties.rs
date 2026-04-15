@@ -288,7 +288,15 @@ fn check_contributor_idle_state(
     has_review_work: bool,
     advisory: &mut Vec<DutyItem>,
 ) -> Result<()> {
-    if has_review_work || repo_state.queue_depth == 0 {
+    if has_review_work {
+        return Ok(());
+    }
+    if repo_state.queue_depth == 0 {
+        advisory.push(DutyItem {
+            category: "idle".to_string(),
+            message: "Queue is empty. Wait for the lead to generate theses. Do not assume lead duties.".to_string(),
+            command: "sleep 60 && polyresearch duties".to_string(),
+        });
         return Ok(());
     }
 
