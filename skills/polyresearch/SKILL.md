@@ -24,9 +24,11 @@ description: >-
 4. If `.polyresearch-node.toml` does not exist yet, run `polyresearch init --node "$MACHINE_ID"` to create the fallback file.
 5. If `.polyresearch/` exists, run its setup. Otherwise follow `PREPARE.md`.
 6. Check your GitHub identity: the `LOGIN` above must match the GitHub user you were asked to operate as.
-7. Identify your role from your instructions or `PROGRAM.md`:
+7. Identify your role solely from your launch instructions:
    - If told "you are the lead," follow the lead loop.
    - Otherwise, follow the contributor loop.
+   - Matching `lead_github_login` does NOT make you the lead. An empty
+     queue does NOT make you the lead.
 8. Read `sub_agents` from `.polyresearch-node.toml` if it exists:
    - If absent or `1`, follow the contributor loop exactly as written.
    - If greater than `1`, use the "Contributor loop with sub-agents" section below.

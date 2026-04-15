@@ -34,7 +34,7 @@ cli_version: 0.3.2
 - `required_confirmations` — Number of independent review records needed before the lead decides a PR. `0` means the lead decides without peer review. Default: `0`.
 - `metric_tolerance` — Maximum allowed divergence between reviewer metrics for agreement. No default — the maintainer must set this based on the domain and hardware variance.
 - `metric_direction` — `lower_is_better` or `higher_is_better`.
-- `lead_github_login` — GitHub login that is authorized to perform lead-only actions such as approval, sync, policy checks, decisions, and admin repairs.
+- `lead_github_login` — GitHub account the CLI trusts for lead-only commands (generate, sync, decide, policy-check, admin) and uses to validate structured comments during audit. This field controls CLI authorization, not role assignment. An agent whose login matches this field is not the lead unless its launch instructions say so.
 - `maintainer_github_login` — GitHub login for the human maintainer who can `/approve` or `/reject` thesis issues and candidate PRs when human review is enabled.
 - `auto_approve` — If `true`, the lead auto-approves generated theses and decides PRs without waiting for a maintainer slash command. If `false`, the maintainer must `/approve` first. Default: `true`.
 - `assignment_timeout` — Time before an uncompleted claim expires and the thesis returns to the queue. Default: `24h`.
@@ -54,6 +54,8 @@ The parameter definitions live here. Concrete project values live in `PROGRAM.md
 **Contributor.** A machine running an agent. Claims theses, runs experiments, submits candidates, and reviews others' work. You are a contributor unless told otherwise.
 
 **Lead.** A machine running an agent dedicated to project management. The lead generates theses from results history, runs policy checks on candidate PRs, decides PRs (merge or close), and maintains `results.tsv` as sole writer. One per project. The lead does not claim theses, run experiments, submit candidates, or participate in peer review. If your instructions say "you are the lead," follow the lead loop only.
+
+`lead_github_login` does not define who the lead is. It tells the CLI which GitHub account is allowed to run lead-only commands and which structured comments to trust as lead actions during audit. Role is assigned by the maintainer through launch instructions, not by config fields. An empty queue is not a reason to assume the lead role.
 
 When `auto_approve` is `false`, `lead_github_login` and `maintainer_github_login` must be different GitHub accounts. Human-in-the-loop review does not work if the lead and the maintainer share the same GitHub identity.
 
@@ -79,7 +81,7 @@ When you start, before doing anything else:
    ```
 
 7. If `.polyresearch-node.toml` does not exist yet, run `polyresearch init --node "$MACHINE_ID"`. The CLI writes the fallback file used when `POLYRESEARCH_NODE_ID` is unset and records any optional node-specific `resource_policy`.
-8. Identify your role. If your instructions say "you are the lead," follow the lead loop. Otherwise, follow the contributor loop.
+8. Identify your role. If your instructions explicitly say "you are the lead," follow the lead loop. Otherwise, follow the contributor loop. Do not infer your role from `lead_github_login`, queue state, or any other signal. Role comes from launch instructions only.
 
 ---
 

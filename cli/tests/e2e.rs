@@ -1754,6 +1754,38 @@ fn make_submitted_thesis(number: u64) -> ThesisState {
     }
 }
 
+#[tokio::test]
+async fn duties_reports_idle_advisory_when_queue_empty_for_contributor() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("duties-idle-contributor");
+    let mock = Arc::new(MockGitHubClient::new(
+        "contributor-bot",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead-bot",
+        false,
+        Commands::Duties,
+    );
+    commands::write_node_id(&repo.path, "contributor-bot/node-1").unwrap();
+
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
+    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+    assert!(
+        report.advisory.iter().any(|d| d.category == "idle"
+            && d.message.contains("Do not assume lead duties")),
+        "should warn idle contributor not to assume lead duties, got: {:?}",
+        report.advisory
+    );
+}
+
 fn load_issue_fixture(name: &str) -> IssueFixture {
     serde_json::from_str(include_fixture(name)).unwrap()
 }
