@@ -5,10 +5,10 @@ use crate::cli::{
     AdminAcknowledgeInvalidArgs, AdminArgs, AdminCommands, AdminReleaseClaimArgs,
     AdminReopenThesisArgs,
 };
-use crate::commands::guards::{ensure_lead, find_thesis};
+use crate::commands::guards::{close_if_exhausted, ensure_lead, find_thesis};
 use crate::commands::{AppContext, print_value};
-use crate::comments::{ProtocolComment, ReleaseReason};
-use crate::state::{RepositoryState, ThesisPhase};
+use crate::comments::ProtocolComment;
+use crate::state::RepositoryState;
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
@@ -58,15 +58,7 @@ async fn release_claim(ctx: &AppContext, args: &AdminReleaseClaimArgs) -> Result
         };
         ctx.github
             .post_issue_comment(args.issue, &release.render())?;
-
-        if args.reason == ReleaseReason::NoImprovement {
-            let updated = RepositoryState::derive(&ctx.github, &ctx.config).await?;
-            if let Some(t) = updated.theses.iter().find(|t| t.issue.number == args.issue) {
-                if matches!(t.phase, ThesisPhase::Exhausted) {
-                    ctx.github.close_issue(args.issue)?;
-                }
-            }
-        }
+        close_if_exhausted(ctx, args.issue, args.reason).await?;
     }
 
     let output = AdminOutput::ReleaseClaim {

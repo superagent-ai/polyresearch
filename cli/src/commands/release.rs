@@ -2,10 +2,10 @@ use color_eyre::eyre::Result;
 use serde::Serialize;
 
 use crate::cli::ReleaseArgs;
-use crate::commands::guards::require_claimed_thesis;
+use crate::commands::guards::{close_if_exhausted, require_claimed_thesis};
 use crate::commands::{AppContext, print_value, read_node_id};
-use crate::comments::{ProtocolComment, ReleaseReason};
-use crate::state::{RepositoryState, ThesisPhase};
+use crate::comments::ProtocolComment;
+use crate::state::RepositoryState;
 
 #[derive(Debug, Serialize)]
 struct ReleaseOutput {
@@ -27,15 +27,7 @@ pub async fn run(ctx: &AppContext, args: &ReleaseArgs) -> Result<()> {
     if !ctx.cli.dry_run {
         ctx.github
             .post_issue_comment(args.issue, &comment.render())?;
-
-        if args.reason == ReleaseReason::NoImprovement {
-            let updated = RepositoryState::derive(&ctx.github, &ctx.config).await?;
-            if let Some(t) = updated.theses.iter().find(|t| t.issue.number == args.issue) {
-                if matches!(t.phase, ThesisPhase::Exhausted) {
-                    ctx.github.close_issue(args.issue)?;
-                }
-            }
-        }
+        close_if_exhausted(ctx, args.issue, args.reason).await?;
     }
 
     let output = ReleaseOutput {

@@ -1,6 +1,7 @@
 use color_eyre::eyre::{Result, eyre};
 
 use crate::commands::AppContext;
+use crate::comments::ReleaseReason;
 use crate::ledger::Ledger;
 use crate::state::{PullRequestState, RepositoryState, ThesisPhase, ThesisState};
 
@@ -151,4 +152,23 @@ pub fn ensure_lead_ready(ctx: &AppContext, repo_state: &RepositoryState) -> Resu
         ));
     }
     Ok(login)
+}
+
+/// After a release with `no_improvement`, re-derive state and close the issue
+/// if the thesis has become Exhausted (no remaining active claims).
+pub async fn close_if_exhausted(
+    ctx: &AppContext,
+    issue: u64,
+    reason: ReleaseReason,
+) -> Result<()> {
+    if reason != ReleaseReason::NoImprovement {
+        return Ok(());
+    }
+    let updated = RepositoryState::derive(&ctx.github, &ctx.config).await?;
+    if let Some(t) = updated.theses.iter().find(|t| t.issue.number == issue) {
+        if matches!(t.phase, ThesisPhase::Exhausted) {
+            ctx.github.close_issue(issue)?;
+        }
+    }
+    Ok(())
 }
