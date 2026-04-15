@@ -24,6 +24,8 @@ The four patches that produced this:
 
 Most of the gain is in single-file linting (Workload A), where the patches cut 96 ms off a 398 ms baseline. Multi-file linting (Workload B) improves by 274 ms (3%) -- the per-file overhead reductions compound across 388 files but each file is small enough that the absolute savings per file are limited.
 
+![ESLint optimization progress over 72 experiments](progress.png)
+
 The full experiment log is in [results.tsv](results.tsv).
 
 ### Why these results matter
