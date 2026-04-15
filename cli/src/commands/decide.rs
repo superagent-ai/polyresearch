@@ -20,8 +20,7 @@ struct DecideOutput {
 
 pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
-    ensure_lead_ready(ctx, &repo_state)?;
-    let ledger = Ledger::load(&ctx.repo_root)?;
+    let (_login, ledger) = ensure_lead_ready(ctx, &repo_state)?;
     let (thesis, pr_state) = require_decidable_pr(&repo_state, args.pr)?;
 
     let candidate_sha = pr_state.pr.head_ref_oid.clone().unwrap_or_default();

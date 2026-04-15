@@ -19,7 +19,7 @@ struct GenerateOutput {
 
 pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
-    ensure_lead_ready(ctx, &repo_state)?;
+    let _ = ensure_lead_ready(ctx, &repo_state)?;
 
     let duty_report = duties::check(ctx, &repo_state)?;
     let lead_blocking: Vec<_> = duty_report

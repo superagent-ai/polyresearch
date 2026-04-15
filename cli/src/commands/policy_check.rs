@@ -17,7 +17,7 @@ struct PolicyCheckOutput {
 
 pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
-    ensure_lead_ready(ctx, &repo_state)?;
+    let _ = ensure_lead_ready(ctx, &repo_state)?;
     let pr = ctx.github.get_pull_request(args.pr)?;
     let thesis_number = parse_thesis_number_from_branch(&pr.head_ref_name);
 
