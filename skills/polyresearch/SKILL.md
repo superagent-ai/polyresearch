@@ -108,9 +108,14 @@ LOOP FOREVER:
   4. Check for review work (PRs with policy-pass, no decision,
      not authored by you):
      a. polyresearch review-claim <pr>
-     b. Evaluate candidate SHA and base SHA per PREPARE.md.
-     c. polyresearch review <pr> --metric <candidate> --baseline <base> \
+     b. Create a disposable review worktree at the candidate SHA:
+        git worktree add .worktrees/review-<pr> <candidate-sha>
+        cd into it. Evaluate per PREPARE.md.
+     c. In the same review worktree: git checkout <base-sha>
+        Evaluate per PREPARE.md.
+     d. polyresearch review <pr> --metric <candidate> --baseline <base> \
           --observation <obs>
+     e. git worktree remove .worktrees/review-<pr>
 
   5. Repeat from step 0.
 ```
@@ -208,6 +213,11 @@ contributor may work on in parallel. If `.polyresearch-node.toml` sets a
 These rules are extracted from `POLYRESEARCH.md`. The protocol is authoritative
 if any wording differs.
 
+- The main worktree stays on `main`. Never run `git checkout`, `git switch`, or
+  any other HEAD-changing command in the repo root. All thesis work happens in
+  `.worktrees/<issue>-<slug>/` and all review checkouts happen in
+  `.worktrees/review-<pr>/`. Breaking this invariant breaks the lead loop for
+  every concurrent agent on the same checkout.
 - Without sub-agents, post `polyresearch attempt` after every experiment.
 - With sub-agents, post every returned attempt as each sub-agent finishes its
   thesis. Sub-agents do not post to GitHub directly.
