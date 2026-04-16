@@ -1,20 +1,24 @@
 use std::collections::HashMap;
 use std::env;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Context, Result, eyre};
+use rand::RngExt;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 
-const COMMENT_FETCH_CONCURRENCY_LIMIT: usize = 5;
+use crate::github_debug;
+use crate::throttle;
+
+const COMMENT_FETCH_CONCURRENCY_LIMIT: usize = 2;
 const TRANSIENT_RETRY_DELAYS_SECS: [u64; 3] = [5, 10, 20];
-const SECONDARY_RETRY_DELAYS_SECS: [u64; 3] = [60, 120, 240];
+const SECONDARY_RETRY_DELAYS_SECS: [u64; 3] = [90, 180, 300];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoRef {
@@ -766,9 +770,8 @@ fn run_command_with_retries(command: &mut Command, idempotent: bool) -> Result<S
         .len()
         .max(SECONDARY_RETRY_DELAYS_SECS.len());
     for attempt in 0..=max_possible_retries {
-        let output = clone_command(command)
-            .output()
-            .wrap_err("failed to run GitHub CLI command")?;
+        throttle::acquire_request_slot()?;
+        let output = execute_command(command, attempt, idempotent)?;
 
         if output.status.success() {
             return Ok(String::from_utf8(output.stdout)?);
@@ -780,16 +783,16 @@ fn run_command_with_retries(command: &mut Command, idempotent: bool) -> Result<S
         };
 
         let retry_after = match retry {
-            RetryReason::Transient => Duration::from_secs(
+            RetryReason::Transient => jittered_delay(Duration::from_secs(
                 TRANSIENT_RETRY_DELAYS_SECS
                     [attempt.min(TRANSIENT_RETRY_DELAYS_SECS.len().saturating_sub(1))],
-            ),
+            )),
             RetryReason::RateLimited(kind) => resolve_rate_limit_delay(kind, attempt, &stderr)
                 .unwrap_or_else(|| {
-                    Duration::from_secs(
+                    jittered_delay(Duration::from_secs(
                         SECONDARY_RETRY_DELAYS_SECS
                             [attempt.min(SECONDARY_RETRY_DELAYS_SECS.len().saturating_sub(1))],
-                    )
+                    ))
                 }),
         };
 
@@ -820,6 +823,18 @@ fn run_command_with_retries(command: &mut Command, idempotent: bool) -> Result<S
     }
 
     Err(eyre!("GitHub CLI command failed after retries"))
+}
+
+fn execute_command(command: &Command, attempt: usize, idempotent: bool) -> Result<Output> {
+    let mut prepared = clone_command(command);
+    github_debug::configure_command(&mut prepared);
+    github_debug::log_command_start(&prepared, attempt, idempotent);
+    let started = Instant::now();
+    let output = prepared
+        .output()
+        .wrap_err("failed to run GitHub CLI command")?;
+    github_debug::log_command_finish(&prepared, &output, started.elapsed());
+    Ok(output)
 }
 
 fn clone_command(command: &Command) -> Command {
@@ -871,20 +886,19 @@ fn classify_retry(stderr: &str, idempotent: bool) -> Option<RetryReason> {
         return Some(RetryReason::RateLimited(RateLimitKind::Secondary));
     }
 
-    if lowered.contains("api rate limit exceeded")
-        || lowered.contains("rate limit exceeded")
+    if lowered.contains("please wait a few minutes before you try again")
+        || lowered.contains("retry-after")
         || lowered.contains("http 429")
     {
-        let kind = current_rate_limit_status()
-            .map(|status| {
-                if status.resources.core.remaining == 0 {
-                    RateLimitKind::Primary
-                } else {
-                    RateLimitKind::Secondary
-                }
-            })
-            .unwrap_or(RateLimitKind::Primary);
-        return Some(RetryReason::RateLimited(kind));
+        return Some(RetryReason::RateLimited(RateLimitKind::Secondary));
+    }
+
+    if lowered.contains("api rate limit exceeded") {
+        return Some(RetryReason::RateLimited(RateLimitKind::Primary));
+    }
+
+    if lowered.contains("rate limit exceeded") {
+        return Some(RetryReason::RateLimited(RateLimitKind::Secondary));
     }
 
     None
@@ -901,18 +915,19 @@ fn resolve_rate_limit_delay(kind: RateLimitKind, attempt: usize, stderr: &str) -
             })
         }),
         RateLimitKind::Secondary => parse_retry_after(stderr).or_else(|| {
-            Some(Duration::from_secs(
+            Some(jittered_delay(Duration::from_secs(
                 SECONDARY_RETRY_DELAYS_SECS
                     [attempt.min(SECONDARY_RETRY_DELAYS_SECS.len().saturating_sub(1))],
-            ))
+            )))
         }),
     }
 }
 
 fn current_rate_limit_status() -> Option<RateLimitStatus> {
+    throttle::acquire_request_slot().ok()?;
     let mut command = Command::new("gh");
     command.args(["api", "rate_limit"]);
-    let output = command.output().ok()?;
+    let output = execute_command(&command, 0, true).ok()?;
     if !output.status.success() {
         return None;
     }
@@ -929,4 +944,68 @@ fn parse_retry_after(stderr: &str) -> Option<Duration> {
         .collect::<String>();
     let seconds = digits.parse::<u64>().ok()?;
     Some(Duration::from_secs(seconds))
+}
+
+/// Applies ±50% jitter to a client-side fallback backoff so three agents that
+/// hit the same rate limit at the same moment don't all wake up at the same time.
+/// Only used when the server does not provide an explicit `Retry-After`.
+fn jittered_delay(base: Duration) -> Duration {
+    let base_millis = u64::try_from(base.as_millis()).unwrap_or(u64::MAX);
+    if base_millis == 0 {
+        return base;
+    }
+    let low = base_millis / 2;
+    let high = base_millis.saturating_add(base_millis / 2);
+    Duration::from_millis(rand::rng().random_range(low..=high))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_primary_rate_limit_errors_without_extra_api_calls() {
+        assert_eq!(
+            classify_retry("API rate limit exceeded for user", true),
+            Some(RetryReason::RateLimited(RateLimitKind::Primary))
+        );
+    }
+
+    #[test]
+    fn classifies_secondary_rate_limit_errors_from_github_messages() {
+        assert_eq!(
+            classify_retry(
+                "You have exceeded a secondary rate limit. Please wait a few minutes before you try again.",
+                true
+            ),
+            Some(RetryReason::RateLimited(RateLimitKind::Secondary))
+        );
+    }
+
+    #[test]
+    fn classifies_retry_after_and_http_429_as_secondary_limits() {
+        assert_eq!(
+            classify_retry("HTTP 429\nRetry-After: 120", true),
+            Some(RetryReason::RateLimited(RateLimitKind::Secondary))
+        );
+    }
+
+    #[test]
+    fn jittered_delay_stays_within_plus_minus_50_percent() {
+        let base = Duration::from_secs(90);
+        let low = base / 2;
+        let high = base + base / 2;
+        for _ in 0..1_000 {
+            let jittered = jittered_delay(base);
+            assert!(
+                jittered >= low && jittered <= high,
+                "jittered delay {jittered:?} fell outside [{low:?}, {high:?}]"
+            );
+        }
+    }
+
+    #[test]
+    fn jittered_delay_noops_for_zero_base() {
+        assert_eq!(jittered_delay(Duration::ZERO), Duration::ZERO);
+    }
 }

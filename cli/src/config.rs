@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_RESOURCE_POLICY: &str = "Maximize throughput. Never leave claimable theses idle while experiments could be running. Run evaluations in parallel when the evaluator supports it. Interleave duties with long-running evaluations.";
 pub const DEFAULT_API_BUDGET: u64 = 5_000;
+pub const DEFAULT_REQUEST_DELAY_MS: u64 = 100;
 pub const DEFAULT_SUB_AGENTS: usize = 1;
 pub const NODE_ID_ENV_VAR: &str = "POLYRESEARCH_NODE_ID";
 
@@ -27,6 +28,8 @@ pub struct NodeConfig {
     pub resource_policy: Option<String>,
     #[serde(default = "default_api_budget")]
     pub api_budget: u64,
+    #[serde(default = "default_request_delay_ms")]
+    pub request_delay_ms: u64,
     #[serde(default = "default_sub_agents")]
     pub sub_agents: usize,
 }
@@ -36,12 +39,14 @@ impl NodeConfig {
         node_id: impl Into<String>,
         resource_policy: Option<String>,
         api_budget: u64,
+        request_delay_ms: u64,
         sub_agents: usize,
     ) -> Self {
         Self {
             node_id: node_id.into(),
             resource_policy: normalize_resource_policy(resource_policy),
             api_budget: normalize_api_budget(api_budget),
+            request_delay_ms: normalize_request_delay_ms(request_delay_ms),
             sub_agents: normalize_sub_agents(sub_agents),
         }
     }
@@ -80,12 +85,22 @@ impl NodeConfig {
             .as_ref()
             .map(|config| config.api_budget)
             .unwrap_or(DEFAULT_API_BUDGET);
+        let request_delay_ms = file_config
+            .as_ref()
+            .map(|config| config.request_delay_ms)
+            .unwrap_or(DEFAULT_REQUEST_DELAY_MS);
         let sub_agents = file_config
             .as_ref()
             .map(|config| config.sub_agents)
             .unwrap_or(DEFAULT_SUB_AGENTS);
 
-        Ok(Self::new(node_id, resource_policy, api_budget, sub_agents))
+        Ok(Self::new(
+            node_id,
+            resource_policy,
+            api_budget,
+            request_delay_ms,
+            sub_agents,
+        ))
     }
 
     pub fn load_api_budget(repo_root: &Path) -> u64 {
@@ -96,6 +111,16 @@ impl NodeConfig {
             .map(|config| config.api_budget)
             .unwrap_or(DEFAULT_API_BUDGET);
         normalize_api_budget(budget)
+    }
+
+    pub fn load_request_delay_ms(repo_root: &Path) -> u64 {
+        let path = node_config_path(repo_root);
+        let request_delay_ms = fs::read_to_string(&path)
+            .ok()
+            .and_then(|contents| toml::from_str::<NodeConfig>(&contents).ok())
+            .map(|config| config.request_delay_ms)
+            .unwrap_or(DEFAULT_REQUEST_DELAY_MS);
+        normalize_request_delay_ms(request_delay_ms)
     }
 
     pub fn save(&self, repo_root: &Path) -> Result<()> {
@@ -123,6 +148,10 @@ impl NodeConfig {
     pub fn effective_api_budget(&self) -> u64 {
         normalize_api_budget(self.api_budget)
     }
+
+    pub fn effective_request_delay_ms(&self) -> u64 {
+        normalize_request_delay_ms(self.request_delay_ms)
+    }
 }
 
 pub fn node_config_path(repo_root: &Path) -> PathBuf {
@@ -137,6 +166,10 @@ fn load_node_config_from_file(path: &Path) -> Result<NodeConfig> {
 
 fn default_api_budget() -> u64 {
     DEFAULT_API_BUDGET
+}
+
+fn default_request_delay_ms() -> u64 {
+    DEFAULT_REQUEST_DELAY_MS
 }
 
 fn default_sub_agents() -> usize {
@@ -569,6 +602,7 @@ mod tests {
             r#"node_id = "node-7f83"
 resource_policy = "Run 4 evals in parallel."
 api_budget = 15000
+request_delay_ms = 250
 sub_agents = 6
 "#,
         )
@@ -581,6 +615,7 @@ sub_agents = 6
             Some("Run 4 evals in parallel.")
         );
         assert_eq!(config.api_budget, 15_000);
+        assert_eq!(config.request_delay_ms, 250);
         assert_eq!(config.sub_agents, 6);
 
         fs::remove_dir_all(repo_root).unwrap();
@@ -606,6 +641,7 @@ resource_policy = "Run 4 evals in parallel."
             config.resource_policy.as_deref(),
             Some("Run 4 evals in parallel.")
         );
+        assert_eq!(config.request_delay_ms, DEFAULT_REQUEST_DELAY_MS);
         assert_eq!(config.sub_agents, DEFAULT_SUB_AGENTS);
 
         fs::remove_dir_all(repo_root).unwrap();
@@ -620,6 +656,7 @@ resource_policy = "Run 4 evals in parallel."
         let config = NodeConfig::load(&repo_root).unwrap();
         assert_eq!(config.node_id, "env-node");
         assert_eq!(config.resource_policy, None);
+        assert_eq!(config.request_delay_ms, DEFAULT_REQUEST_DELAY_MS);
         assert_eq!(config.sub_agents, DEFAULT_SUB_AGENTS);
 
         fs::remove_dir_all(repo_root).unwrap();
@@ -636,6 +673,7 @@ resource_policy = "Run 4 evals in parallel."
         let config = NodeConfig::load(&repo_root).unwrap();
         assert_eq!(config.node_id, "env-node");
         assert_eq!(config.resource_policy, None);
+        assert_eq!(config.request_delay_ms, DEFAULT_REQUEST_DELAY_MS);
         assert_eq!(config.sub_agents, DEFAULT_SUB_AGENTS);
 
         fs::remove_dir_all(repo_root).unwrap();
@@ -643,7 +681,13 @@ resource_policy = "Run 4 evals in parallel."
 
     #[test]
     fn defaults_resource_policy_when_missing() {
-        let config = NodeConfig::new("node-7f83", None, DEFAULT_API_BUDGET, DEFAULT_SUB_AGENTS);
+        let config = NodeConfig::new(
+            "node-7f83",
+            None,
+            DEFAULT_API_BUDGET,
+            DEFAULT_REQUEST_DELAY_MS,
+            DEFAULT_SUB_AGENTS,
+        );
         let (policy, is_default) = config.effective_resource_policy();
         assert!(is_default);
         assert_eq!(policy, DEFAULT_RESOURCE_POLICY);
@@ -651,14 +695,35 @@ resource_policy = "Run 4 evals in parallel."
 
     #[test]
     fn defaults_api_budget_when_missing() {
-        let config = NodeConfig::new("node-7f83", None, 0, DEFAULT_SUB_AGENTS);
+        let config = NodeConfig::new(
+            "node-7f83",
+            None,
+            0,
+            DEFAULT_REQUEST_DELAY_MS,
+            DEFAULT_SUB_AGENTS,
+        );
         assert_eq!(config.effective_api_budget(), DEFAULT_API_BUDGET);
     }
 
     #[test]
     fn defaults_sub_agents_when_zero() {
-        let config = NodeConfig::new("node-7f83", None, DEFAULT_API_BUDGET, 0);
+        let config = NodeConfig::new(
+            "node-7f83",
+            None,
+            DEFAULT_API_BUDGET,
+            DEFAULT_REQUEST_DELAY_MS,
+            0,
+        );
         assert_eq!(config.sub_agents, DEFAULT_SUB_AGENTS);
+    }
+
+    #[test]
+    fn defaults_request_delay_when_zero() {
+        let config = NodeConfig::new("node-7f83", None, DEFAULT_API_BUDGET, 0, DEFAULT_SUB_AGENTS);
+        assert_eq!(
+            config.effective_request_delay_ms(),
+            DEFAULT_REQUEST_DELAY_MS
+        );
     }
 
     #[test]
@@ -678,6 +743,53 @@ resource_policy = "Run 4 evals in parallel."
     fn load_api_budget_defaults_when_file_missing() {
         let repo_root = unique_temp_dir("budget-missing");
         assert_eq!(NodeConfig::load_api_budget(&repo_root), DEFAULT_API_BUDGET);
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn load_request_delay_ms_reads_custom_value() {
+        let repo_root = unique_temp_dir("request-delay-custom");
+        fs::write(
+            node_config_path(&repo_root),
+            "node_id = \"n\"\nrequest_delay_ms = 250\n",
+        )
+        .unwrap();
+
+        assert_eq!(NodeConfig::load_request_delay_ms(&repo_root), 250);
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn load_request_delay_ms_defaults_when_file_missing() {
+        let repo_root = unique_temp_dir("request-delay-missing");
+        assert_eq!(
+            NodeConfig::load_request_delay_ms(&repo_root),
+            DEFAULT_REQUEST_DELAY_MS
+        );
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn load_request_delay_ms_defaults_on_corrupt_file() {
+        let repo_root = unique_temp_dir("request-delay-corrupt");
+        fs::write(node_config_path(&repo_root), "not valid toml {{{{").unwrap();
+
+        assert_eq!(
+            NodeConfig::load_request_delay_ms(&repo_root),
+            DEFAULT_REQUEST_DELAY_MS
+        );
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn load_request_delay_ms_defaults_when_field_absent() {
+        let repo_root = unique_temp_dir("request-delay-absent");
+        fs::write(node_config_path(&repo_root), "node_id = \"n\"\n").unwrap();
+
+        assert_eq!(
+            NodeConfig::load_request_delay_ms(&repo_root),
+            DEFAULT_REQUEST_DELAY_MS
+        );
         fs::remove_dir_all(repo_root).unwrap();
     }
 
@@ -829,6 +941,13 @@ fn normalize_resource_policy(resource_policy: Option<String>) -> Option<String> 
 fn normalize_sub_agents(sub_agents: usize) -> usize {
     match sub_agents {
         0 => DEFAULT_SUB_AGENTS,
+        value => value,
+    }
+}
+
+fn normalize_request_delay_ms(request_delay_ms: u64) -> u64 {
+    match request_delay_ms {
+        0 => DEFAULT_REQUEST_DELAY_MS,
         value => value,
     }
 }

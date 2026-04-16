@@ -93,12 +93,16 @@ Each node keeps a local `.polyresearch-node.toml` file at the repo root:
 node_id = "alice/mac.lan-a3f2"
 sub_agents = 4
 resource_policy = "18-core machine. Run 4 evaluations in parallel. Stay under 50 API calls/min."
+api_budget = 5000
+request_delay_ms = 100
 ```
 
 - `node_id` identifies the machine or worker. Keep it stable for the lifetime of that worker or agent session.
 - `sub_agents` is the maximum number of theses this node may work on in parallel. It should match the number of evaluations the hardware can run simultaneously without interference.
 - `resource_policy` is optional natural language guidance for that node only. It is not project state.
-- Set or update it with `polyresearch init --sub-agents N --resource-policy "..."`.
+- `api_budget` is the hourly budget that `polyresearch pace` uses for warnings and backoff guidance. It does not change GitHub's actual quota.
+- `request_delay_ms` is the minimum delay the CLI inserts between GitHub requests across local `polyresearch` processes. Increase it when multiple agents on the same machine and GitHub login are tripping secondary rate limits.
+- Set or update `node_id`, `sub_agents`, and `resource_policy` with `polyresearch init --sub-agents N --resource-policy "..."`. Edit `.polyresearch-node.toml` directly for `api_budget` and `request_delay_ms`.
 - `POLYRESEARCH_NODE_ID` overrides `node_id` for the current process. Use it when multiple agents share one checkout or when one GitHub login needs several concurrent nodes.
 - If `POLYRESEARCH_NODE_ID` is unset, the CLI falls back to `.polyresearch-node.toml`.
 

@@ -551,6 +551,53 @@ async fn init_preserves_custom_api_budget() {
 }
 
 #[tokio::test]
+async fn init_preserves_custom_request_delay() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("init-request-delay");
+    let toml_path = repo.path.join(".polyresearch-node.toml");
+    fs::write(
+        &toml_path,
+        "node_id = \"old/node\"\nrequest_delay_ms = 250\n",
+    )
+    .unwrap();
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead",
+        false,
+        Commands::Init(InitArgs {
+            node: Some("new-node".to_string()),
+            resource_policy: None,
+            sub_agents: None,
+        }),
+    );
+
+    commands::init::run(
+        &ctx,
+        &InitArgs {
+            node: Some("new-node".to_string()),
+            resource_policy: None,
+            sub_agents: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let config: NodeConfig = toml::from_str(&fs::read_to_string(&toml_path).unwrap()).unwrap();
+    assert_eq!(config.node_id, "lead/new-node");
+    assert_eq!(config.request_delay_ms, 250);
+    assert_eq!(config.sub_agents, 1);
+}
+
+#[tokio::test]
 async fn init_preserves_existing_resource_policy_and_updates_sub_agents() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("init-resource-policy");
@@ -1596,6 +1643,7 @@ fn make_ctx(
     commands::AppContext {
         cli: Cli {
             repo: None,
+            github_debug: false,
             json: false,
             dry_run,
             command,

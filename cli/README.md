@@ -95,7 +95,7 @@ polyresearch init
 polyresearch init --sub-agents 4 --resource-policy "Run 4 evals in parallel, stay under 50 API calls/min"
 ```
 
-This writes `.polyresearch-node.toml` in the repo root. The file stores a stable `node_id`, a `sub_agents` limit, and an optional natural-language `resource_policy`.
+This writes `.polyresearch-node.toml` in the repo root. The file stores a stable `node_id`, a `sub_agents` limit, and an optional natural-language `resource_policy`. Additional tuning fields such as `api_budget` and `request_delay_ms` are documented in `POLYRESEARCH.md`.
 
 Inspect the current state:
 
@@ -106,6 +106,13 @@ polyresearch audit
 polyresearch pace --json
 polyresearch status --json
 polyresearch status --tui
+```
+
+Debug GitHub traffic when you need to inspect request pacing or rate-limit headers:
+
+```bash
+polyresearch --github-debug pace --json
+POLYRESEARCH_GITHUB_DEBUG=1 polyresearch status
 ```
 
 Contributor flow:
