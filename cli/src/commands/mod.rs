@@ -199,17 +199,6 @@ pub struct ThesisWorkspace {
     pub worktree_path: PathBuf,
 }
 
-pub fn create_thesis_branch(repo_root: &PathBuf, issue_number: u64, title: &str) -> Result<String> {
-    let slug = slugify(title);
-    let branch = format!("thesis/{issue_number}-{slug}");
-    run_git(repo_root, &["checkout", "main"])?;
-    if run_git(repo_root, &["rev-parse", "--verify", &branch]).is_ok() {
-        run_git(repo_root, &["branch", "-D", &branch])?;
-    }
-    run_git(repo_root, &["checkout", "-b", &branch])?;
-    Ok(branch)
-}
-
 pub fn thesis_worktree_path(repo_root: &PathBuf, issue_number: u64, title: &str) -> PathBuf {
     let slug = slugify(title);
     repo_root

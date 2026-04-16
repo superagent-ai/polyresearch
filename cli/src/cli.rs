@@ -64,18 +64,12 @@ pub struct StatusArgs {
 #[derive(Debug, Args, Clone)]
 pub struct IssueArgs {
     pub issue: u64,
-
-    #[arg(long)]
-    pub no_worktree: bool,
 }
 
 #[derive(Debug, Args, Clone)]
 pub struct BatchClaimArgs {
     #[arg(long)]
     pub count: Option<usize>,
-
-    #[arg(long)]
-    pub no_worktree: bool,
 }
 
 #[derive(Debug, Args, Clone)]

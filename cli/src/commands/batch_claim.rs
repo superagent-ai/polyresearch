@@ -20,12 +20,6 @@ struct BatchClaimOutput {
 }
 
 pub async fn run(ctx: &AppContext, args: &BatchClaimArgs) -> Result<()> {
-    if args.no_worktree {
-        return Err(eyre!(
-            "batch-claim requires separate worktrees; `--no-worktree` is not supported"
-        ));
-    }
-
     let node = read_node_id(&ctx.repo_root)?;
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
 
@@ -88,7 +82,7 @@ pub async fn run(ctx: &AppContext, args: &BatchClaimArgs) -> Result<()> {
 
     let mut claims = Vec::with_capacity(theses.len());
     for thesis in theses {
-        match claim_selected_thesis(ctx, thesis, &node, false) {
+        match claim_selected_thesis(ctx, thesis, &node) {
             Ok(claim) => claims.push(claim),
             Err(error) => {
                 if claims.is_empty() {
@@ -136,12 +130,7 @@ pub async fn run(ctx: &AppContext, args: &BatchClaimArgs) -> Result<()> {
             .map(|entry| {
                 format!(
                     "  - thesis #{} on branch `{}` in worktree `{}`",
-                    entry.issue,
-                    entry.branch,
-                    entry
-                        .worktree_path
-                        .as_deref()
-                        .unwrap_or("<missing worktree>")
+                    entry.issue, entry.branch, entry.worktree_path
                 )
             })
             .collect::<Vec<_>>()
