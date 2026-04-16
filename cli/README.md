@@ -118,7 +118,7 @@ polyresearch release 88 --reason no_improvement
 polyresearch batch-claim
 ```
 
-By default, `polyresearch claim` creates a dedicated worktree at `.worktrees/<issue>-<slug>/` from `main` and prints the path. Change into that worktree before editing or running evaluations. Pass `--no-worktree` only if you intentionally want the legacy single-working-tree checkout flow.
+`polyresearch claim` creates a dedicated worktree at `.worktrees/<issue>-<slug>/` from `main` and prints the path. Change into that worktree before editing or running evaluations. The main worktree stays on `main` so the lead can sync, decide, and generate without races from concurrent contributors.
 
 `polyresearch batch-claim` is the multi-thesis version for contributors using sub-agents. It fills the node's free thesis slots up to `sub_agents`, creates one worktree per thesis, and requires worktrees for parallel execution.
 
@@ -164,7 +164,7 @@ The maintainer comments `/approve` or `/reject` directly on thesis issues and ca
 - `polyresearch pace` -- show configured sub-agents, active claims, free slots, effective resource policy, and recent node throughput
 - `polyresearch status` -- derive thesis state, queue depth, active nodes, current best metric
 - `polyresearch audit` -- validate raw GitHub activity and report invalid or suspicious protocol events
-- `polyresearch claim` -- atomically claim a thesis and create the thesis worktree (or a branch with `--no-worktree`)
+- `polyresearch claim` -- atomically claim a thesis and create the thesis worktree at `.worktrees/<issue>-<slug>/`
 - `polyresearch batch-claim` -- claim up to the node's free thesis slots and create one worktree per thesis
 - `polyresearch attempt` -- post a structured attempt comment from the current branch
 - `polyresearch release` -- release a claim with a structured reason

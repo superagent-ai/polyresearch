@@ -661,7 +661,6 @@ async fn claim_rejects_already_claimed_thesis() {
         false,
         Commands::Claim(IssueArgs {
             issue: fixture.issue.number,
-            no_worktree: false,
         }),
     );
     commands::write_node_id(&repo.path, "node-b").unwrap();
@@ -670,7 +669,6 @@ async fn claim_rejects_already_claimed_thesis() {
         &ctx,
         &IssueArgs {
             issue: fixture.issue.number,
-            no_worktree: false,
         },
     )
     .await
@@ -697,7 +695,6 @@ async fn claim_rejects_closed_thesis() {
         false,
         Commands::Claim(IssueArgs {
             issue: fixture.issue.number,
-            no_worktree: false,
         }),
     );
     commands::write_node_id(&repo.path, "server").unwrap();
@@ -706,7 +703,6 @@ async fn claim_rejects_closed_thesis() {
         &ctx,
         &IssueArgs {
             issue: fixture.issue.number,
-            no_worktree: false,
         },
     )
     .await
@@ -833,7 +829,6 @@ async fn valid_claim_succeeds_in_dry_run_without_writing() {
         true,
         Commands::Claim(IssueArgs {
             issue: fixture.issue.number,
-            no_worktree: false,
         }),
     );
     commands::write_node_id(&repo.path, "node-a").unwrap();
@@ -842,7 +837,6 @@ async fn valid_claim_succeeds_in_dry_run_without_writing() {
         &ctx,
         &IssueArgs {
             issue: fixture.issue.number,
-            no_worktree: false,
         },
     )
     .await
@@ -871,7 +865,6 @@ async fn claim_creates_worktree_by_default() {
         false,
         Commands::Claim(IssueArgs {
             issue: fixture.issue.number,
-            no_worktree: false,
         }),
     );
     commands::write_node_id(&repo.path, "node-a").unwrap();
@@ -880,7 +873,6 @@ async fn claim_creates_worktree_by_default() {
         &ctx,
         &IssueArgs {
             issue: fixture.issue.number,
-            no_worktree: false,
         },
     )
     .await
@@ -951,22 +943,13 @@ async fn batch_claim_fills_remaining_capacity_only() {
         mock.clone(),
         &fixture_one.lead_github_login,
         false,
-        Commands::BatchClaim(BatchClaimArgs {
-            count: None,
-            no_worktree: false,
-        }),
+        Commands::BatchClaim(BatchClaimArgs { count: None }),
     );
     commands::write_node_config(&repo.path, "test-node", None, Some(2)).unwrap();
 
-    commands::batch_claim::run(
-        &ctx,
-        &BatchClaimArgs {
-            count: None,
-            no_worktree: false,
-        },
-    )
-    .await
-    .unwrap();
+    commands::batch_claim::run(&ctx, &BatchClaimArgs { count: None })
+        .await
+        .unwrap();
 
     let first_worktree = repo.path.join(".worktrees").join(format!(
         "{}-{}",
@@ -1019,22 +1002,13 @@ async fn batch_claim_reports_partial_success_when_later_claim_fails() {
         mock.clone(),
         &fixture_one.lead_github_login,
         false,
-        Commands::BatchClaim(BatchClaimArgs {
-            count: Some(2),
-            no_worktree: false,
-        }),
+        Commands::BatchClaim(BatchClaimArgs { count: Some(2) }),
     );
     commands::write_node_config(&repo.path, "node-a", None, Some(2)).unwrap();
 
-    let error = commands::batch_claim::run(
-        &ctx,
-        &BatchClaimArgs {
-            count: Some(2),
-            no_worktree: false,
-        },
-    )
-    .await
-    .unwrap_err();
+    let error = commands::batch_claim::run(&ctx, &BatchClaimArgs { count: Some(2) })
+        .await
+        .unwrap_err();
 
     assert!(error.to_string().contains("partially succeeded"));
     assert!(
@@ -1055,43 +1029,6 @@ async fn batch_claim_reports_partial_success_when_later_claim_fails() {
 }
 
 #[tokio::test]
-async fn batch_claim_rejects_no_worktree() {
-    let _guard = NodeIdEnvGuard::lock_clean();
-    let repo = TestRepo::new("batch-claim-no-worktree");
-    init_git_repo(&repo.path);
-    let fixture = load_issue_fixture("acknowledged_invalid_issue.json");
-    let mock = Arc::new(MockGitHubClient::new(
-        "alice",
-        vec![fixture.issue.clone()],
-        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
-        vec![],
-        HashMap::new(),
-    ));
-    let ctx = make_ctx(
-        repo.path.clone(),
-        mock,
-        &fixture.lead_github_login,
-        true,
-        Commands::BatchClaim(BatchClaimArgs {
-            count: Some(1),
-            no_worktree: true,
-        }),
-    );
-    commands::write_node_config(&repo.path, "node-a", None, Some(2)).unwrap();
-
-    let error = commands::batch_claim::run(
-        &ctx,
-        &BatchClaimArgs {
-            count: Some(1),
-            no_worktree: true,
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(error.to_string().contains("requires separate worktrees"));
-}
-
-#[tokio::test]
 async fn batch_claim_rejects_zero_count() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("batch-claim-zero");
@@ -1109,22 +1046,13 @@ async fn batch_claim_rejects_zero_count() {
         mock,
         &fixture.lead_github_login,
         true,
-        Commands::BatchClaim(BatchClaimArgs {
-            count: Some(0),
-            no_worktree: false,
-        }),
+        Commands::BatchClaim(BatchClaimArgs { count: Some(0) }),
     );
     commands::write_node_config(&repo.path, "node-a", None, Some(2)).unwrap();
 
-    let error = commands::batch_claim::run(
-        &ctx,
-        &BatchClaimArgs {
-            count: Some(0),
-            no_worktree: false,
-        },
-    )
-    .await
-    .unwrap_err();
+    let error = commands::batch_claim::run(&ctx, &BatchClaimArgs { count: Some(0) })
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("count must be at least 1"));
 }
 
@@ -1152,22 +1080,13 @@ async fn batch_claim_noops_when_already_at_capacity() {
         mock.clone(),
         &fixture_open.lead_github_login,
         false,
-        Commands::BatchClaim(BatchClaimArgs {
-            count: None,
-            no_worktree: false,
-        }),
+        Commands::BatchClaim(BatchClaimArgs { count: None }),
     );
     commands::write_node_config(&repo.path, "test-node", None, Some(1)).unwrap();
 
-    commands::batch_claim::run(
-        &ctx,
-        &BatchClaimArgs {
-            count: None,
-            no_worktree: false,
-        },
-    )
-    .await
-    .unwrap();
+    commands::batch_claim::run(&ctx, &BatchClaimArgs { count: None })
+        .await
+        .unwrap();
 
     assert!(mock.posted_issue_comments.lock().unwrap().is_empty());
 }
@@ -1609,7 +1528,6 @@ async fn claim_allows_additional_claims_under_sub_agent_capacity() {
         true,
         Commands::Claim(IssueArgs {
             issue: fixture_open.issue.number,
-            no_worktree: false,
         }),
     );
     commands::write_node_config(&repo.path, "test-node", None, Some(2)).unwrap();
@@ -1618,7 +1536,6 @@ async fn claim_allows_additional_claims_under_sub_agent_capacity() {
         &ctx,
         &IssueArgs {
             issue: fixture_open.issue.number,
-            no_worktree: false,
         },
     )
     .await
@@ -1651,7 +1568,6 @@ async fn claim_blocks_when_already_at_sub_agent_capacity() {
         true,
         Commands::Claim(IssueArgs {
             issue: fixture_open.issue.number,
-            no_worktree: false,
         }),
     );
     commands::write_node_config(&repo.path, "test-node", None, Some(1)).unwrap();
@@ -1660,7 +1576,6 @@ async fn claim_blocks_when_already_at_sub_agent_capacity() {
         &ctx,
         &IssueArgs {
             issue: fixture_open.issue.number,
-            no_worktree: false,
         },
     )
     .await
@@ -1799,13 +1714,7 @@ async fn duties_reports_idle_advisory_when_queue_empty_for_contributor() {
         vec![],
         HashMap::new(),
     ));
-    let ctx = make_ctx(
-        repo.path.clone(),
-        mock,
-        "lead-bot",
-        false,
-        Commands::Duties,
-    );
+    let ctx = make_ctx(repo.path.clone(), mock, "lead-bot", false, Commands::Duties);
     commands::write_node_id(&repo.path, "contributor-bot/node-1").unwrap();
 
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
@@ -1813,8 +1722,10 @@ async fn duties_reports_idle_advisory_when_queue_empty_for_contributor() {
         .unwrap();
     let report = commands::duties::check(&ctx, &repo_state).unwrap();
     assert!(
-        report.advisory.iter().any(|d| d.category == "idle"
-            && d.message.contains("Do not assume lead duties")),
+        report
+            .advisory
+            .iter()
+            .any(|d| d.category == "idle" && d.message.contains("Do not assume lead duties")),
         "should warn idle contributor not to assume lead duties, got: {:?}",
         report.advisory
     );

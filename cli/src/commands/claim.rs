@@ -5,8 +5,8 @@ use crate::cli::IssueArgs;
 use crate::commands::duties;
 use crate::commands::guards::require_claimable_thesis;
 use crate::commands::{
-    AppContext, configured_sub_agents, create_thesis_branch, create_thesis_worktree,
-    node_active_claims, print_value, read_node_id, slugify, thesis_worktree_path,
+    AppContext, configured_sub_agents, create_thesis_worktree, node_active_claims, print_value,
+    read_node_id, slugify, thesis_worktree_path,
 };
 use crate::comments::ProtocolComment;
 use crate::state::{RepositoryState, ThesisState};
@@ -16,7 +16,7 @@ pub(crate) struct ClaimOutput {
     pub issue: u64,
     pub node: String,
     pub branch: String,
-    pub worktree_path: Option<String>,
+    pub worktree_path: String,
 }
 
 pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
@@ -60,26 +60,19 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
         ));
     }
 
-    let output = claim_selected_thesis(ctx, thesis, &node, args.no_worktree)?;
+    let output = claim_selected_thesis(ctx, thesis, &node)?;
 
     print_value(ctx, &output, |value| {
-        match (&value.worktree_path, ctx.cli.dry_run) {
-            (Some(path), true) => format!(
+        if ctx.cli.dry_run {
+            format!(
                 "Would claim thesis #{} as node `{}` on branch `{}` in worktree `{}`.",
-                value.issue, value.node, value.branch, path
-            ),
-            (Some(path), false) => format!(
+                value.issue, value.node, value.branch, value.worktree_path
+            )
+        } else {
+            format!(
                 "Claimed thesis #{} as node `{}` on branch `{}` in worktree `{}`.",
-                value.issue, value.node, value.branch, path
-            ),
-            (None, true) => format!(
-                "Would claim thesis #{} as node `{}` on branch `{}`.",
-                value.issue, value.node, value.branch
-            ),
-            (None, false) => format!(
-                "Claimed thesis #{} as node `{}` on branch `{}`.",
-                value.issue, value.node, value.branch
-            ),
+                value.issue, value.node, value.branch, value.worktree_path
+            )
         }
     })
 }
@@ -88,7 +81,6 @@ pub(crate) fn claim_selected_thesis(
     ctx: &AppContext,
     thesis: &ThesisState,
     node: &str,
-    no_worktree: bool,
 ) -> Result<ClaimOutput> {
     let (branch, worktree_path) = if ctx.cli.dry_run {
         let branch = format!(
@@ -96,23 +88,17 @@ pub(crate) fn claim_selected_thesis(
             thesis.issue.number,
             slugify(&thesis.issue.title)
         );
-        let worktree_path = (!no_worktree).then(|| {
+        let worktree_path =
             thesis_worktree_path(&ctx.repo_root, thesis.issue.number, &thesis.issue.title)
                 .display()
-                .to_string()
-        });
+                .to_string();
         (branch, worktree_path)
-    } else if no_worktree {
-        (
-            create_thesis_branch(&ctx.repo_root, thesis.issue.number, &thesis.issue.title)?,
-            None,
-        )
     } else {
         let workspace =
             create_thesis_worktree(&ctx.repo_root, thesis.issue.number, &thesis.issue.title)?;
         (
             workspace.branch,
-            Some(workspace.worktree_path.display().to_string()),
+            workspace.worktree_path.display().to_string(),
         )
     };
 

@@ -158,12 +158,13 @@ LOOP FOREVER:
 4. **Check for review work.** Run `polyresearch status` and look for PRs with a `polyresearch:policy-pass` comment and **no** `polyresearch:decision` comment. These need peer review. Skip PRs you authored.
 5. **If a reviewable PR exists:**
   a. Run `polyresearch review-claim <pr-number>`.
-   b. Check out the **candidate SHA** (the PR head).
+   b. Create a review worktree at the **candidate SHA** and change into it: `git worktree add .worktrees/review-<pr-number> <candidate-sha>`.
    c. Run the evaluation per PREPARE.md. Record the candidate metric.
-   d. Check out the **base SHA** (the PR's merge base on `main`).
+   d. In the same review worktree, check out the **base SHA** (the PR's merge base on `main`): `git checkout <base-sha>`. The review worktree is detached and disposable, so this is safe.
    e. Run the same evaluation. Record the baseline metric.
    f. If `.polyresearch/` exists, compute its content hash: `find .polyresearch/ -type f | sort | xargs sha256sum | sha256sum`.
    g. Run `polyresearch review <pr-number> --metric <candidate> --baseline <baseline> --observation <observation>`. Your `baseline_metric` is your own measurement. Do not copy it from results.tsv or the candidate's self-report.
+   h. Remove the review worktree: `git worktree remove .worktrees/review-<pr-number>`.
 6. Repeat from step 0.
 
 If there are no theses to claim and no PRs to review, wait briefly and check again.
@@ -342,7 +343,8 @@ repo-root/                                 (main worktree on `main`)
   ├── .git
   ├── .worktrees/                          (gitignored)
   │     ├── 12-rmsnorm/                    (worktree on `thesis/12-rmsnorm`)
-  │     └── 12-rmsnorm-attempt-2/          (optional parallel attempt worktree)
+  │     ├── 12-rmsnorm-attempt-2/          (optional parallel attempt worktree)
+  │     └── review-47/                     (disposable review worktree)
   └── ...                                  (lead stays here)
 ```
 
@@ -351,10 +353,12 @@ repo-root/                                 (main worktree on `main`)
 - Each claim creates a thesis worktree under `.worktrees/<issue-number>-<slug>/` on branch `thesis/<issue-number>-<slug>`.
 - Each attempt gets its own sub-branch: `thesis/<issue-number>-<slug>-attempt-<n>`, forked from the thesis branch.
 - When running attempts in parallel, create one worktree per active attempt.
+- Reviews use a disposable worktree under `.worktrees/review-<pr-number>/` for candidate and base SHA checkouts.
 - The candidate PR merges the best attempt's sub-branch into `main`.
 - Discarded attempts stay as unmerged branches. They are data, not waste.
-- Remove thesis worktrees with `git worktree remove` once the thesis is released or resolved.
-- Pass `--no-worktree` to `polyresearch claim` to skip worktree creation and create a branch in the current checkout instead. Useful in sandboxed environments that restrict worktree creation.
+- Remove thesis and review worktrees with `git worktree remove` once the work is done.
+
+**Main worktree invariant.** The repository root worktree stays on `main` at all times. Contributors must never change HEAD in the main worktree: no `git checkout`, no `git switch`, no `polyresearch claim` without a worktree. All thesis work happens in `.worktrees/<issue>-<slug>/` and all review checkouts happen in `.worktrees/review-<pr>/`. This invariant is what lets the lead run `sync`, `decide`, `generate`, and `policy-check` reliably while contributors work in parallel on the same checkout.
 
 ---
 
@@ -550,7 +554,7 @@ When `required_confirmations` is greater than 0, candidate PRs go through peer r
 
 1. **Policy check.** The lead diffs the candidate against the editable surface. If it touches files outside the CAN list: `outcome: policy_rejection`, PR closed. Otherwise: `polyresearch:policy-pass` posted.
 2. **Review claiming.** Contributors (who did not author the PR) find PRs with `polyresearch:policy-pass` and no `polyresearch:decision`. They post `polyresearch:review-claim`.
-3. **Evaluation.** The reviewer checks out the candidate SHA, runs the evaluation per PREPARE.md. Then checks out the base SHA, runs the same evaluation. Both metrics are measured independently.
+3. **Evaluation.** The reviewer creates a disposable review worktree at the candidate SHA (`git worktree add .worktrees/review-<pr> <candidate-sha>`), runs the evaluation per PREPARE.md, then checks out the base SHA in the same review worktree and runs it again. Both metrics are measured independently. The review worktree is removed when done.
 4. **Review record.** The reviewer posts a `polyresearch:review` comment with both metrics, observation, environment hash, and timestamp.
 5. **Maintainer gate.** If `auto_approve` is `false`, the lead waits for a maintainer `/approve` before deciding. The PR should be assigned to `maintainer_github_login` while it is waiting.
 6. **Decision.** When the reviewer requirements are satisfied, and the maintainer gate is satisfied when enabled, the lead evaluates and posts `polyresearch:decision`. Merges or closes the PR.
