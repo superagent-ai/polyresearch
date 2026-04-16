@@ -128,6 +128,10 @@ pub fn write_node_config(
         .as_ref()
         .map(|config| config.api_budget)
         .unwrap_or_else(|| NodeConfig::load_api_budget(repo_root));
+    let existing_request_delay_ms = existing
+        .as_ref()
+        .map(|config| config.request_delay_ms)
+        .unwrap_or_else(|| NodeConfig::load_request_delay_ms(repo_root));
     let existing_sub_agents = existing
         .as_ref()
         .map(|config| config.sub_agents)
@@ -138,6 +142,7 @@ pub fn write_node_config(
             .map(ToString::to_string)
             .or(existing_resource_policy),
         existing_budget,
+        existing_request_delay_ms,
         sub_agents.unwrap_or(existing_sub_agents),
     )
     .save(repo_root)

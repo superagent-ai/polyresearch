@@ -10,14 +10,18 @@ use polyresearch::commands;
 use polyresearch::commands::AppContext;
 use polyresearch::config::{NodeConfig, ProgramSpec, ProtocolConfig};
 use polyresearch::github::{GitHubApi, GitHubClient, RepoRef};
+use polyresearch::github_debug;
+use polyresearch::throttle;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
 
     let cli = Cli::parse();
+    github_debug::init(cli.github_debug);
     let cwd = env::current_dir().wrap_err("failed to determine current working directory")?;
     let repo_root = discover_repo_root(&cwd)?;
+    throttle::init(NodeConfig::load_request_delay_ms(&repo_root));
     let repo = RepoRef::discover(cli.repo.as_deref(), &repo_root)?;
     let github: Arc<dyn GitHubApi> = Arc::new(GitHubClient::new(repo.clone()));
     let api_budget = NodeConfig::load_api_budget(&repo_root);

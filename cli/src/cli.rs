@@ -11,6 +11,9 @@ pub struct Cli {
     pub repo: Option<String>,
 
     #[arg(long, global = true)]
+    pub github_debug: bool,
+
+    #[arg(long, global = true)]
     pub json: bool,
 
     #[arg(long, global = true)]
