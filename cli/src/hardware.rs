@@ -112,10 +112,19 @@ pub fn probe() -> HardwareSnapshot {
 pub fn budget(snapshot: &HardwareSnapshot, capacity_pct: u8) -> HardwareBudget {
     let pct = capacity_pct.clamp(1, 100);
     let pct_usize = pct as usize;
+    let gpu_count = snapshot.gpus.len();
     HardwareBudget {
         cores: (snapshot.physical_cores * pct_usize / 100).max(1),
         memory_gb: snapshot.total_memory_gb * pct as f64 / 100.0,
-        gpus: snapshot.gpus.len() * pct_usize / 100,
+        // GPUs are integers, not divisible. Floor-rounding hides single-GPU
+        // boxes from the agent (1 * 75 / 100 = 0), so when at least one GPU
+        // exists, give the project at least one. Multi-project oversubscription
+        // is the user's honor-system responsibility.
+        gpus: if gpu_count == 0 {
+            0
+        } else {
+            (gpu_count * pct_usize / 100).max(1)
+        },
         capacity_pct: pct,
     }
 }
@@ -318,10 +327,28 @@ mod tests {
     }
 
     #[test]
-    fn budget_rounds_gpus_down() {
+    fn budget_rounds_gpus_down_when_quotient_is_at_least_one() {
         let snapshot = snapshot_for(8, 64.0, 3);
         let b = budget(&snapshot, 50);
         assert_eq!(b.gpus, 1);
+    }
+
+    #[test]
+    fn budget_floors_gpus_at_one_when_machine_has_a_gpu() {
+        // Default 75% capacity on a 1-GPU box must surface that GPU to the
+        // agent, otherwise GPU evals never run on single-GPU machines.
+        let snapshot = snapshot_for(8, 64.0, 1);
+        let b = budget(&snapshot, 75);
+        assert_eq!(b.gpus, 1);
+        let b = budget(&snapshot, 1);
+        assert_eq!(b.gpus, 1);
+    }
+
+    #[test]
+    fn budget_reports_zero_gpus_when_machine_has_none() {
+        let snapshot = snapshot_for(8, 64.0, 0);
+        let b = budget(&snapshot, 100);
+        assert_eq!(b.gpus, 0);
     }
 
     #[test]

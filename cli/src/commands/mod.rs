@@ -140,12 +140,6 @@ pub fn write_node_config(
     .save(repo_root)
 }
 
-pub fn configured_capacity(repo_root: &PathBuf) -> u8 {
-    read_node_config(repo_root)
-        .map(|config| config.capacity)
-        .unwrap_or(crate::config::DEFAULT_CAPACITY)
-}
-
 pub fn node_active_claims(repo_state: &RepositoryState, node_id: &str) -> usize {
     repo_state
         .theses

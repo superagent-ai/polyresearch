@@ -144,10 +144,6 @@ fn load_node_config_from_file(path: &Path) -> Result<NodeConfig> {
 }
 
 fn warn_if_legacy_fields(contents: &str) {
-    static WARNED: OnceLock<()> = OnceLock::new();
-    if WARNED.set(()).is_err() {
-        return;
-    }
     let has_sub_agents = contents
         .lines()
         .any(|line| line.trim_start().starts_with("sub_agents"));
@@ -155,6 +151,13 @@ fn warn_if_legacy_fields(contents: &str) {
         .lines()
         .any(|line| line.trim_start().starts_with("resource_policy"));
     if !has_sub_agents && !has_resource_policy {
+        return;
+    }
+    // Only consume the OnceLock once we know we have something to warn about,
+    // otherwise the first legacy-free load would spend the lock and silence
+    // every subsequent legacy load in the same process.
+    static WARNED: OnceLock<()> = OnceLock::new();
+    if WARNED.set(()).is_err() {
         return;
     }
     eprintln!("warning: .polyresearch-node.toml contains legacy field(s):");
