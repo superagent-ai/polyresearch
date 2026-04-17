@@ -5,6 +5,7 @@ use serde::Serialize;
 use crate::commands::{AppContext, exit_with, node_active_claims, print_value, read_node_config};
 use crate::config::NodeConfig;
 use crate::github::RateLimitStatus;
+use crate::hardware::{self, HardwareBudget, HardwareSnapshot};
 use crate::state::{RepositoryState, ThesisPhase};
 
 const RATE_LIMIT_EXIT_CODE: i32 = 75;
@@ -13,9 +14,9 @@ const RATE_LIMIT_EXIT_CODE: i32 = 75;
 pub struct PaceOutput {
     pub repo: String,
     pub node_id: String,
-    pub resource_policy: String,
-    pub is_default_policy: bool,
-    pub sub_agents: usize,
+    pub capacity: u8,
+    pub hardware: HardwareSnapshot,
+    pub budget: HardwareBudget,
     pub api_budget: u64,
     pub rate_limit: PaceRateLimit,
     pub attempts_last_hour: usize,
@@ -23,7 +24,6 @@ pub struct PaceOutput {
     pub idle_minutes: Option<i64>,
     pub claimable_theses: usize,
     pub active_claims: usize,
-    pub free_slots: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -53,12 +53,6 @@ pub async fn run(ctx: &AppContext) -> Result<()> {
     );
 
     print_value(ctx, &output, |value| {
-        let resource_label = if value.is_default_policy {
-            "Resource policy (default)"
-        } else {
-            "Resource policy"
-        };
-        let mut rendered = format_wrapped_policy(resource_label, &value.resource_policy);
         let idle = value
             .idle_minutes
             .map(|minutes| minutes.to_string())
@@ -71,8 +65,11 @@ pub async fn run(ctx: &AppContext) -> Result<()> {
                 format!("{} (in {minutes} min)", timestamp.to_rfc3339())
             })
             .unwrap_or_else(|| "unknown".to_string());
-        rendered.push_str(&format!(
-            "\n\nAPI budget:\n  Configured budget:           {}/hr\n  GitHub core limit:           {}/hr\n  Remaining quota:             {}\n  Used quota:                  {}\n  Resets at:                   {}\n  Cost per command:            {} calls ({} issues + {} PRs + 2 lists)\n  Commands left:               ~{}\n  Near limit:                  {}\n\nThroughput ({}):\n  Configured sub-agents:       {}\n  Active claims:               {}\n  Free slots:                  {}\n  Attempts last hour:          {}\n  Attempts last 4 hours:       {}\n  Minutes since last activity: {}\n  Claimable theses idle:       {}",
+        format!(
+            "Hardware budget:\n  Machine:       {}\n  Your max:      {}\n  Live free:     {}\n  Multi-project: honor-system, not tracked. Sum project capacities yourself.\n\nAPI budget:\n  Configured budget:           {}/hr\n  GitHub core limit:           {}/hr\n  Remaining quota:             {}\n  Used quota:                  {}\n  Resets at:                   {}\n  Cost per command:            {} calls ({} issues + {} PRs + 2 lists)\n  Commands left:               ~{}\n  Near limit:                  {}\n\nThroughput ({}):\n  Active claims:               {}\n  Attempts last hour:          {}\n  Attempts last 4 hours:       {}\n  Minutes since last activity: {}\n  Claimable theses idle:       {}",
+            hardware::format_machine_line(&value.hardware),
+            hardware::format_share_line(&value.budget),
+            hardware::format_live_line(&value.hardware),
             value.rate_limit.configured_budget,
             value.rate_limit.limit,
             value.rate_limit.remaining,
@@ -84,15 +81,12 @@ pub async fn run(ctx: &AppContext) -> Result<()> {
             value.rate_limit.commands_left,
             if value.rate_limit.is_low { "yes" } else { "no" },
             value.node_id,
-            value.sub_agents,
             value.active_claims,
-            value.free_slots,
             value.attempts_last_hour,
             value.attempts_last_4_hours,
             idle,
-            value.claimable_theses
-        ));
-        rendered
+            value.claimable_theses,
+        )
     })?;
 
     if output.rate_limit.remaining < output.rate_limit.derive_cost {
@@ -127,7 +121,9 @@ pub fn build_output(
     let one_hour_ago = now - Duration::hours(1);
     let four_hours_ago = now - Duration::hours(4);
     let node_id = node_config.node_id.clone();
-    let (resource_policy, is_default_policy) = node_config.effective_resource_policy();
+    let capacity = node_config.effective_capacity();
+    let hardware_snapshot = hardware::probe();
+    let budget = hardware::budget(&hardware_snapshot, capacity);
 
     let attempts = repo_state
         .theses
@@ -151,7 +147,6 @@ pub fn build_output(
         })
         .count();
     let active_claims = node_active_claims(repo_state, &node_id);
-    let free_slots = node_config.sub_agents.saturating_sub(active_claims);
     let idle_minutes = last_activity(repo_state, &node_id)
         .map(|timestamp| now.signed_duration_since(timestamp).num_minutes().max(0));
     let issue_count = repo_state.theses.len();
@@ -161,9 +156,9 @@ pub fn build_output(
     PaceOutput {
         repo,
         node_id,
-        resource_policy: resource_policy.to_string(),
-        is_default_policy,
-        sub_agents: node_config.sub_agents,
+        capacity,
+        hardware: hardware_snapshot,
+        budget,
         api_budget,
         rate_limit: PaceRateLimit {
             configured_budget: api_budget,
@@ -182,7 +177,6 @@ pub fn build_output(
         idle_minutes,
         claimable_theses,
         active_claims,
-        free_slots,
     }
 }
 
@@ -229,44 +223,4 @@ fn last_activity(repo_state: &RepositoryState, node_id: &str) -> Option<DateTime
     }
 
     timestamps.into_iter().max()
-}
-
-fn format_wrapped_policy(label: &str, policy: &str) -> String {
-    let lines = wrap_text(policy, 72);
-    let mut rendered = String::new();
-    if let Some((first, rest)) = lines.split_first() {
-        rendered.push_str(&format!("{label}: {first}"));
-        for line in rest {
-            rendered.push_str(&format!("\n  {line}"));
-        }
-    } else {
-        rendered.push_str(&format!("{label}:"));
-    }
-    rendered
-}
-
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-
-    for word in text.split_whitespace() {
-        if current.is_empty() {
-            current.push_str(word);
-            continue;
-        }
-
-        if current.len() + 1 + word.len() > width {
-            lines.push(current);
-            current = word.to_string();
-        } else {
-            current.push(' ');
-            current.push_str(word);
-        }
-    }
-
-    if !current.is_empty() {
-        lines.push(current);
-    }
-
-    lines
 }

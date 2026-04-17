@@ -1,6 +1,6 @@
 [package]
 name = "polyresearch"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 description = "Distributed autoresearch across multiple machines and contributors"
 license = "MIT"
@@ -26,6 +26,7 @@ regex = "1.12.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 sha2 = "0.11.0"
+sysinfo = "0.32"
 tokio = { version = "1.51.0", features = ["full"] }
 toml = "1.1.2"
 walkdir = "2.5.0"

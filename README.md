@@ -64,7 +64,7 @@ The agent clones the repo, claims work from the issue queue, runs experiments, a
 
 A single contributor agent working on one thesis at a time only runs one evaluation at a time. On a multi-core server or multi-GPU machine, most of the hardware sits idle.
 
-Polyresearch can use sub-agents to keep that hardware busy. Set `sub_agents` in `.polyresearch-node.toml` to the number of evaluations the machine can run at once. The contributor then keeps up to that many theses in flight, one sub-agent per thesis, and posts results as each thesis finishes. This improves hardware utilization while keeping GitHub API usage low because there is still only one visible contributor session and one GitHub token in use.
+Polyresearch can use sub-agents to keep that hardware busy. Set `capacity` in `.polyresearch-node.toml` to the percent of the total machine this project may use (default 75). `polyresearch pace` probes the machine and prints your share (cores, memory, GPUs) alongside a live-free load snapshot; the contributor divides that by each eval's resource footprint from PREPARE.md, claims that many theses via `polyresearch batch-claim --count N`, dispatches one sub-agent per worktree, and posts results as each thesis finishes. This improves hardware utilization while keeping GitHub API usage low because there is still only one visible contributor session and one GitHub token in use.
 
 ### Run on a remote machine
 
@@ -116,7 +116,7 @@ Full command reference in [cli/README.md](cli/README.md).
 
 **Failed experiments are data.** Every attempt gets a row in `results.tsv` and stays as an unmerged branch. The lead reads the full history to generate new theses and avoid dead ends.
 
-**Resource pacing.** Each node can set a natural-language `resource_policy`. The `polyresearch pace` command compares the policy against recent throughput so agents can adjust their parallelism.
+**Resource pacing.** Each node sets a `capacity` percentage in `.polyresearch-node.toml` (default 75). The `polyresearch pace` command probes the hardware, prints the project's share plus live load, and lets the agent pick how many theses to run in parallel given each eval's footprint. Multi-project coexistence on one machine is honor-system: set each project's `capacity` so the sum stays safe.
 
 ## Examples
 

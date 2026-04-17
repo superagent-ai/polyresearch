@@ -5,8 +5,7 @@ use crate::cli::IssueArgs;
 use crate::commands::duties;
 use crate::commands::guards::require_claimable_thesis;
 use crate::commands::{
-    AppContext, configured_sub_agents, create_thesis_worktree, node_active_claims, print_value,
-    read_node_id, slugify, thesis_worktree_path,
+    AppContext, create_thesis_worktree, print_value, read_node_id, slugify, thesis_worktree_path,
 };
 use crate::comments::ProtocolComment;
 use crate::state::{RepositoryState, ThesisState};
@@ -36,16 +35,6 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
         ));
     }
     let thesis = require_claimable_thesis(&repo_state, args.issue)?;
-    let active_claims = node_active_claims(&repo_state, &node);
-    let sub_agents = configured_sub_agents(&ctx.repo_root);
-    if active_claims >= sub_agents {
-        return Err(eyre!(
-            "node `{}` is already at configured sub-agent capacity ({}/{} active claims)",
-            node,
-            active_claims,
-            sub_agents
-        ));
-    }
     if !thesis.active_claims.is_empty() {
         let nodes = thesis
             .active_claims

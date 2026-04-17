@@ -4,18 +4,15 @@ use serde::Serialize;
 use crate::cli::BatchClaimArgs;
 use crate::commands::claim::{ClaimOutput, claim_selected_thesis};
 use crate::commands::duties;
-use crate::commands::{
-    AppContext, configured_sub_agents, node_active_claims, print_value, read_node_id,
-};
+use crate::commands::{AppContext, node_active_claims, print_value, read_node_id};
 use crate::state::{RepositoryState, ThesisPhase, ThesisState};
 
 #[derive(Debug, Serialize)]
 struct BatchClaimOutput {
     node: String,
-    sub_agents: usize,
     active_claims: usize,
     claimed_count: usize,
-    free_slots: usize,
+    requested_count: usize,
     claims: Vec<ClaimOutput>,
 }
 
@@ -36,46 +33,26 @@ pub async fn run(ctx: &AppContext, args: &BatchClaimArgs) -> Result<()> {
         ));
     }
 
-    let sub_agents = configured_sub_agents(&ctx.repo_root);
-    let active_claims = node_active_claims(&repo_state, &node);
-    let available_slots = sub_agents.saturating_sub(active_claims);
     if matches!(args.count, Some(0)) {
         return Err(eyre!("batch-claim count must be at least 1"));
     }
-    let requested = args.count.unwrap_or(available_slots);
-    let claim_count = requested.min(available_slots);
 
-    if claim_count == 0 {
-        let output = BatchClaimOutput {
-            node: node.clone(),
-            sub_agents,
-            active_claims,
-            claimed_count: 0,
-            free_slots: 0,
-            claims: Vec::new(),
-        };
-        return print_value(ctx, &output, |value| {
-            format!(
-                "Node `{}` is already at capacity ({}/{} active claims). No new theses claimed.",
-                value.node, value.active_claims, value.sub_agents
-            )
-        });
-    }
+    let requested = args.count.unwrap_or(1);
+    let active_claims = node_active_claims(&repo_state, &node);
 
-    let theses = select_claimable_theses(&repo_state, &node, claim_count);
+    let theses = select_claimable_theses(&repo_state, &node, requested);
     if theses.is_empty() {
         let output = BatchClaimOutput {
             node: node.clone(),
-            sub_agents,
             active_claims,
             claimed_count: 0,
-            free_slots: available_slots,
+            requested_count: requested,
             claims: Vec::new(),
         };
         return print_value(ctx, &output, |value| {
             format!(
-                "No claimable theses available for node `{}`. Free slots remaining: {}.",
-                value.node, value.free_slots
+                "No claimable theses available for node `{}` (requested {}).",
+                value.node, value.requested_count
             )
         });
     }
@@ -105,23 +82,22 @@ pub async fn run(ctx: &AppContext, args: &BatchClaimArgs) -> Result<()> {
 
     let output = BatchClaimOutput {
         node: node.clone(),
-        sub_agents,
         active_claims,
         claimed_count: claims.len(),
-        free_slots: available_slots.saturating_sub(claims.len()),
+        requested_count: requested,
         claims,
     };
 
     print_value(ctx, &output, |value| {
         let header = if ctx.cli.dry_run {
             format!(
-                "Would claim {} thesis slots for node `{}` ({} active, {} free after).",
-                value.claimed_count, value.node, value.active_claims, value.free_slots
+                "Would claim {} of {} requested thesis slots for node `{}` ({} already active).",
+                value.claimed_count, value.requested_count, value.node, value.active_claims
             )
         } else {
             format!(
-                "Claimed {} thesis slots for node `{}` ({} active before, {} free after).",
-                value.claimed_count, value.node, value.active_claims, value.free_slots
+                "Claimed {} of {} requested thesis slots for node `{}` ({} already active before).",
+                value.claimed_count, value.requested_count, value.node, value.active_claims
             )
         };
         let lines = value

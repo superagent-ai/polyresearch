@@ -80,7 +80,7 @@ When you start, before doing anything else:
    export POLYRESEARCH_NODE_ID="${LOGIN}/${MACHINE_ID}"
    ```
 
-7. If `.polyresearch-node.toml` does not exist yet, run `polyresearch init --node "$MACHINE_ID"`. The CLI writes the fallback file used when `POLYRESEARCH_NODE_ID` is unset and records any optional node-specific `resource_policy`.
+7. If `.polyresearch-node.toml` does not exist yet, run `polyresearch init --node "$MACHINE_ID"`. The CLI writes the fallback file used when `POLYRESEARCH_NODE_ID` is unset and records any optional node-specific `capacity`.
 8. Identify your role. If your instructions explicitly say "you are the lead," follow the lead loop. Otherwise, follow the contributor loop. Do not infer your role from `lead_github_login`, queue state, or any other signal. Role comes from launch instructions only.
 
 ---
@@ -91,28 +91,22 @@ Each node keeps a local `.polyresearch-node.toml` file at the repo root:
 
 ```toml
 node_id = "alice/mac.lan-a3f2"
-sub_agents = 4
-resource_policy = "18-core machine. Run 4 evaluations in parallel. Stay under 50 API calls/min."
+capacity = 50
 api_budget = 5000
 request_delay_ms = 100
 ```
 
 - `node_id` identifies the machine or worker. Keep it stable for the lifetime of that worker or agent session.
-- `sub_agents` is the maximum number of theses this node may work on in parallel. It should match the number of evaluations the hardware can run simultaneously without interference.
-- `resource_policy` is optional natural language guidance for that node only. It is not project state.
+- `capacity` is an integer from 1 to 100 giving the percent of **total machine** resources this project may use. Honor-system: the CLI does not enforce OS-level isolation. Default `75` if absent, which leaves roughly 25% for the OS, disk I/O, monitoring, and the agent process itself. When multiple polyresearch projects share a host, set each project's `capacity` so the sum stays safe (for example, two projects at 35% each, or one primary at 50% + one secondary at 25%).
 - `api_budget` is the hourly budget that `polyresearch pace` uses for warnings and backoff guidance. It does not change GitHub's actual quota.
 - `request_delay_ms` is the minimum delay the CLI inserts between GitHub requests across local `polyresearch` processes. Increase it when multiple agents on the same machine and GitHub login are tripping secondary rate limits.
-- Set or update `node_id`, `sub_agents`, and `resource_policy` with `polyresearch init --sub-agents N --resource-policy "..."`. Edit `.polyresearch-node.toml` directly for `api_budget` and `request_delay_ms`.
+- Set or update `node_id` and `capacity` with `polyresearch init --capacity N`. Edit `.polyresearch-node.toml` directly for `api_budget` and `request_delay_ms`.
 - `POLYRESEARCH_NODE_ID` overrides `node_id` for the current process. Use it when multiple agents share one checkout or when one GitHub login needs several concurrent nodes.
 - If `POLYRESEARCH_NODE_ID` is unset, the CLI falls back to `.polyresearch-node.toml`.
 
-Sub-agents exist to improve hardware utilization. A contributor that works on one thesis at a time only runs one evaluation at a time. On a multi-core or multi-GPU machine, the rest of the hardware sits idle. When `sub_agents` is greater than 1, the contributor should keep up to that many theses in flight, one sub-agent per thesis, one worktree per thesis.
+The contributor is responsible for deciding how many theses to keep in flight at once. Run `polyresearch pace` regularly: it probes the machine, shows the `capacity`-derived hardware budget (cores, memory, GPUs), a live-free snapshot of current load and available memory, and the node's active claims. Read PROGRAM.md and PREPARE.md to learn each evaluation's resource footprint, then choose how many parallel evaluations fit inside the tighter of the two numbers (`Your max` and `Live free`). On a single-core or single-GPU-bottlenecked eval you will run one thesis at a time; on a smaller CPU-bound eval you may run several in parallel, one worktree per thesis.
 
-Without sub-agents (`sub_agents = 1` or absent), follow the normal contributor loop below.
-
-With sub-agents (`sub_agents > 1`), the contributor still owns the work. The contributor claims multiple theses, dispatches one sub-agent per thesis, waits for results, then posts attempt records, submits improvements, and releases non-improvements. Sub-agents do not interact with GitHub directly.
-
-Run `polyresearch pace` regularly. It prints the configured `sub_agents`, active claims, free slots, optional `resource_policy`, and recent activity so the contributor can compare intent vs. reality and adjust throughput.
+Any legacy `sub_agents` or `resource_policy` keys in an existing `.polyresearch-node.toml` are ignored and will be dropped on the next `polyresearch init`. The CLI prints a one-time warning when it encounters them.
 
 ---
 
@@ -134,7 +128,7 @@ Blocking duties exist when:
 - (Lead) Decidable PRs have not been decided.
 - (Lead) Open PRs have not been policy-checked.
 
-This mechanism exists because GitHub visibility is a shared resource. Other contributors, the lead, and the maintainer cannot see local-only work. A contributor may hold up to `sub_agents` active claims. Claims with zero posted attempts are advisory, not blocking, because the claim comment itself makes the work visible on GitHub.
+This mechanism exists because GitHub visibility is a shared resource. Other contributors, the lead, and the maintainer cannot see local-only work. Claims with zero posted attempts are advisory, not blocking, because the claim comment itself makes the work visible on GitHub.
 
 ---
 
@@ -143,13 +137,13 @@ This mechanism exists because GitHub visibility is a shared resource. Other cont
 LOOP FOREVER:
 
 0. **Check duties.** Run `polyresearch duties`. If any blocking items are reported, resolve each one before continuing. The CLI will also block `claim` if duties are outstanding.
-1. **Check pace.** Run `polyresearch pace`. Compare the effective resource policy against recent throughput and adjust how many experiments you run in parallel.
+1. **Check pace.** Run `polyresearch pace`. Compare your configured `capacity` share (`Your max`) and the live-free signal against your current active claims and recent throughput, then pick how many theses you will keep in flight this iteration. Your effective parallelism is the tighter of `Your max` and `Live free`, divided by each eval's resource footprint (from PREPARE.md).
 2. **Check for theses.** Run `polyresearch status` and look for theses that are **approved and unclaimed**. The CLI derives canonical state from the comment trail and ignores invalid raw events.
 3. **If a claimable thesis exists:**
-  a. Run `polyresearch claim <issue-number>`.
-   b. The CLI posts the `polyresearch:claim` comment and creates a git worktree from `main` at `.worktrees/<issue-number>-<slug>/` on branch `thesis/<issue-number>-<slug>`. Change into that worktree before editing.
+  a. To work a single thesis, run `polyresearch claim <issue-number>`. To run several theses in parallel on the same node, run `polyresearch batch-claim --count N` instead, where `N` is the number you decided in step 1. Either way the CLI posts the `polyresearch:claim` comment and creates one git worktree per claimed thesis.
+   b. Each claim creates a worktree from `main` at `.worktrees/<issue-number>-<slug>/` on branch `thesis/<issue-number>-<slug>`. Change into that worktree (or dispatch one sub-agent per worktree) before editing.
    c. Read PROGRAM.md for direction and constraints.
-   d. Run experiments from inside that thesis worktree. Each attempt uses its own sub-branch: `thesis/<issue-number>-<slug>-attempt-<n>`. If you run attempts in parallel, use one worktree per active attempt.
+   d. Run experiments from inside each thesis worktree. Each attempt uses its own sub-branch: `thesis/<issue-number>-<slug>-attempt-<n>`. If you run attempts in parallel for a single thesis, use one worktree per active attempt.
    e. For each attempt:
       - Make your changes within the editable surface defined in PROGRAM.md.
       - Commit your changes.
@@ -173,24 +167,7 @@ LOOP FOREVER:
 
 If there are no theses to claim and no PRs to review, wait briefly and check again.
 
-### Contributor loop with sub-agents
-
-When `.polyresearch-node.toml` sets `sub_agents` greater than 1, use this variant instead of working one thesis at a time:
-
-1. Run `polyresearch duties` and resolve blocking items.
-2. Run `polyresearch pace`.
-3. Run `polyresearch batch-claim`. It fills free thesis slots up to `sub_agents` and creates one worktree per thesis.
-4. Dispatch one sub-agent per claimed thesis. Each sub-agent:
-   - Works only in its assigned worktree.
-   - Reads `PROGRAM.md` and `PREPARE.md`.
-   - Designs and runs experiments for that thesis.
-   - Returns all completed attempts, metrics, observations, and summaries to the contributor.
-   - Does not run `polyresearch` commands and does not talk to GitHub.
-5. As each sub-agent finishes its thesis, immediately post every returned attempt with `polyresearch attempt`.
-6. If a thesis improved, run `polyresearch submit` for it immediately.
-7. If a thesis did not improve, run `polyresearch release` for it.
-8. Run `git worktree remove` for finished thesis worktrees.
-9. Repeat from step 1.
+**Parallelism via sub-agents.** When `polyresearch pace` shows that your `capacity` budget allows more than one concurrent evaluation, claim several theses at once with `polyresearch batch-claim --count N` and dispatch one sub-agent per claimed worktree. Each sub-agent works only in its assigned worktree, reads `PROGRAM.md` and `PREPARE.md`, designs and runs experiments for that thesis, and returns all completed attempts (metrics, observations, summaries) to the contributor. Sub-agents do not run `polyresearch` commands and do not talk to GitHub. As each sub-agent finishes its thesis, post every returned attempt with `polyresearch attempt`, then `polyresearch submit` if it improved or `polyresearch release` if it did not, and `git worktree remove` the finished worktree. Continue from step 0 in the loop above.
 
 **NEVER STOP.** Once the loop has begun, do not pause to ask the human if you should continue. Do not ask "should I keep going?" or "is this a good stopping point?" The human might be asleep or away and expects you to work indefinitely until manually stopped. If you run out of ideas during experimentation, think harder — re-read PROGRAM.md, study results.tsv for patterns in what worked and failed, try combining previous near-misses, try more radical changes. The loop runs until the human interrupts you.
 
@@ -207,7 +184,7 @@ The lead runs a separate management loop from the repository root worktree, whic
 **Priority order within each iteration.** GitHub-visible duties run first, in this order:
 
 0. `polyresearch duties` — resolve any blocking items (decidable PRs, stale results.tsv, etc.).
-1. `polyresearch pace` — compare your effective resource policy against recent node throughput.
+1. `polyresearch pace` — inspect the hardware budget and recent node throughput. The lead's `capacity` only matters if the lead is also evaluating review PRs locally; the lead's main job is coordination.
 2. `polyresearch sync` (always before other lead actions).
 3. Process open PRs: `policy-check` and `decide` any that are ready. When `auto_approve` is `false`, assign ready PRs to `maintainer_github_login` and wait for `/approve`.
 4. Check queue depth; `generate` if below `min_queue_depth`.

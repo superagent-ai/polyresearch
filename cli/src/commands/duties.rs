@@ -1,9 +1,7 @@
 use color_eyre::eyre::Result;
 use serde::Serialize;
 
-use crate::commands::{
-    AppContext, configured_sub_agents, node_active_claims, print_value, read_node_id,
-};
+use crate::commands::{AppContext, print_value, read_node_id};
 use crate::comments::Observation;
 use crate::ledger::Ledger;
 use crate::state::{RepositoryState, ThesisPhase};
@@ -34,12 +32,6 @@ pub fn check(ctx: &AppContext, repo_state: &RepositoryState) -> Result<DutyRepor
 
     let mut blocking = Vec::new();
     let mut advisory = Vec::new();
-    let sub_agents = configured_sub_agents(&ctx.repo_root);
-    let active_claims = if node_id.is_empty() {
-        0
-    } else {
-        node_active_claims(repo_state, &node_id)
-    };
 
     for thesis in &repo_state.theses {
         if thesis.issue.state != "OPEN" {
@@ -98,13 +90,6 @@ pub fn check(ctx: &AppContext, repo_state: &RepositoryState) -> Result<DutyRepor
 
     let has_review_work = check_review_opportunities(repo_state, &node_id, &login, &mut advisory);
     if !is_lead {
-        add_contributor_capacity_advisory(
-            repo_state,
-            &node_id,
-            sub_agents,
-            active_claims,
-            &mut advisory,
-        );
         check_contributor_idle_state(ctx, repo_state, &node_id, has_review_work, &mut advisory)?;
     }
 
@@ -372,48 +357,6 @@ fn check_contributor_idle_state(
     }
 
     Ok(())
-}
-
-fn add_contributor_capacity_advisory(
-    repo_state: &RepositoryState,
-    node_id: &str,
-    sub_agents: usize,
-    active_claims: usize,
-    advisory: &mut Vec<DutyItem>,
-) {
-    if node_id.is_empty() || sub_agents <= 1 {
-        return;
-    }
-
-    let free_slots = sub_agents.saturating_sub(active_claims);
-    if free_slots == 0 {
-        return;
-    }
-
-    let claimable_for_me = repo_state
-        .theses
-        .iter()
-        .filter(|thesis| thesis.issue.state == "OPEN")
-        .filter(|thesis| matches!(thesis.phase, ThesisPhase::Approved))
-        .filter(|thesis| {
-            !thesis
-                .releases
-                .iter()
-                .any(|release| release.node == node_id)
-        })
-        .count();
-    if claimable_for_me == 0 {
-        return;
-    }
-
-    advisory.push(DutyItem {
-        category: "capacity".to_string(),
-        message: format!(
-            "Free parallel slots: {} ({} active claims, sub_agents = {}).",
-            free_slots, active_claims, sub_agents
-        ),
-        command: format!("polyresearch batch-claim --count {}", free_slots),
-    });
 }
 
 fn metric_floor_info(ctx: &AppContext, repo_state: &RepositoryState) -> Option<(f64, f64)> {
