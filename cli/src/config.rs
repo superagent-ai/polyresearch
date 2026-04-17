@@ -2,16 +2,16 @@ use std::borrow::Cow;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use color_eyre::eyre::{Context, Result, eyre};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_RESOURCE_POLICY: &str = "Maximize throughput. Never leave claimable theses idle while experiments could be running. Run evaluations in parallel when the evaluator supports it. Interleave duties with long-running evaluations.";
 pub const DEFAULT_API_BUDGET: u64 = 5_000;
 pub const DEFAULT_REQUEST_DELAY_MS: u64 = 100;
-pub const DEFAULT_SUB_AGENTS: usize = 1;
+pub const DEFAULT_CAPACITY: u8 = 75;
 pub const NODE_ID_ENV_VAR: &str = "POLYRESEARCH_NODE_ID";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,30 +24,26 @@ pub enum MetricDirection {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NodeConfig {
     pub node_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resource_policy: Option<String>,
+    #[serde(default = "default_capacity")]
+    pub capacity: u8,
     #[serde(default = "default_api_budget")]
     pub api_budget: u64,
     #[serde(default = "default_request_delay_ms")]
     pub request_delay_ms: u64,
-    #[serde(default = "default_sub_agents")]
-    pub sub_agents: usize,
 }
 
 impl NodeConfig {
     pub fn new(
         node_id: impl Into<String>,
-        resource_policy: Option<String>,
+        capacity: u8,
         api_budget: u64,
         request_delay_ms: u64,
-        sub_agents: usize,
     ) -> Self {
         Self {
             node_id: node_id.into(),
-            resource_policy: normalize_resource_policy(resource_policy),
+            capacity: normalize_capacity(capacity),
             api_budget: normalize_api_budget(api_budget),
             request_delay_ms: normalize_request_delay_ms(request_delay_ms),
-            sub_agents: normalize_sub_agents(sub_agents),
         }
     }
 
@@ -78,9 +74,10 @@ impl NodeConfig {
             }
         };
 
-        let resource_policy = file_config
+        let capacity = file_config
             .as_ref()
-            .and_then(|config| config.resource_policy.clone());
+            .map(|config| config.capacity)
+            .unwrap_or(DEFAULT_CAPACITY);
         let api_budget = file_config
             .as_ref()
             .map(|config| config.api_budget)
@@ -89,18 +86,8 @@ impl NodeConfig {
             .as_ref()
             .map(|config| config.request_delay_ms)
             .unwrap_or(DEFAULT_REQUEST_DELAY_MS);
-        let sub_agents = file_config
-            .as_ref()
-            .map(|config| config.sub_agents)
-            .unwrap_or(DEFAULT_SUB_AGENTS);
 
-        Ok(Self::new(
-            node_id,
-            resource_policy,
-            api_budget,
-            request_delay_ms,
-            sub_agents,
-        ))
+        Ok(Self::new(node_id, capacity, api_budget, request_delay_ms))
     }
 
     pub fn load_api_budget(repo_root: &Path) -> u64 {
@@ -132,17 +119,8 @@ impl NodeConfig {
         Ok(())
     }
 
-    pub fn resource_policy(&self) -> Option<&str> {
-        self.resource_policy
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-    }
-
-    pub fn effective_resource_policy(&self) -> (&str, bool) {
-        match self.resource_policy() {
-            Some(policy) => (policy, false),
-            None => (DEFAULT_RESOURCE_POLICY, true),
-        }
+    pub fn effective_capacity(&self) -> u8 {
+        normalize_capacity(self.capacity)
     }
 
     pub fn effective_api_budget(&self) -> u64 {
@@ -161,7 +139,40 @@ pub fn node_config_path(repo_root: &Path) -> PathBuf {
 fn load_node_config_from_file(path: &Path) -> Result<NodeConfig> {
     let contents =
         fs::read_to_string(path).wrap_err_with(|| format!("failed to read {}", path.display()))?;
+    warn_if_legacy_fields(&contents);
     toml::from_str(&contents).wrap_err_with(|| format!("failed to parse {}", path.display()))
+}
+
+fn warn_if_legacy_fields(contents: &str) {
+    static WARNED: OnceLock<()> = OnceLock::new();
+    if WARNED.set(()).is_err() {
+        return;
+    }
+    let has_sub_agents = contents
+        .lines()
+        .any(|line| line.trim_start().starts_with("sub_agents"));
+    let has_resource_policy = contents
+        .lines()
+        .any(|line| line.trim_start().starts_with("resource_policy"));
+    if !has_sub_agents && !has_resource_policy {
+        return;
+    }
+    eprintln!("warning: .polyresearch-node.toml contains legacy field(s):");
+    if has_sub_agents {
+        eprintln!(
+            "  `sub_agents` is no longer read. Use `capacity` (integer 1..=100, percent of total machine; default 75)."
+        );
+    }
+    if has_resource_policy {
+        eprintln!(
+            "  `resource_policy` is no longer read. Per-run guidance belongs in PROGRAM.md / PREPARE.md or the agent launch prompt."
+        );
+    }
+    eprintln!("  Running `polyresearch init` will drop these fields on the next save.");
+}
+
+fn default_capacity() -> u8 {
+    DEFAULT_CAPACITY
 }
 
 fn default_api_budget() -> u64 {
@@ -170,10 +181,6 @@ fn default_api_budget() -> u64 {
 
 fn default_request_delay_ms() -> u64 {
     DEFAULT_REQUEST_DELAY_MS
-}
-
-fn default_sub_agents() -> usize {
-    DEFAULT_SUB_AGENTS
 }
 
 fn node_id_override() -> Option<String> {
@@ -458,6 +465,28 @@ fn parse_bool(value: &str) -> Result<bool> {
     }
 }
 
+fn normalize_capacity(capacity: u8) -> u8 {
+    match capacity {
+        0 => DEFAULT_CAPACITY,
+        value if value > 100 => 100,
+        value => value,
+    }
+}
+
+fn normalize_request_delay_ms(request_delay_ms: u64) -> u64 {
+    match request_delay_ms {
+        0 => DEFAULT_REQUEST_DELAY_MS,
+        value => value,
+    }
+}
+
+fn normalize_api_budget(api_budget: u64) -> u64 {
+    match api_budget {
+        0 => DEFAULT_API_BUDGET,
+        value => value,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,23 +629,42 @@ mod tests {
         fs::write(
             &path,
             r#"node_id = "node-7f83"
-resource_policy = "Run 4 evals in parallel."
+capacity = 50
 api_budget = 15000
 request_delay_ms = 250
-sub_agents = 6
 "#,
         )
         .unwrap();
 
         let config = NodeConfig::load(&repo_root).unwrap();
         assert_eq!(config.node_id, "node-7f83");
-        assert_eq!(
-            config.resource_policy.as_deref(),
-            Some("Run 4 evals in parallel.")
-        );
+        assert_eq!(config.capacity, 50);
         assert_eq!(config.api_budget, 15_000);
         assert_eq!(config.request_delay_ms, 250);
-        assert_eq!(config.sub_agents, 6);
+
+        fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn loads_legacy_toml_with_sub_agents_and_resource_policy() {
+        let _guard = NodeIdEnvGuard::lock_clean();
+        let repo_root = unique_temp_dir("node-config-legacy");
+        let path = node_config_path(&repo_root);
+        fs::write(
+            &path,
+            r#"node_id = "node-legacy"
+sub_agents = 4
+resource_policy = "Keep CPUs busy."
+api_budget = 5000
+"#,
+        )
+        .unwrap();
+
+        let config = NodeConfig::load(&repo_root).unwrap();
+        assert_eq!(config.node_id, "node-legacy");
+        // Legacy fields silently ignored; capacity takes its default.
+        assert_eq!(config.capacity, DEFAULT_CAPACITY);
+        assert_eq!(config.api_budget, 5_000);
 
         fs::remove_dir_all(repo_root).unwrap();
     }
@@ -629,7 +677,7 @@ sub_agents = 6
         fs::write(
             &path,
             r#"node_id = "file-node"
-resource_policy = "Run 4 evals in parallel."
+capacity = 50
 "#,
         )
         .unwrap();
@@ -637,12 +685,8 @@ resource_policy = "Run 4 evals in parallel."
 
         let config = NodeConfig::load(&repo_root).unwrap();
         assert_eq!(config.node_id, "env-node");
-        assert_eq!(
-            config.resource_policy.as_deref(),
-            Some("Run 4 evals in parallel.")
-        );
+        assert_eq!(config.capacity, 50);
         assert_eq!(config.request_delay_ms, DEFAULT_REQUEST_DELAY_MS);
-        assert_eq!(config.sub_agents, DEFAULT_SUB_AGENTS);
 
         fs::remove_dir_all(repo_root).unwrap();
     }
@@ -655,9 +699,8 @@ resource_policy = "Run 4 evals in parallel."
 
         let config = NodeConfig::load(&repo_root).unwrap();
         assert_eq!(config.node_id, "env-node");
-        assert_eq!(config.resource_policy, None);
+        assert_eq!(config.capacity, DEFAULT_CAPACITY);
         assert_eq!(config.request_delay_ms, DEFAULT_REQUEST_DELAY_MS);
-        assert_eq!(config.sub_agents, DEFAULT_SUB_AGENTS);
 
         fs::remove_dir_all(repo_root).unwrap();
     }
@@ -672,58 +715,69 @@ resource_policy = "Run 4 evals in parallel."
 
         let config = NodeConfig::load(&repo_root).unwrap();
         assert_eq!(config.node_id, "env-node");
-        assert_eq!(config.resource_policy, None);
+        assert_eq!(config.capacity, DEFAULT_CAPACITY);
         assert_eq!(config.request_delay_ms, DEFAULT_REQUEST_DELAY_MS);
-        assert_eq!(config.sub_agents, DEFAULT_SUB_AGENTS);
 
         fs::remove_dir_all(repo_root).unwrap();
     }
 
     #[test]
-    fn defaults_resource_policy_when_missing() {
+    fn defaults_capacity_when_zero() {
+        let config = NodeConfig::new("node-7f83", 0, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS);
+        assert_eq!(config.capacity, DEFAULT_CAPACITY);
+    }
+
+    #[test]
+    fn clamps_capacity_above_one_hundred() {
         let config = NodeConfig::new(
             "node-7f83",
-            None,
+            200,
             DEFAULT_API_BUDGET,
             DEFAULT_REQUEST_DELAY_MS,
-            DEFAULT_SUB_AGENTS,
         );
-        let (policy, is_default) = config.effective_resource_policy();
-        assert!(is_default);
-        assert_eq!(policy, DEFAULT_RESOURCE_POLICY);
+        assert_eq!(config.capacity, 100);
     }
 
     #[test]
     fn defaults_api_budget_when_missing() {
-        let config = NodeConfig::new(
-            "node-7f83",
-            None,
-            0,
-            DEFAULT_REQUEST_DELAY_MS,
-            DEFAULT_SUB_AGENTS,
-        );
+        let config = NodeConfig::new("node-7f83", DEFAULT_CAPACITY, 0, DEFAULT_REQUEST_DELAY_MS);
         assert_eq!(config.effective_api_budget(), DEFAULT_API_BUDGET);
     }
 
     #[test]
-    fn defaults_sub_agents_when_zero() {
-        let config = NodeConfig::new(
-            "node-7f83",
-            None,
-            DEFAULT_API_BUDGET,
-            DEFAULT_REQUEST_DELAY_MS,
-            0,
-        );
-        assert_eq!(config.sub_agents, DEFAULT_SUB_AGENTS);
-    }
-
-    #[test]
     fn defaults_request_delay_when_zero() {
-        let config = NodeConfig::new("node-7f83", None, DEFAULT_API_BUDGET, 0, DEFAULT_SUB_AGENTS);
+        let config = NodeConfig::new("node-7f83", DEFAULT_CAPACITY, DEFAULT_API_BUDGET, 0);
         assert_eq!(
             config.effective_request_delay_ms(),
             DEFAULT_REQUEST_DELAY_MS
         );
+    }
+
+    #[test]
+    fn round_trip_drops_legacy_fields_on_save() {
+        let _guard = NodeIdEnvGuard::lock_clean();
+        let repo_root = unique_temp_dir("node-config-round-trip");
+        let path = node_config_path(&repo_root);
+        fs::write(
+            &path,
+            r#"node_id = "node-legacy"
+sub_agents = 4
+resource_policy = "Keep CPUs busy."
+capacity = 50
+"#,
+        )
+        .unwrap();
+
+        let loaded = NodeConfig::load(&repo_root).unwrap();
+        loaded.save(&repo_root).unwrap();
+
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains("sub_agents"));
+        assert!(!saved.contains("resource_policy"));
+        assert!(saved.contains("capacity"));
+        assert!(saved.contains("50"));
+
+        fs::remove_dir_all(repo_root).unwrap();
     }
 
     #[test]
@@ -928,33 +982,5 @@ Do something.
         let path = std::env::temp_dir().join(format!("polyresearch-{name}-{unique}"));
         fs::create_dir_all(&path).unwrap();
         path
-    }
-}
-
-fn normalize_resource_policy(resource_policy: Option<String>) -> Option<String> {
-    resource_policy.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
-    })
-}
-
-fn normalize_sub_agents(sub_agents: usize) -> usize {
-    match sub_agents {
-        0 => DEFAULT_SUB_AGENTS,
-        value => value,
-    }
-}
-
-fn normalize_request_delay_ms(request_delay_ms: u64) -> u64 {
-    match request_delay_ms {
-        0 => DEFAULT_REQUEST_DELAY_MS,
-        value => value,
-    }
-}
-
-fn normalize_api_budget(api_budget: u64) -> u64 {
-    match api_budget {
-        0 => DEFAULT_API_BUDGET,
-        value => value,
     }
 }

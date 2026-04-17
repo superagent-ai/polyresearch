@@ -29,9 +29,7 @@ description: >-
    - Otherwise, follow the contributor loop.
    - Matching `lead_github_login` does NOT make you the lead. An empty
      queue does NOT make you the lead.
-8. Read `sub_agents` from `.polyresearch-node.toml` if it exists:
-   - If absent or `1`, follow the contributor loop exactly as written.
-   - If greater than `1`, use the "Contributor loop with sub-agents" section below.
+8. Read `capacity` from `.polyresearch-node.toml` if it exists (default `75` if absent, meaning "75% of total machine"). Run `polyresearch pace` to see the probed hardware budget and decide how many theses to run in parallel based on each eval's footprint in PREPARE.md. If only one eval fits, work one thesis at a time; if several fit, use `polyresearch batch-claim --count N` and one sub-agent per worktree (see "Running multiple sub-agents" below).
 9. If the repo is a fork and issues are disabled:
    `gh api repos/{owner}/{name} --method PATCH -f has_issues=true`
 10. For any CLI command details: `polyresearch <command> --help`
@@ -71,15 +69,19 @@ LOOP FOREVER:
      If BLOCKING items exist, resolve each one before continuing.
 
   1. polyresearch pace
-     Compare your effective resource policy against recent node throughput.
-     If the policy says to push harder, increase parallelism or claim rate.
-     If the policy says to stay under a hardware or API ceiling, back off.
+     Look at the Hardware budget block (machine, your max share, live free,
+     multi-project note). Effective working budget = min(your max, live free).
+     Divide by each eval's footprint (cores, RAM, GPU from PREPARE.md) to
+     decide how many theses you can run in parallel this iteration.
+     Also watch the API budget block: back off if near the GitHub quota.
 
   2. polyresearch status
      Look for approved, unclaimed theses.
 
   3. If a claimable thesis exists:
-     a. polyresearch claim <issue>
+     a. For one thesis: polyresearch claim <issue>
+        For several at once: polyresearch batch-claim --count N
+        (see "Running multiple sub-agents" below)
      b. cd into the worktree path printed by claim.
      c. Read PROGRAM.md for direction and constraints.
      d. For each experiment:
@@ -120,38 +122,31 @@ LOOP FOREVER:
   5. Repeat from step 0.
 ```
 
-## Contributor loop with sub-agents
+## Running multiple sub-agents
 
-Use this variant when `.polyresearch-node.toml` sets `sub_agents` greater than 1.
+When `polyresearch pace` shows your effective budget fits more than one
+evaluation at a time, run several theses in parallel. This is a variant of
+step 3 in the contributor loop above, not a separate loop.
 
 ```
-LOOP FOREVER:
+  3a. polyresearch batch-claim --count N
+      Claims N approved theses and creates one worktree per thesis.
+      Pick N from your effective budget / per-eval footprint.
 
-  0. polyresearch duties
-     Resolve BLOCKING items before continuing.
+  3b. For each claimed thesis, dispatch one sub-agent:
+      - Give it the issue number and worktree path.
+      - Tell it to read PROGRAM.md and PREPARE.md.
+      - Tell it to work only in its assigned worktree.
+      - Tell it to return every completed attempt with metric, baseline,
+        observation, and summary.
+      - Tell it NOT to run polyresearch CLI commands.
+      - Tell it NOT to talk to GitHub.
 
-  1. polyresearch pace
-     Read the current `sub_agents` setting, active claims, and free slots.
-
-  2. polyresearch batch-claim
-     Claims up to the node's free thesis slots. Creates one worktree per thesis.
-
-  3. For each claimed thesis, dispatch one sub-agent:
-     - Give it the issue number and worktree path.
-     - Tell it to read PROGRAM.md and PREPARE.md.
-     - Tell it to work only in its assigned worktree.
-     - Tell it to return every completed attempt with metric, baseline,
-       observation, and summary.
-     - Tell it NOT to run polyresearch CLI commands.
-     - Tell it NOT to talk to GitHub.
-
-  4. As each sub-agent finishes its thesis:
-     - post every returned attempt with `polyresearch attempt`
-     - if any attempt improved, `polyresearch submit <issue>`
-     - otherwise, `polyresearch release <issue> --reason no_improvement`
-     - remove the finished thesis worktree
-
-  5. Repeat from step 0.
+  3c. As each sub-agent finishes its thesis:
+      - post every returned attempt with `polyresearch attempt`
+      - if any attempt improved, `polyresearch submit <issue>`
+      - otherwise, `polyresearch release <issue> --reason no_improvement`
+      - `git worktree remove` the finished thesis worktree
 ```
 
 ## The lead loop
@@ -169,7 +164,7 @@ LOOP FOREVER:
      - Open PRs without policy-check
      - Stale results.tsv
 
-  1. polyresearch pace          # compare actual throughput vs effective policy
+  1. polyresearch pace          # inspect the hardware budget and throughput
   2. polyresearch sync          # on main branch, always first
   3. polyresearch audit         # check for inconsistencies
      A dirty audit blocks `policy-check`, `decide`, and `generate`.
@@ -201,12 +196,20 @@ LOOP FOREVER:
 
 ## Resource pacing
 
-Run `polyresearch pace` regularly. It prints your effective resource policy
-and recent throughput. It also prints the configured `sub_agents`, current
-active claims, and free slots. Treat `sub_agents` as the number of theses the
-contributor may work on in parallel. If `.polyresearch-node.toml` sets a
-`resource_policy`, treat it as an additional constraint. See `POLYRESEARCH.md`
-"Node configuration" for details.
+Run `polyresearch pace` regularly. It prints:
+
+- **Hardware budget**: the detected machine (cores, memory, GPUs), your project's
+  max share at the configured `capacity %`, and a live-free snapshot (load
+  average, available memory) that reflects all processes on the host. Effective
+  working budget is `min(Your max, Live free)` divided by each evaluation's
+  footprint. Other polyresearch projects on the same host are on the
+  honor-system: their `capacity` values are not tracked by the CLI, so confirm
+  the sum across projects is safe yourself.
+- **API budget**: GitHub core quota, commands left, near-limit flag.
+- **Throughput**: active claims for this node, attempts in the last hour and
+  four hours, claimable theses idle.
+
+See `POLYRESEARCH.md` "Node configuration" for full field semantics.
 
 ## Critical rules
 

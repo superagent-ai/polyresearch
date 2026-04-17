@@ -51,11 +51,8 @@ pub struct InitArgs {
     #[arg(long)]
     pub node: Option<String>,
 
-    #[arg(long)]
-    pub resource_policy: Option<String>,
-
-    #[arg(long)]
-    pub sub_agents: Option<usize>,
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=100))]
+    pub capacity: Option<u8>,
 }
 
 #[derive(Debug, Args, Clone)]

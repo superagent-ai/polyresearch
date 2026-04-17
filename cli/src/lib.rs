@@ -4,6 +4,7 @@ pub mod comments;
 pub mod config;
 pub mod github;
 pub mod github_debug;
+pub mod hardware;
 pub mod ledger;
 pub mod state;
 pub mod throttle;

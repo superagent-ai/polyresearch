@@ -92,10 +92,10 @@ Initialize the local node identity once per repo:
 
 ```bash
 polyresearch init
-polyresearch init --sub-agents 4 --resource-policy "Run 4 evals in parallel, stay under 50 API calls/min"
+polyresearch init --capacity 50
 ```
 
-This writes `.polyresearch-node.toml` in the repo root. The file stores a stable `node_id`, a `sub_agents` limit, and an optional natural-language `resource_policy`. Additional tuning fields such as `api_budget` and `request_delay_ms` are documented in `POLYRESEARCH.md`.
+This writes `.polyresearch-node.toml` in the repo root. The file stores a stable `node_id` and a `capacity` percentage (1..=100) giving the share of the total machine this project may use. Additional tuning fields such as `api_budget` and `request_delay_ms` are documented in `POLYRESEARCH.md`.
 
 Inspect the current state:
 
@@ -127,7 +127,7 @@ polyresearch batch-claim
 
 `polyresearch claim` creates a dedicated worktree at `.worktrees/<issue>-<slug>/` from `main` and prints the path. Change into that worktree before editing or running evaluations. The main worktree stays on `main` so the lead can sync, decide, and generate without races from concurrent contributors.
 
-`polyresearch batch-claim` is the multi-thesis version for contributors using sub-agents. It fills the node's free thesis slots up to `sub_agents`, creates one worktree per thesis, and requires worktrees for parallel execution.
+`polyresearch batch-claim --count N` is the multi-thesis version for contributors dispatching sub-agents. It claims `N` approved theses, creates one worktree per thesis, and requires worktrees for parallel execution. Pick `N` from `polyresearch pace` after dividing your effective hardware budget by each eval's resource footprint.
 
 Review flow:
 
@@ -167,8 +167,8 @@ The maintainer comments `/approve` or `/reject` directly on thesis issues and ca
 
 ## Command summary
 
-- `polyresearch init` -- set node identity, sub-agent limit, optional resource policy, verify GitHub auth, detect repo
-- `polyresearch pace` -- show configured sub-agents, active claims, free slots, effective resource policy, and recent node throughput
+- `polyresearch init` -- set node identity and `capacity` (percent of total machine), verify GitHub auth, detect repo
+- `polyresearch pace` -- show the hardware budget (machine, your max, live free), GitHub API budget, active claims, and recent node throughput
 - `polyresearch status` -- derive thesis state, queue depth, active nodes, current best metric
 - `polyresearch audit` -- validate raw GitHub activity and report invalid or suspicious protocol events
 - `polyresearch claim` -- atomically claim a thesis and create the thesis worktree at `.worktrees/<issue>-<slug>/`

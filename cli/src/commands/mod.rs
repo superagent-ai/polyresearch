@@ -28,7 +28,7 @@ use color_eyre::eyre::{Context, Result, eyre};
 use serde::Serialize;
 
 use crate::cli::{Cli, Commands};
-use crate::config::{DEFAULT_SUB_AGENTS, NodeConfig, ProgramSpec, ProtocolConfig};
+use crate::config::{NodeConfig, ProgramSpec, ProtocolConfig};
 use crate::github::{GitHubApi, RepoRef};
 use crate::state::RepositoryState;
 
@@ -110,20 +110,15 @@ pub fn read_node_id(repo_root: &PathBuf) -> Result<String> {
 }
 
 pub fn write_node_id(repo_root: &PathBuf, node: &str) -> Result<()> {
-    write_node_config(repo_root, node, None, None)
+    write_node_config(repo_root, node, None)
 }
 
 pub fn write_node_config(
     repo_root: &PathBuf,
     node: &str,
-    resource_policy: Option<&str>,
-    sub_agents: Option<usize>,
+    capacity: Option<u8>,
 ) -> Result<()> {
     let existing = NodeConfig::load(repo_root).ok();
-    let existing_resource_policy = existing
-        .as_ref()
-        .and_then(|config| config.resource_policy.as_deref())
-        .map(ToString::to_string);
     let existing_budget = existing
         .as_ref()
         .map(|config| config.api_budget)
@@ -132,26 +127,23 @@ pub fn write_node_config(
         .as_ref()
         .map(|config| config.request_delay_ms)
         .unwrap_or_else(|| NodeConfig::load_request_delay_ms(repo_root));
-    let existing_sub_agents = existing
+    let existing_capacity = existing
         .as_ref()
-        .map(|config| config.sub_agents)
-        .unwrap_or(DEFAULT_SUB_AGENTS);
+        .map(|config| config.capacity)
+        .unwrap_or(crate::config::DEFAULT_CAPACITY);
     NodeConfig::new(
         node.to_string(),
-        resource_policy
-            .map(ToString::to_string)
-            .or(existing_resource_policy),
+        capacity.unwrap_or(existing_capacity),
         existing_budget,
         existing_request_delay_ms,
-        sub_agents.unwrap_or(existing_sub_agents),
     )
     .save(repo_root)
 }
 
-pub fn configured_sub_agents(repo_root: &PathBuf) -> usize {
+pub fn configured_capacity(repo_root: &PathBuf) -> u8 {
     read_node_config(repo_root)
-        .map(|config| config.sub_agents)
-        .unwrap_or(DEFAULT_SUB_AGENTS)
+        .map(|config| config.capacity)
+        .unwrap_or(crate::config::DEFAULT_CAPACITY)
 }
 
 pub fn node_active_claims(repo_state: &RepositoryState, node_id: &str) -> usize {
