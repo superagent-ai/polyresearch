@@ -1,14 +1,17 @@
 pub mod admin;
+pub mod bootstrap;
 pub mod annotate;
 pub mod attempt;
 pub mod audit;
 pub mod batch_claim;
 pub mod claim;
+pub mod contribute;
 pub mod decide;
 pub mod duties;
 pub mod generate;
 pub mod guards;
 pub mod init;
+pub mod lead;
 pub mod pace;
 pub mod policy_check;
 pub mod prune;
@@ -41,6 +44,7 @@ pub struct AppContext {
     pub api_budget: u64,
     pub config: ProtocolConfig,
     pub program: ProgramSpec,
+    pub default_branch: String,
 }
 
 #[derive(Debug)]
@@ -59,9 +63,12 @@ impl std::error::Error for ProcessExit {}
 
 pub async fn run(ctx: AppContext) -> Result<()> {
     match &ctx.cli.command {
+        Commands::Bootstrap(args) => bootstrap::run(&ctx, args).await,
         Commands::Init(args) => init::run(&ctx, args).await,
+        Commands::Lead(args) => lead::run(&ctx, args).await,
         Commands::Pace => pace::run(&ctx).await,
         Commands::Status(args) => status::run(&ctx, args).await,
+        Commands::Contribute(args) => contribute::run(&ctx, args).await,
         Commands::Claim(args) => claim::run(&ctx, args).await,
         Commands::BatchClaim(args) => batch_claim::run(&ctx, args).await,
         Commands::Attempt(args) => attempt::run(&ctx, args).await,
@@ -91,6 +98,14 @@ where
         println!("{}", plain(value));
     }
     Ok(())
+}
+
+pub fn print_progress(ctx: &AppContext, message: impl AsRef<str>) {
+    if ctx.cli.json {
+        return;
+    }
+
+    eprintln!("→ {}", message.as_ref());
 }
 
 pub fn exit_with(code: i32, message: impl Into<String>) -> Result<()> {
@@ -127,6 +142,7 @@ pub fn write_node_config(
         .as_ref()
         .map(|config| config.request_delay_ms)
         .unwrap_or_else(|| NodeConfig::load_request_delay_ms(repo_root));
+    let existing_agent = existing.as_ref().and_then(|config| config.agent.clone());
     let existing_capacity = existing
         .as_ref()
         .map(|config| config.capacity)
@@ -136,6 +152,7 @@ pub fn write_node_config(
         capacity.unwrap_or(existing_capacity),
         existing_budget,
         existing_request_delay_ms,
+        existing_agent,
     )
     .save(repo_root)
 }
@@ -201,6 +218,7 @@ pub fn create_thesis_worktree(
     repo_root: &PathBuf,
     issue_number: u64,
     title: &str,
+    default_branch: &str,
 ) -> Result<ThesisWorkspace> {
     let slug = slugify(title);
     let branch = format!("thesis/{issue_number}-{slug}");
@@ -228,7 +246,14 @@ pub fn create_thesis_worktree(
     let worktree_path_arg = worktree_path.to_string_lossy().into_owned();
     run_git(
         repo_root,
-        &["worktree", "add", "-b", &branch, &worktree_path_arg, "main"],
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &branch,
+            &worktree_path_arg,
+            default_branch,
+        ],
     )?;
 
     Ok(ThesisWorkspace {

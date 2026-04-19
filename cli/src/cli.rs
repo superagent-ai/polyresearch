@@ -25,9 +25,12 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand, Clone)]
 pub enum Commands {
+    Bootstrap(BootstrapArgs),
     Init(InitArgs),
+    Lead(LeadArgs),
     Pace,
     Status(StatusArgs),
+    Contribute(ContributeArgs),
     Claim(IssueArgs),
     BatchClaim(BatchClaimArgs),
     Attempt(AttemptArgs),
@@ -56,9 +59,50 @@ pub struct InitArgs {
 }
 
 #[derive(Debug, Args, Clone)]
+pub struct BootstrapArgs {
+    pub repo_url: String,
+
+    #[arg(long)]
+    pub fork: Option<String>,
+
+    #[arg(long)]
+    pub goal: Option<String>,
+
+    #[arg(long)]
+    pub pause_after_bootstrap: bool,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct LeadArgs {
+    #[arg(long, help = "Run a single lead-loop iteration and exit")]
+    pub once: bool,
+
+    #[arg(long, default_value_t = 60, hide = true)]
+    pub sleep_secs: u64,
+}
+
+#[derive(Debug, Args, Clone)]
 pub struct StatusArgs {
     #[arg(long)]
     pub tui: bool,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct ContributeArgs {
+    #[arg(help = "Optional repo to clone before starting the contributor loop")]
+    pub repo_url: Option<String>,
+
+    #[arg(
+        long,
+        help = "Manual cap on parallel experiment agents. Example: --max-parallel 1 runs exactly one thesis at a time."
+    )]
+    pub max_parallel: Option<usize>,
+
+    #[arg(long, help = "Run a single contributor-loop iteration and exit")]
+    pub once: bool,
+
+    #[arg(long, default_value_t = 60, hide = true)]
+    pub sleep_secs: u64,
 }
 
 #[derive(Debug, Args, Clone)]

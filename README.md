@@ -1,135 +1,176 @@
 # polyresearch
 
-Distributed [autoresearch](https://github.com/karpathy/autoresearch). Multiple machines, multiple contributors, verified results.
+Distributed [autoresearch](https://github.com/karpathy/autoresearch), with coordination.
 
-Autoresearch gives an AI agent a codebase and a metric, and lets it experiment autonomously -- modify the code, run the eval, keep or discard, repeat. You wake up to a log of experiments and a better result. But it runs one agent on one machine. The agent self-reports its own metrics, failed experiments are lost to `git reset`, and nobody else can contribute.
+Autoresearch gives a coding agent a codebase, a metric, and a loop: read `program.md`, modify code, run the eval, keep or revert, repeat. Polyresearch keeps that exact agent experience, but wraps it in a CLI that adds shared queues, claims, review, results syncing, and multi-machine coordination.
 
-Polyresearch keeps the same loop and adds three things:
+In short:
 
-1. **Open participation.** Any number of machines, run by any number of people, contribute to the same project through a shared repo. A laptop and a dedicated server both claim work from the same queue and submit to the same experiment log.
-2. **Complete experiment history.** Every attempt gets a row in `results.tsv` and stays as an unmerged branch: accepted, discarded, and crashed. No `git reset`, no lost code. The full history feeds thesis generation and prevents repeating dead ends.
-3. **Independent verification.** Reviewers rerun the evaluation on the candidate *and* on the baseline, measuring both numbers themselves. The evaluation code lives outside the editable surface, so agents cannot grade their own homework.
+- **Autoresearch**: one agent, one machine, one branch.
+- **Polyresearch**: the same experiment loop, coordinated across many machines and contributors.
 
-## How it works
+## How It Works
 
-A polyresearch project is any GitHub repo with a few coordination files:
+A polyresearch project is any repo with these files:
 
-- **`PROGRAM.md`** — the research playbook. Same concept as autoresearch's [program.md](https://github.com/karpathy/autoresearch/blob/master/program.md). Describes the research goal, which files agents can edit, strategy, and constraints.
-- **`PREPARE.md`** — the evaluation setup. What commands to run, how to parse the metric, what the ground truth is. The evaluation code is outside the editable surface, so agents cannot change how they are judged.
-- **`POLYRESEARCH.md`** — the coordination protocol. Same for every project, like a LICENSE file. Not modified.
-- **`.polyresearch/`** — the reproducible environment. Setup scripts, evaluators, frozen dependencies. Optional.
+- `PROGRAM.md` — the agent-facing experiment loop, constraints, editable surface, and result contract. This is the direct analogue of autoresearch's `program.md`.
+- `PREPARE.md` — evaluation setup: benchmark command, output format, metric parsing, and resource footprint.
+- `results.tsv` — the experiment ledger, maintained by the CLI.
+- `.polyresearch/` — harnesses and runtime files such as `bench.js`, `thesis.md`, and `result.json`.
 
-Contributors pick up theses from the GitHub Issues queue, run experiments, and submit results. Other contributors independently verify results. The lead manages the queue and merges accepted work. Everything is coordinated through structured comments on GitHub -- no external services, no database. Requires `git` and `gh`.
+The agent reads `PROGRAM.md`, `PREPARE.md`, and `.polyresearch/thesis.md`, then runs experiments exactly like autoresearch. The CLI handles everything the agent should not have to reason about: claiming work, syncing results, opening PRs, policy-checking, deciding PRs, and coordinating across machines.
 
 ## Install
-
-Two steps:
-
-1. **Install the CLI.**
 
 ```bash
 cargo install polyresearch
 ```
 
-Don't have Rust? See [other install options](cli/README.md#other-install-options).
+No external skill installation is required.
 
-2. **Install the agent skill.** Copy `skills/polyresearch/SKILL.md` from this repo into your agent's skill directory (e.g. `~/.claude/skills/polyresearch/`, or equivalent for your agent). The skill teaches agents the full protocol -- bootstrapping, the lead loop, the contributor loop, and all CLI usage.
+## Quick Start
 
-## Usage
+### 1. Bootstrap a project
 
-Polyresearch has two agent roles: a **lead** and one or more **contributors**. The **maintainer** is the human who writes the research playbook and optionally reviews work.
-
-### Start a new project
-
-Tell your lead agent to bootstrap polyresearch on any GitHub repo. The skill fetches the protocol templates, drafts `PROGRAM.md` and `PREPARE.md` by exploring the repo, and hands them to you for review.
-
-```
-Bootstrap polyresearch on https://github.com/owner/repo.
-You are the lead for this project.
+```bash
+polyresearch bootstrap https://github.com/owner/repo --goal "make it faster"
 ```
 
-After you review the drafts, the lead enters its loop: sync results, process PRs, generate new theses when the queue runs low.
+This clones the target repo, writes `PROGRAM.md` and `PREPARE.md` templates, initializes `.polyresearch-node.toml`, and spawns your configured coding agent to fill in the project-specific details.
 
-### Run a contributor
+If you want to review the files before running anything else:
 
-Point your agent at any repo that has been bootstrapped with polyresearch:
-
-```
-Do polyresearch on https://github.com/owner/repo.
+```bash
+polyresearch bootstrap https://github.com/owner/repo   --goal "make it faster"   --pause-after-bootstrap
 ```
 
-The agent clones the repo, claims work from the issue queue, runs experiments, and submits results in a loop until you stop it. Launch as many contributor agents as you have machines.
+### 2. Start the lead loop
 
-### Hardware utilization
+From the project root:
 
-A single contributor agent working on one thesis at a time only runs one evaluation at a time. On a multi-core server or multi-GPU machine, most of the hardware sits idle.
-
-Polyresearch can use sub-agents to keep that hardware busy. Set `capacity` in `.polyresearch-node.toml` to the percent of the total machine this project may use (default 75). `polyresearch pace` probes the machine and prints your share (cores, memory, GPUs) alongside a live-free load snapshot; the contributor divides that by each eval's resource footprint from PREPARE.md, claims that many theses via `polyresearch batch-claim --count N`, dispatches one sub-agent per worktree, and posts results as each thesis finishes. This improves hardware utilization while keeping GitHub API usage low because there is still only one visible contributor session and one GitHub token in use.
-
-### Run on a remote machine
-
-#### Pattern A: Remote evaluation over SSH
-
-The contributor runs on your local machine. The experiments run on a remote server. Set up the repo, CLI, and `gh` auth on the remote, then tell your agent:
-
-```
-Do polyresearch on https://github.com/owner/repo.
-Run all evaluations and experiments over SSH on user@remote-host.
+```bash
+polyresearch lead
 ```
 
-Your local machine only needs the agent; the remote server does the compute.
+The lead loop is deterministic. It syncs `results.tsv`, processes open PRs, and only spawns an agent for the creative part: generating new thesis ideas when the queue is low.
 
-#### Pattern B: Run the contributor on the server
+### 3. Add contributors
 
-This is the recommended pattern for sub-agents. The contributor and its sub-agents all run directly on the server, so file access, git operations, and evaluations are local. There is no SSH relay in the middle.
+From another machine, or the same one:
 
-Use `tmux` so the session survives disconnects:
+```bash
+polyresearch contribute
+```
+
+Or contribute directly from a repo URL:
+
+```bash
+polyresearch contribute https://github.com/owner/repo
+```
+
+The contributor loop is also deterministic. It claims theses, spawns one coding agent per worktree, records attempts, submits improvements, releases dead ends, and scales parallelism automatically from `capacity` and `PREPARE.md` resource hints.
+
+Useful flags:
+
+```bash
+polyresearch contribute --once --max-parallel 1
+```
+
+- `--once` runs a single contributor-loop pass and exits. This is ideal for smoke tests.
+- `--max-parallel N` places a manual cap on the auto-scaled parallelism.
+- `--max-parallel 1` means “work exactly one thesis at a time.”
+
+## Bring Your Own Agent
+
+Polyresearch is agent-agnostic. The CLI shells out to whatever headless coding agent you configure.
+
+`.polyresearch-node.toml`:
+
+```toml
+capacity = 80
+
+[agent]
+command = "claude -p --permission-mode bypassPermissions"
+```
+
+Default is Claude Code headless. Change it to any agent that accepts a prompt and works in a directory:
+
+```toml
+[agent]
+command = "codex --prompt"
+command = "cursor --bg --prompt"
+command = "python3 ~/my-agent.py --prompt"
+```
+
+## Running on a Remote Machine
+
+Run the CLI directly on the server. Don't tell an agent to SSH and work remotely from inside its own prompt.
 
 ```bash
 ssh user@remote-host
-tmux new-session -s polyresearch
-claude -p "Do polyresearch on https://github.com/owner/repo."
-# Detach with Ctrl-B D. Reconnect with: tmux attach -t polyresearch
+cd /path/to/project
+polyresearch contribute
 ```
 
-Detaching means the process keeps running after your SSH session closes. `tmux` creates a persistent terminal session on the server. If your laptop sleeps or your network drops, the contributor keeps working. Later you reconnect with `tmux attach -t polyresearch` and resume the same terminal.
+For long-running contributors, use `tmux` or a service manager such as `systemd`.
 
-## CLI
+## Why CLI-First
 
-The `polyresearch` CLI handles all protocol state transitions: claiming theses, posting attempts, submitting candidates, syncing results, and more. Agents use it -- not humans. The skill teaches agents every command, so you don't need to learn them yourself.
+The overnight failures that motivated this rewrite mostly came from agents being bad protocol operators: wrong commands, wrong order, wrong repo, wrong machine, bad GitHub API usage.
 
-Full command reference in [cli/README.md](cli/README.md).
+The CLI-first model fixes that split of responsibilities:
 
-## Design
+- **Agent**: read `PROGRAM.md`, run experiments, write `.polyresearch/result.json`.
+- **CLI**: claim, submit, release, sync, policy-check, decide, review, pace, and queue management.
 
-**Protocol, not a platform.** Three markdown files and an optional environment directory dropped into any repo. No opinions on agent, model, sandbox, or language.
+That keeps the autoresearch spirit intact while removing the bookkeeping burden from the agent.
 
-**Structured comments as state.** Agents coordinate through structured HTML comments on GitHub Issues and PRs. State is derived from the comment trail, not from labels or a database. Every transition is append-only and auditable.
+## Advanced Usage
 
-**Claim-based work distribution.** Theses live on GitHub Issues. Contributors claim them atomically through the CLI. Stale claims expire after a configurable timeout and return to the queue.
+### Metaresearch
 
-**The evaluation is the trust boundary.** `PREPARE.md` defines how results are judged. The evaluation code lives outside the editable surface. Agents cannot modify the evaluator or the scoring logic.
+Polyresearch can wrap itself.
 
-**Peer review.** When enabled, reviewers independently check out the candidate and the baseline, run the evaluation themselves, and post their own measurements. The lead only merges when reviewers agree.
+A meta-project can treat each thesis as “optimize github.com/owner/repo”. The agent-facing loop in the meta-project's `PROGRAM.md` can call:
 
-**Human-in-the-loop.** Set `auto_approve: false` and the lead waits for the maintainer to `/approve` or `/reject` each thesis and PR. Maintainer feedback steers future thesis generation.
+- `polyresearch bootstrap`
+- `polyresearch lead`
+- `polyresearch contribute`
 
-**Failed experiments are data.** Every attempt gets a row in `results.tsv` and stays as an unmerged branch. The lead reads the full history to generate new theses and avoid dead ends.
+on the target repo, then use the resulting improvement as the metric for the meta-thesis.
 
-**Resource pacing.** Each node sets a `capacity` percentage in `.polyresearch-node.toml` (default 75). The `polyresearch pace` command probes the hardware, prints the project's share plus live load, and lets the agent pick how many theses to run in parallel given each eval's footprint. Multi-project coexistence on one machine is honor-system: set each project's `capacity` so the sum stays safe.
+That means the same system can:
+
+- pick candidate repos,
+- launch real polyresearch projects for them,
+- record which categories of repos yield wins,
+- and use that history to generate better project picks over time.
+
+No separate orchestration framework is required. Polyresearch can coordinate polyresearch.
+
+## Design Principles
+
+- **Autoresearch-compatible.** `PROGRAM.md` is the agent interface, just like autoresearch's `program.md`.
+- **Deterministic coordination.** The CLI owns protocol state transitions.
+- **Structured GitHub state.** Claims, attempts, releases, reviews, and decisions live in GitHub comments and PRs.
+- **All attempts are data.** The full history stays visible in `results.tsv`.
+- **Machine-aware concurrency.** `capacity` plus `PREPARE.md` resource hints control parallelism.
+- **Agent-agnostic.** Any headless agent that accepts a prompt can participate.
 
 ## Examples
 
+| Example | What it does |
+| --- | --- |
+| [corewar](examples/corewar/) | Evolve a Redcode warrior against a frozen gauntlet. |
+| [eslint](examples/eslint/) | Optimize ESLint's linting performance on real workloads. |
+| [postcss](examples/postcss/) | Optimize PostCSS CSS processing on benchmarked workloads. |
 
-| Example                                      | What it does                                                                                                 |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| [corewar](examples/corewar/)                 | Evolve a Redcode warrior against a frozen gauntlet. Free to evaluate, fast iteration, deterministic results. 218% score improvement over 27 experiments. |
-| [eslint](examples/eslint/)                   | Optimize ESLint's core linting performance on a dual-workload benchmark. Real-world codebase, V8-level depth. Single-file linting 24% faster over 75 experiments. |
-| [postcss](examples/postcss/)                 | Optimize PostCSS's CSS processing on a dual-workload benchmark. Plugin pipeline 16% faster over 50 experiments. |
+## CLI Reference
 
+The full command reference lives in [cli/README.md](cli/README.md).
 
 ## License
 
-MIT 
+MIT
 
 By Superagent Technologies, Inc.

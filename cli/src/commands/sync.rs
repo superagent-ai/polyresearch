@@ -19,8 +19,11 @@ pub async fn run(ctx: &AppContext) -> Result<()> {
     let missing_rows = ledger.missing_rows(&repo_state);
 
     if !ctx.cli.dry_run && !missing_rows.is_empty() {
-        if current_branch(&ctx.repo_root)? != "main" {
-            return Err(eyre!("`polyresearch sync` must run from the `main` branch"));
+        if current_branch(&ctx.repo_root)? != ctx.default_branch {
+            return Err(eyre!(
+                "`polyresearch sync` must run from the `{}` branch",
+                ctx.default_branch
+            ));
         }
         ledger.append_rows(&missing_rows)?;
         commit_file(

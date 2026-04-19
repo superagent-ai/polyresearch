@@ -8,7 +8,8 @@ use color_eyre::eyre::{Context, Result};
 use polyresearch::cli::Cli;
 use polyresearch::commands;
 use polyresearch::commands::AppContext;
-use polyresearch::config::{NodeConfig, ProgramSpec, ProtocolConfig};
+use polyresearch::cli::Commands;
+use polyresearch::config::{NodeConfig, ProgramSpec, ProtocolConfig, resolve_default_branch};
 use polyresearch::github::{GitHubApi, GitHubClient, RepoRef};
 use polyresearch::github_debug;
 use polyresearch::throttle;
@@ -20,14 +21,15 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     github_debug::init(cli.github_debug);
     let cwd = env::current_dir().wrap_err("failed to determine current working directory")?;
-    let repo_root = discover_repo_root(&cwd)?;
+    let repo_root = prepare_repo_root(&cwd, &cli.command)?;
     throttle::init(NodeConfig::load_request_delay_ms(&repo_root));
     let repo = RepoRef::discover(cli.repo.as_deref(), &repo_root)?;
     let github: Arc<dyn GitHubApi> = Arc::new(GitHubClient::new(repo.clone()));
     let api_budget = NodeConfig::load_api_budget(&repo_root);
     let config = ProtocolConfig::load(&repo_root)?;
     config.check_cli_version(env!("CARGO_PKG_VERSION"))?;
-    let program = ProgramSpec::load(&repo_root, &config)?;
+    let program = load_program_spec(&repo_root, &config, &cli.command)?;
+    let default_branch = resolve_default_branch(&repo_root, &repo.slug(), &config)?;
 
     let ctx = AppContext {
         cli,
@@ -37,6 +39,7 @@ async fn main() -> Result<()> {
         api_budget,
         config,
         program,
+        default_branch,
     };
 
     match commands::run(ctx).await {
@@ -49,6 +52,32 @@ async fn main() -> Result<()> {
             Err(error)
         }
     }
+}
+
+fn prepare_repo_root(start: &PathBuf, command: &Commands) -> Result<PathBuf> {
+    match command {
+        Commands::Bootstrap(args) => commands::bootstrap::prepare_checkout(start, args),
+        Commands::Contribute(args) => match &args.repo_url {
+            Some(repo_url) => commands::contribute::prepare_checkout(start, repo_url),
+            None => discover_repo_root(start),
+        },
+        _ => discover_repo_root(start),
+    }
+}
+
+fn load_program_spec(
+    repo_root: &PathBuf,
+    config: &ProtocolConfig,
+    command: &Commands,
+) -> Result<ProgramSpec> {
+    if matches!(command, Commands::Bootstrap(_)) && !repo_root.join("PROGRAM.md").exists() {
+        return Ok(ProgramSpec {
+            can_modify: Vec::new(),
+            cannot_modify: Vec::new(),
+        });
+    }
+
+    ProgramSpec::load(repo_root, config)
 }
 
 fn discover_repo_root(start: &PathBuf) -> Result<PathBuf> {

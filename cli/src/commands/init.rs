@@ -31,11 +31,19 @@ pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
     let capacity = args.capacity.unwrap_or(existing_capacity);
 
     if let Ok(false) = ctx.github.repo_has_issues() {
-        eprintln!("Warning: Issues are disabled on this repository (common for forks).");
-        eprintln!(
-            "Enable them: gh api repos/{} --method PATCH -f has_issues=true",
-            ctx.repo.slug()
-        );
+        if ctx.cli.dry_run {
+            eprintln!(
+                "Warning: Issues are disabled on this repository. `polyresearch init` would enable them automatically."
+            );
+        } else if let Err(error) = ctx.github.enable_repo_issues() {
+            eprintln!("Warning: Issues are disabled on this repository (common for forks).");
+            eprintln!(
+                "Tried to enable them automatically but failed: {error}\nEnable them manually: gh api repos/{} --method PATCH -f has_issues=true",
+                ctx.repo.slug()
+            );
+        } else {
+            eprintln!("Enabled GitHub Issues on {}.", ctx.repo.slug());
+        }
     }
 
     if !ctx.cli.dry_run {

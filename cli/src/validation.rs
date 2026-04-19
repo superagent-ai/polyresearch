@@ -175,6 +175,9 @@ pub fn validate_pull_request(
         match &comment.protocol {
             Some(ProtocolComment::SlashApprove { reason }) => {
                 if !is_maintainer_actor(&comment.author, config) {
+                    if config.auto_approve {
+                        continue;
+                    }
                     findings.push(invalid_issue_like(
                         AuditScope::PullRequest { number: pr.number },
                         &comment,
@@ -424,6 +427,9 @@ pub fn validate_issue(
         match &comment.protocol {
             Some(ProtocolComment::SlashApprove { reason }) => {
                 if !is_maintainer_actor(&comment.author, config) {
+                    if config.auto_approve {
+                        continue;
+                    }
                     findings.push(invalid_issue_like(
                         AuditScope::Issue {
                             number: issue.number,
@@ -925,7 +931,8 @@ mod tests {
             "../tests/fixtures/maintainer_approve_issue.json"
         ))
         .unwrap();
-        let config = test_config(&fixture.lead_github_login, Some("someone-else"));
+        let mut config = test_config(&fixture.lead_github_login, Some("someone-else"));
+        config.auto_approve = false;
         let comments = envelopes(fixture.comments);
         let validation = validate_issue(&fixture.issue, &comments, &config, None);
 
@@ -936,6 +943,21 @@ mod tests {
                 .message
                 .contains("slash approve comment from non-maintainer actor")
         );
+    }
+
+    #[test]
+    fn non_maintainer_slash_approve_is_ignored_when_auto_approve_is_enabled() {
+        let fixture: IssueFixture = serde_json::from_str(include_str!(
+            "../tests/fixtures/maintainer_approve_issue.json"
+        ))
+        .unwrap();
+        let mut config = test_config(&fixture.lead_github_login, Some("someone-else"));
+        config.auto_approve = true;
+        let comments = envelopes(fixture.comments);
+        let validation = validate_issue(&fixture.issue, &comments, &config, None);
+
+        assert!(!validation.approved);
+        assert!(validation.findings.is_empty());
     }
 
     fn envelopes(comments: Vec<IssueComment>) -> Vec<ProtocolEnvelope> {
@@ -956,6 +978,7 @@ mod tests {
             metric_direction: MetricDirection::HigherIsBetter,
             lead_github_login: Some(lead_github_login.to_string()),
             maintainer_github_login: maintainer_github_login.map(ToString::to_string),
+            default_branch: Some("main".to_string()),
             auto_approve: true,
             assignment_timeout: std::time::Duration::from_secs(24 * 60 * 60),
             review_timeout: std::time::Duration::from_secs(12 * 60 * 60),

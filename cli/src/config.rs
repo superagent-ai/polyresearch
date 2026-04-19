@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -12,6 +13,7 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_API_BUDGET: u64 = 5_000;
 pub const DEFAULT_REQUEST_DELAY_MS: u64 = 100;
 pub const DEFAULT_CAPACITY: u8 = 75;
+pub const DEFAULT_AGENT_COMMAND: &str = "claude -p --permission-mode bypassPermissions";
 pub const NODE_ID_ENV_VAR: &str = "POLYRESEARCH_NODE_ID";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,6 +21,18 @@ pub const NODE_ID_ENV_VAR: &str = "POLYRESEARCH_NODE_ID";
 pub enum MetricDirection {
     HigherIsBetter,
     LowerIsBetter,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentConfig {
+    pub command: String,
+}
+
+impl AgentConfig {
+    pub fn new(command: impl Into<String>) -> Option<Self> {
+        let command = command.into().trim().to_string();
+        (!command.is_empty()).then_some(Self { command })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -30,6 +44,8 @@ pub struct NodeConfig {
     pub api_budget: u64,
     #[serde(default = "default_request_delay_ms")]
     pub request_delay_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentConfig>,
 }
 
 impl NodeConfig {
@@ -38,12 +54,14 @@ impl NodeConfig {
         capacity: u8,
         api_budget: u64,
         request_delay_ms: u64,
+        agent: Option<AgentConfig>,
     ) -> Self {
         Self {
             node_id: node_id.into(),
             capacity: normalize_capacity(capacity),
             api_budget: normalize_api_budget(api_budget),
             request_delay_ms: normalize_request_delay_ms(request_delay_ms),
+            agent: agent.or_else(|| AgentConfig::new(DEFAULT_AGENT_COMMAND)),
         }
     }
 
@@ -87,7 +105,8 @@ impl NodeConfig {
             .map(|config| config.request_delay_ms)
             .unwrap_or(DEFAULT_REQUEST_DELAY_MS);
 
-        Ok(Self::new(node_id, capacity, api_budget, request_delay_ms))
+        let agent = file_config.as_ref().and_then(|config| config.agent.clone());
+        Ok(Self::new(node_id, capacity, api_budget, request_delay_ms, agent))
     }
 
     pub fn load_api_budget(repo_root: &Path) -> u64 {
@@ -129,6 +148,10 @@ impl NodeConfig {
 
     pub fn effective_request_delay_ms(&self) -> u64 {
         normalize_request_delay_ms(self.request_delay_ms)
+    }
+
+    pub fn agent_command(&self) -> Option<&str> {
+        self.agent.as_ref().map(|agent| agent.command.as_str())
     }
 }
 
@@ -200,6 +223,7 @@ pub struct ProtocolConfig {
     pub metric_direction: MetricDirection,
     pub lead_github_login: Option<String>,
     pub maintainer_github_login: Option<String>,
+    pub default_branch: Option<String>,
     pub auto_approve: bool,
     pub assignment_timeout: Duration,
     pub review_timeout: Duration,
@@ -216,6 +240,7 @@ impl Default for ProtocolConfig {
             metric_direction: MetricDirection::HigherIsBetter,
             lead_github_login: None,
             maintainer_github_login: None,
+            default_branch: None,
             auto_approve: true,
             assignment_timeout: Duration::from_secs(24 * 60 * 60),
             review_timeout: Duration::from_secs(12 * 60 * 60),
@@ -285,6 +310,11 @@ impl ProtocolConfig {
                         config.maintainer_github_login = Some(value.to_string());
                     }
                 }
+                "default_branch" => {
+                    if value != "replace-me" && !value.is_empty() {
+                        config.default_branch = Some(value.to_string());
+                    }
+                }
                 "auto_approve" => config.auto_approve = parse_bool(value)?,
                 "assignment_timeout" => config.assignment_timeout = parse_duration(value)?,
                 "review_timeout" => config.review_timeout = parse_duration(value)?,
@@ -337,6 +367,26 @@ impl ProtocolConfig {
             "this project requires polyresearch CLI v{required}, but you are running v{current}"
         ))
     }
+}
+
+pub fn resolve_default_branch(
+    repo_root: &Path,
+    repo_slug: &str,
+    config: &ProtocolConfig,
+) -> Result<String> {
+    if let Some(branch) = config.default_branch.as_deref() {
+        return Ok(branch.to_string());
+    }
+
+    if let Some(branch) = discover_remote_default_branch(repo_root)? {
+        return Ok(branch);
+    }
+
+    if let Some(branch) = discover_local_default_branch(repo_root)? {
+        return Ok(branch);
+    }
+
+    discover_default_branch_via_github(repo_slug)
 }
 
 #[derive(Debug, Clone)]
@@ -466,6 +516,81 @@ fn parse_bool(value: &str) -> Result<bool> {
         "false" => Ok(false),
         other => Err(eyre!("invalid boolean value `{other}`")),
     }
+}
+
+fn discover_remote_default_branch(repo_root: &Path) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .args(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
+        .current_dir(repo_root)
+        .output()
+        .wrap_err("failed to run `git symbolic-ref refs/remotes/origin/HEAD`")?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let ref_name = String::from_utf8(output.stdout)?.trim().to_string();
+    Ok(parse_remote_default_branch_ref(&ref_name))
+}
+
+fn parse_remote_default_branch_ref(ref_name: &str) -> Option<String> {
+    let trimmed = ref_name.trim();
+    let branch = trimmed.strip_prefix("origin/").unwrap_or(trimmed).trim();
+    (!branch.is_empty()).then(|| branch.to_string())
+}
+
+fn discover_local_default_branch(repo_root: &Path) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .args(["for-each-ref", "refs/heads", "--format=%(refname:short)"])
+        .current_dir(repo_root)
+        .output()
+        .wrap_err("failed to list local git branches")?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let branches = String::from_utf8(output.stdout)?
+        .lines()
+        .map(str::trim)
+        .filter(|branch| !branch.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    Ok(pick_local_default_branch(&branches))
+}
+
+fn pick_local_default_branch(branches: &[String]) -> Option<String> {
+    if branches.len() == 1 {
+        return Some(branches[0].clone());
+    }
+
+    for candidate in ["main", "master"] {
+        if branches.iter().any(|branch| branch == candidate) {
+            return Some(candidate.to_string());
+        }
+    }
+
+    None
+}
+
+fn discover_default_branch_via_github(repo_slug: &str) -> Result<String> {
+    let output = Command::new("gh")
+        .args(["api", &format!("repos/{repo_slug}"), "--jq", ".default_branch"])
+        .output()
+        .wrap_err("failed to run `gh api repos/{owner}/{repo} --jq .default_branch`")?;
+    if !output.status.success() {
+        return Err(eyre!(
+            "failed to detect the default branch automatically; set `default_branch` in PROGRAM.md. gh api error: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    let branch = String::from_utf8(output.stdout)?.trim().to_string();
+    if branch.is_empty() {
+        return Err(eyre!(
+            "failed to detect the default branch automatically; set `default_branch` in PROGRAM.md"
+        ));
+    }
+
+    Ok(branch)
 }
 
 fn normalize_capacity(capacity: u8) -> u8 {
@@ -726,7 +851,13 @@ capacity = 50
 
     #[test]
     fn defaults_capacity_when_zero() {
-        let config = NodeConfig::new("node-7f83", 0, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS);
+        let config = NodeConfig::new(
+            "node-7f83",
+            0,
+            DEFAULT_API_BUDGET,
+            DEFAULT_REQUEST_DELAY_MS,
+            None,
+        );
         assert_eq!(config.capacity, DEFAULT_CAPACITY);
     }
 
@@ -737,23 +868,52 @@ capacity = 50
             200,
             DEFAULT_API_BUDGET,
             DEFAULT_REQUEST_DELAY_MS,
+            None,
         );
         assert_eq!(config.capacity, 100);
     }
 
     #[test]
     fn defaults_api_budget_when_missing() {
-        let config = NodeConfig::new("node-7f83", DEFAULT_CAPACITY, 0, DEFAULT_REQUEST_DELAY_MS);
+        let config = NodeConfig::new(
+            "node-7f83",
+            DEFAULT_CAPACITY,
+            0,
+            DEFAULT_REQUEST_DELAY_MS,
+            None,
+        );
         assert_eq!(config.effective_api_budget(), DEFAULT_API_BUDGET);
     }
 
     #[test]
     fn defaults_request_delay_when_zero() {
-        let config = NodeConfig::new("node-7f83", DEFAULT_CAPACITY, DEFAULT_API_BUDGET, 0);
+        let config = NodeConfig::new("node-7f83", DEFAULT_CAPACITY, DEFAULT_API_BUDGET, 0, None);
         assert_eq!(
             config.effective_request_delay_ms(),
             DEFAULT_REQUEST_DELAY_MS
         );
+    }
+
+    #[test]
+    fn loads_agent_command_from_toml() {
+        let _guard = NodeIdEnvGuard::lock_clean();
+        let repo_root = unique_temp_dir("node-config-agent");
+        let path = node_config_path(&repo_root);
+        fs::write(
+            &path,
+            r#"node_id = "node-agent"
+capacity = 50
+
+[agent]
+command = "claude -p"
+"#,
+        )
+        .unwrap();
+
+        let config = NodeConfig::load(&repo_root).unwrap();
+        assert_eq!(config.agent_command(), Some("claude -p"));
+
+        fs::remove_dir_all(repo_root).unwrap();
     }
 
     #[test]
@@ -877,6 +1037,7 @@ capacity = 50
 
 lead_github_login: alice
 maintainer_github_login: bob
+default_branch: trunk
 min_queue_depth: 3
 auto_approve: false
 metric_tolerance: 10
@@ -891,6 +1052,7 @@ Do something.
         let config = ProtocolConfig::load(&repo_root).unwrap();
         assert_eq!(config.lead_github_login.as_deref(), Some("alice"));
         assert_eq!(config.maintainer_github_login.as_deref(), Some("bob"));
+        assert_eq!(config.default_branch.as_deref(), Some("trunk"));
         assert_eq!(config.min_queue_depth, 3);
         assert!(!config.auto_approve);
         assert_eq!(config.metric_tolerance, Some(10.0));
@@ -949,6 +1111,42 @@ Do something.
         assert!(config.cli_version.is_none());
 
         fs::remove_dir_all(repo_root).unwrap();
+    }
+
+    #[test]
+    fn parse_remote_default_branch_ref_handles_origin_prefix() {
+        assert_eq!(
+            parse_remote_default_branch_ref("origin/main"),
+            Some("main".to_string())
+        );
+        assert_eq!(
+            parse_remote_default_branch_ref("origin/master"),
+            Some("master".to_string())
+        );
+    }
+
+    #[test]
+    fn pick_local_default_branch_prefers_conventional_names() {
+        assert_eq!(
+            pick_local_default_branch(&[
+                "feature/test".to_string(),
+                "master".to_string(),
+                "main".to_string(),
+            ]),
+            Some("main".to_string())
+        );
+        assert_eq!(
+            pick_local_default_branch(&["feature/test".to_string(), "master".to_string()]),
+            Some("master".to_string())
+        );
+    }
+
+    #[test]
+    fn pick_local_default_branch_uses_single_branch_repo() {
+        assert_eq!(
+            pick_local_default_branch(&["trunk".to_string()]),
+            Some("trunk".to_string())
+        );
     }
 
     #[test]

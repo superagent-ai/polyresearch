@@ -50,6 +50,9 @@ impl RepoRef {
     }
 
     pub fn parse(value: &str) -> Result<Self> {
+        if value.contains("github.com/") || value.starts_with("git@github.com:") {
+            return Self::parse_remote(value);
+        }
         let (owner, name) = value
             .split_once('/')
             .ok_or_else(|| eyre!("expected repo in `owner/name` format"))?;
@@ -86,6 +89,7 @@ pub trait GitHubApi: Send + Sync {
     fn auth_token(&self) -> Result<String>;
     fn get_rate_limit_status(&self) -> Result<RateLimitStatus>;
     fn repo_has_issues(&self) -> Result<bool>;
+    fn enable_repo_issues(&self) -> Result<()>;
     fn list_thesis_issues(&self, state: IssueListState) -> Result<Vec<Issue>>;
     fn list_issue_comments(&self, issue_number: u64) -> Result<Vec<IssueComment>>;
     fn create_issue(&self, title: &str, body: &str, labels: &[&str]) -> Result<Issue>;
@@ -161,6 +165,15 @@ impl GitHubClient {
             .get("has_issues")
             .and_then(|v| v.as_bool())
             .unwrap_or(true))
+    }
+
+    pub fn enable_repo_issues(&self) -> Result<()> {
+        self.gh_api_json(
+            "PATCH",
+            &format!("repos/{}/{}", self.repo.owner, self.repo.name),
+            &[("has_issues", "true")],
+        )?;
+        Ok(())
     }
 
     pub fn list_thesis_issues(&self, state: IssueListState) -> Result<Vec<Issue>> {
@@ -427,6 +440,10 @@ impl GitHubApi for GitHubClient {
 
     fn repo_has_issues(&self) -> Result<bool> {
         GitHubClient::repo_has_issues(self)
+    }
+
+    fn enable_repo_issues(&self) -> Result<()> {
+        GitHubClient::enable_repo_issues(self)
     }
 
     fn list_thesis_issues(&self, state: IssueListState) -> Result<Vec<Issue>> {

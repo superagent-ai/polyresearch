@@ -153,11 +153,12 @@ fn decide_with_peer_review(
     }
 
     let tolerance = ctx.config.tolerance()?;
-    let main_head = crate::commands::run_git(&ctx.repo_root, &["rev-parse", "main"])?;
+    let default_branch_head =
+        crate::commands::run_git(&ctx.repo_root, &["rev-parse", &ctx.default_branch])?;
     if pr_state
         .reviews
         .iter()
-        .any(|review| review.base_sha.trim() != main_head.trim())
+        .any(|review| review.base_sha.trim() != default_branch_head.trim())
     {
         return Ok(Outcome::Stale);
     }

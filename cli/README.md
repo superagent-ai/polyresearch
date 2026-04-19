@@ -1,19 +1,17 @@
 # polyresearch CLI
 
-`polyresearch` is the mandatory Rust CLI and terminal dashboard for the polyresearch protocol.
+`polyresearch` is the deterministic coordination layer for distributed autoresearch.
 
-It is designed to be used by agents and humans as the canonical path for protocol state transitions, while still being ergonomic for anyone who wants a live status view.
+The agent-facing loop lives in `PROGRAM.md`. The CLI handles the shared state machine: claims, attempts, releases, syncing, PR flow, review, and queue management.
 
-## Why it exists
+## Requirements
 
-The protocol stores truth in GitHub issue comments, PR comments, and branches. In practice, contributors repeatedly re-implement the same state derivation logic and get it wrong:
+- `git`
+- `gh`
+- a repo containing `PROGRAM.md` and `PREPARE.md`
+- GitHub authentication via `gh auth login`
 
-- double-claiming already claimed theses
-- generating new theses while `results.tsv` is stale
-- posting malformed structured comments
-- continuing work after a thesis has already been resolved
-
-This CLI centralizes that logic so every machine uses the same implementation and the lead can validate canonical state against raw GitHub activity.
+The CLI uses your existing `gh` authentication by default.
 
 ## Install
 
@@ -23,70 +21,136 @@ cargo install polyresearch
 
 ### Other install options
 
-<details>
-<summary>Download a pre-built binary</summary>
-
 Pre-built archives are available from [GitHub Releases](https://github.com/superagent-ai/polyresearch/releases).
 
-| OS | Architecture | Archive |
-| --- | --- | --- |
-| macOS | Apple Silicon | `polyresearch-aarch64-apple-darwin.tar.xz` |
-| macOS | Intel | `polyresearch-x86_64-apple-darwin.tar.xz` |
-| Linux | x86_64 (glibc) | `polyresearch-x86_64-unknown-linux-gnu.tar.xz` |
+## High-Level Commands
 
-Each archive expands to a directory containing `polyresearch` and `README.md`. Move `polyresearch` somewhere on your `PATH`, such as `~/.local/bin` or `/usr/local/bin`.
+These are the primary entry points. Most users only need these.
 
-**macOS (Apple Silicon):**
+### `polyresearch bootstrap <url>`
+
+Bootstraps a new project.
 
 ```bash
-curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-aarch64-apple-darwin.tar.xz
-tar -xJf polyresearch-aarch64-apple-darwin.tar.xz
-sudo cp polyresearch-aarch64-apple-darwin/polyresearch /usr/local/bin/
+polyresearch bootstrap https://github.com/owner/repo --goal "make it faster"
 ```
 
-**macOS (Intel):**
+What it does:
+
+1. forks/clones the repo,
+2. writes `PROGRAM.md`, `PREPARE.md`, and `results.tsv` if missing,
+3. initializes `.polyresearch-node.toml`,
+4. spawns your configured coding agent to fill in the project-specific details.
+
+Flags:
+
+- `--fork <owner>` or `--fork <owner/name>`
+- `--goal "<text>"`
+- `--pause-after-bootstrap`
+
+### `polyresearch lead`
+
+Runs the deterministic lead loop.
 
 ```bash
-curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-x86_64-apple-darwin.tar.xz
-tar -xJf polyresearch-x86_64-apple-darwin.tar.xz
-sudo cp polyresearch-x86_64-apple-darwin/polyresearch /usr/local/bin/
+polyresearch lead
+polyresearch lead --once
 ```
 
-**Linux (x86_64):**
+The lead loop:
+
+- resolves blocking duties,
+- syncs `results.tsv`,
+- policy-checks open PRs,
+- decides ready PRs,
+- spawns an agent only when it needs new thesis ideas.
+
+Useful flag:
+
+- `--once` — run a single lead-loop iteration and exit. Good for smoke tests and debugging.
+
+### `polyresearch contribute [url]`
+
+Runs the deterministic contributor loop.
 
 ```bash
-curl -LO https://github.com/superagent-ai/polyresearch/releases/latest/download/polyresearch-x86_64-unknown-linux-gnu.tar.xz
-tar -xJf polyresearch-x86_64-unknown-linux-gnu.tar.xz
-sudo cp polyresearch-x86_64-unknown-linux-gnu/polyresearch /usr/local/bin/
+polyresearch contribute
+polyresearch contribute https://github.com/owner/repo
+polyresearch contribute --once --max-parallel 1
 ```
 
-</details>
+The contributor loop:
 
-<details>
-<summary>Build from source</summary>
+- claims approved theses,
+- creates worktrees,
+- writes `.polyresearch/thesis.md`,
+- spawns one coding agent per worktree,
+- records attempts,
+- submits wins and releases dead ends,
+- scales parallelism automatically from `capacity` and `PREPARE.md` resource hints.
 
-From the repo root:
+Override parallelism manually if needed:
 
 ```bash
-cargo install --path cli
+polyresearch contribute --max-parallel 4
 ```
 
-</details>
+Useful flags:
 
-## Requirements
+- `--once` — run a single contributor-loop iteration and exit.
+- `--max-parallel N` — place a manual cap on auto-scaled parallelism.
+- `--max-parallel 1` — force one thesis at a time. This is the safest smoke-test mode.
 
-- `git`
-- `gh`
-- a repo containing `POLYRESEARCH.md`, `PROGRAM.md`, and `PREPARE.md`
-- GitHub authentication through `gh auth login`
+## Agent Configuration
 
-The CLI can read `GITHUB_TOKEN`, but by default it uses the existing `gh` authentication on the machine.
+The CLI spawns a coding agent for creative work: bootstrap, thesis generation, and experiments.
 
-## Releasing
+Configure it in `.polyresearch-node.toml`:
 
-Release tags follow `vX.Y.Z` and must match the version in [cli/Cargo.toml](cli/Cargo.toml). Bump the crate version, push the matching tag, and GitHub Actions publishes the archives and checksums to [GitHub Releases](https://github.com/superagent-ai/polyresearch/releases).
+```toml
+capacity = 80
 
-## Basic workflow
+[agent]
+command = "claude -p --permission-mode bypassPermissions"
+```
+
+Default is Claude Code headless. You can replace it with any compatible agent:
+
+```toml
+[agent]
+command = "codex --prompt"
+command = "cursor --bg --prompt"
+command = "python3 ~/my-agent.py --prompt"
+```
+
+## Runtime Files
+
+The CLI and agent communicate through files inside the repo:
+
+- `PROGRAM.md` — the agent reads this as the experiment loop.
+- `PREPARE.md` — benchmark and metric parsing instructions.
+- `.polyresearch/thesis.md` — thesis-specific context written by the CLI.
+- `.polyresearch/result.json` — experiment result written by the agent.
+- `results.tsv` — the synced ledger of attempts.
+
+Expected `.polyresearch/result.json` shape:
+
+```json
+{
+  "metric": 0.0,
+  "baseline": 0.0,
+  "observation": "improved",
+  "summary": "What changed.",
+  "attempts": [
+    {
+      "metric": 0.0,
+      "summary": "What this attempt tried."
+    }
+  ]
+}
+```
+
+## Node Initialization
 
 Initialize the local node identity once per repo:
 
@@ -95,102 +159,53 @@ polyresearch init
 polyresearch init --capacity 50
 ```
 
-This writes `.polyresearch-node.toml` in the repo root. The file stores a stable `node_id` and a `capacity` percentage (1..=100) giving the share of the total machine this project may use. Additional tuning fields such as `api_budget` and `request_delay_ms` are documented in `POLYRESEARCH.md`.
+This writes `.polyresearch-node.toml` with:
 
-Inspect the current state:
+- `node_id`
+- `capacity` (percent of total machine)
+- `api_budget`
+- `request_delay_ms`
+- `[agent] command`
+
+## Inspecting State
 
 ```bash
 polyresearch pace
 polyresearch status
 polyresearch audit
-polyresearch pace --json
 polyresearch status --json
 polyresearch status --tui
 ```
 
-Debug GitHub traffic when you need to inspect request pacing or rate-limit headers:
+`pace` reports:
 
-```bash
-polyresearch --github-debug pace --json
-POLYRESEARCH_GITHUB_DEBUG=1 polyresearch status
-```
+- hardware budget from `capacity`,
+- live free memory/load,
+- GitHub API budget,
+- recent node throughput.
 
-Contributor flow:
+## Low-Level Commands
 
-```bash
-polyresearch claim 88
-polyresearch attempt 88 --metric 0.6244 --baseline 0.5000 --observation improved --summary "River all-in with two pair+"
-polyresearch submit 88
-polyresearch release 88 --reason no_improvement
-polyresearch batch-claim
-```
+These are the building blocks used internally by `lead` and `contribute`. They remain available for manual debugging, custom automation, or advanced workflows.
 
-`polyresearch claim` creates a dedicated worktree at `.worktrees/<issue>-<slug>/` from `main` and prints the path. Change into that worktree before editing or running evaluations. The main worktree stays on `main` so the lead can sync, decide, and generate without races from concurrent contributors.
-
-`polyresearch batch-claim --count N` is the multi-thesis version for contributors dispatching sub-agents. It claims `N` approved theses, creates one worktree per thesis, and requires worktrees for parallel execution. Pick `N` from `polyresearch pace` after dividing your effective hardware budget by each eval's resource footprint.
-
-Review flow:
-
-```bash
-polyresearch review-claim 93
-polyresearch review 93 --metric 0.6244 --baseline 0.5000 --observation improved
-```
-
-Lead flow:
-
-```bash
-polyresearch sync
-polyresearch duties
-polyresearch generate --title "New thesis" --body "Hypothesis and rationale"
-polyresearch policy-check 93
-polyresearch decide 93
-polyresearch prune
-polyresearch admin reconcile-ledger
-```
-
-Run the lead from the repository root on `main`. Launch contributors as separate agents in their own thesis worktrees.
-
-Maintainer approval (when `auto_approve` is `false` in `PROGRAM.md`):
-
-The maintainer comments `/approve` or `/reject` directly on thesis issues and candidate PRs in GitHub. Both commands accept an optional reason that the lead reads as directional input for future thesis generation.
-
-```
-/approve focus on normalization layers
-/reject this direction already failed for architectural reasons
-```
-
-## Output modes
-
-- Default output is human-readable terminal text.
-- `--json` returns structured JSON for agent consumption.
-- `status --tui` opens the ratatui dashboard for a live human view.
-
-## Command summary
-
-- `polyresearch init` -- set node identity and `capacity` (percent of total machine), verify GitHub auth, detect repo
-- `polyresearch pace` -- show the hardware budget (machine, your max, live free), GitHub API budget, active claims, and recent node throughput
-- `polyresearch status` -- derive thesis state, queue depth, active nodes, current best metric
-- `polyresearch audit` -- validate raw GitHub activity and report invalid or suspicious protocol events
-- `polyresearch claim` -- atomically claim a thesis and create the thesis worktree at `.worktrees/<issue>-<slug>/`
-- `polyresearch batch-claim` -- claim up to the node's free thesis slots and create one worktree per thesis
-- `polyresearch attempt` -- post a structured attempt comment from the current branch
-- `polyresearch release` -- release a claim with a structured reason
-- `polyresearch submit` -- push the branch and open a candidate PR
-- `polyresearch review-claim` -- claim a PR for review
-- `polyresearch review` -- post a structured review record with env hash
-- `polyresearch sync` -- reconcile `results.tsv` from the comment trail
-- `polyresearch generate` -- open a thesis issue (auto-approves when `auto_approve` is `true`, otherwise assigns to maintainer)
-- `polyresearch policy-check` -- validate PR files against the editable surface
-- `polyresearch decide` -- post the lead decision and merge/close accordingly (waits for maintainer `/approve` when `auto_approve` is `false`)
-- `polyresearch duties` -- list blocking and advisory work items for the current node
-- `polyresearch prune` -- prune git worktree metadata and remove empty stale directories under `.worktrees`
-- `polyresearch admin ...` -- lead-only repair commands for exceptional recovery
+- `polyresearch claim`
+- `polyresearch batch-claim`
+- `polyresearch attempt`
+- `polyresearch release`
+- `polyresearch submit`
+- `polyresearch review-claim`
+- `polyresearch review`
+- `polyresearch sync`
+- `polyresearch generate`
+- `polyresearch policy-check`
+- `polyresearch decide`
+- `polyresearch duties`
+- `polyresearch prune`
+- `polyresearch admin ...`
 
 ## Notes
 
-- The comment trail remains the visible source of activity.
-- Canonical protocol state is derived from validated CLI-compatible events only.
-- `results.tsv` is treated as a lead-maintained ledger derived from canonical history.
-- Raw manual GitHub edits may remain visible for auditability, but they are non-canonical and may be ignored by the lead and the tooling.
-- The CLI keeps normal GitHub comments and PR activity human-readable while abstracting the protocol bookkeeping into the tool itself.
-
+- The comment trail remains the canonical shared state.
+- The CLI derives protocol state from validated events only.
+- `results.tsv` is maintained by the lead loop and sync logic.
+- All GitHub traffic goes through the CLI, not through the experiment agent.

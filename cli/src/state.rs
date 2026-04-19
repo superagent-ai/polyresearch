@@ -700,6 +700,7 @@ mod tests {
             metric_direction: MetricDirection::HigherIsBetter,
             lead_github_login: Some(lead_github_login.to_string()),
             maintainer_github_login: Some("maintainer".to_string()),
+            default_branch: Some("main".to_string()),
             auto_approve: true,
             assignment_timeout: std::time::Duration::from_secs(24 * 60 * 60),
             review_timeout: std::time::Duration::from_secs(12 * 60 * 60),

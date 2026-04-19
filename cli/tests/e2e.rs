@@ -8,13 +8,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Result, eyre};
 use polyresearch::cli::{
-    AttemptArgs, BatchClaimArgs, Cli, Commands, GenerateArgs, InitArgs, IssueArgs, PrArgs,
-    ReleaseArgs, StatusArgs,
+    AttemptArgs, BatchClaimArgs, BootstrapArgs, Cli, Commands, ContributeArgs, GenerateArgs,
+    InitArgs, IssueArgs, LeadArgs, PrArgs, ReleaseArgs, StatusArgs,
 };
 use polyresearch::commands;
 use polyresearch::comments::{Observation, ReleaseReason};
 use polyresearch::config::{
-    DEFAULT_API_BUDGET, MetricDirection, NodeConfig, ProgramSpec, ProtocolConfig,
+    AgentConfig, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS, MetricDirection, NodeConfig,
+    ProgramSpec, ProtocolConfig,
 };
 use polyresearch::github::{
     CommentUser, GitHubApi, Issue, IssueComment, IssueListState, PullRequest, PullRequestFile,
@@ -48,7 +49,9 @@ struct MockGitHubClient {
     issue_comments: HashMap<u64, Vec<IssueComment>>,
     pull_requests: Vec<PullRequest>,
     pr_comments: HashMap<u64, Vec<IssueComment>>,
+    repo_has_issues: Mutex<bool>,
     posted_issue_comments: Mutex<Vec<(u64, String)>>,
+    created_issues: Mutex<Vec<Issue>>,
     closed_issues: Mutex<Vec<u64>>,
 }
 
@@ -66,9 +69,19 @@ impl MockGitHubClient {
             issue_comments,
             pull_requests,
             pr_comments,
+            repo_has_issues: Mutex::new(true),
             posted_issue_comments: Mutex::new(Vec::new()),
+            created_issues: Mutex::new(Vec::new()),
             closed_issues: Mutex::new(Vec::new()),
         }
+    }
+
+    fn set_repo_has_issues(&self, value: bool) {
+        *self.repo_has_issues.lock().unwrap() = value;
+    }
+
+    fn repo_has_issues_value(&self) -> bool {
+        *self.repo_has_issues.lock().unwrap()
     }
 }
 
@@ -90,11 +103,18 @@ impl GitHubApi for MockGitHubClient {
     }
 
     fn repo_has_issues(&self) -> Result<bool> {
-        Ok(true)
+        Ok(*self.repo_has_issues.lock().unwrap())
+    }
+
+    fn enable_repo_issues(&self) -> Result<()> {
+        *self.repo_has_issues.lock().unwrap() = true;
+        Ok(())
     }
 
     fn list_thesis_issues(&self, _state: IssueListState) -> Result<Vec<Issue>> {
-        Ok(self.issues.clone())
+        let mut issues = self.issues.clone();
+        issues.extend(self.created_issues.lock().unwrap().clone());
+        Ok(issues)
     }
 
     fn list_issue_comments(&self, issue_number: u64) -> Result<Vec<IssueComment>> {
@@ -125,8 +145,29 @@ impl GitHubApi for MockGitHubClient {
         Ok(comments)
     }
 
-    fn create_issue(&self, _title: &str, _body: &str, _labels: &[&str]) -> Result<Issue> {
-        Err(eyre!("unexpected create_issue call in test"))
+    fn create_issue(&self, title: &str, body: &str, labels: &[&str]) -> Result<Issue> {
+        let mut created = self.created_issues.lock().unwrap();
+        let number = 10_000 + created.len() as u64;
+        let issue = Issue {
+            number,
+            title: title.to_string(),
+            body: Some(body.to_string()),
+            state: "OPEN".to_string(),
+            labels: labels
+                .iter()
+                .map(|label| polyresearch::github::Label {
+                    name: (*label).to_string(),
+                })
+                .collect(),
+            created_at: chrono::Utc::now(),
+            closed_at: None,
+            author: Some(polyresearch::github::Author {
+                login: self.current_login.clone(),
+            }),
+            url: Some(format!("https://example.test/issues/{number}")),
+        };
+        created.push(issue.clone());
+        Ok(issue)
     }
 
     fn post_issue_comment(&self, issue_number: u64, body: &str) -> Result<IssueComment> {
@@ -329,6 +370,229 @@ async fn init_writes_node_identity() {
     assert_eq!(config.node_id, "lead/test-node");
     assert_eq!(config.api_budget, DEFAULT_API_BUDGET);
     assert_eq!(config.capacity, 50);
+}
+
+#[tokio::test]
+async fn init_enables_issues_when_disabled() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("init-enables-issues");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    mock.set_repo_has_issues(false);
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        "lead",
+        false,
+        Commands::Init(InitArgs {
+            node: Some("test-node".to_string()),
+            capacity: Some(50),
+        }),
+    );
+
+    commands::init::run(
+        &ctx,
+        &InitArgs {
+            node: Some("test-node".to_string()),
+            capacity: Some(50),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(mock.repo_has_issues_value());
+}
+
+#[tokio::test]
+async fn bootstrap_runs_fake_agent_and_writes_project_files() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("bootstrap-fake-agent");
+    let agent_command = write_fake_agent_script(&repo.path);
+    seed_agent_command(&repo.path, &agent_command);
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let args = BootstrapArgs {
+        repo_url: "test-owner/test-repo".to_string(),
+        fork: None,
+        goal: Some("make it faster".to_string()),
+        pause_after_bootstrap: true,
+    };
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead",
+        false,
+        Commands::Bootstrap(args.clone()),
+    );
+
+    commands::bootstrap::run(&ctx, &args).await.unwrap();
+
+    let program = fs::read_to_string(repo.path.join("PROGRAM.md")).unwrap();
+    let prepare = fs::read_to_string(repo.path.join("PREPARE.md")).unwrap();
+    let results = fs::read_to_string(repo.path.join("results.tsv")).unwrap();
+    let config: NodeConfig =
+        toml::from_str(&fs::read_to_string(repo.path.join(".polyresearch-node.toml")).unwrap())
+            .unwrap();
+
+    assert!(program.contains("fake bootstrap agent"));
+    assert!(prepare.contains("fake bootstrap agent"));
+    assert!(repo.path.join(".polyresearch").join("bench.js").exists());
+    assert_eq!(results, "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n");
+    assert_eq!(config.agent_command(), Some(agent_command.as_str()));
+    assert!(config.node_id.starts_with("lead/"));
+}
+
+#[tokio::test]
+async fn bootstrap_normalizes_legacy_program_file() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("bootstrap-normalize-program");
+    let agent_command = write_fake_agent_script(&repo.path);
+    seed_agent_command(&repo.path, &agent_command);
+    fs::write(
+        repo.path.join("PROGRAM.md"),
+        "# Research program\n\nlead_github_login: lead\n\n## Goal\n\nLegacy content only.\n",
+    )
+    .unwrap();
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let args = BootstrapArgs {
+        repo_url: "test-owner/test-repo".to_string(),
+        fork: None,
+        goal: Some("make it faster".to_string()),
+        pause_after_bootstrap: true,
+    };
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead",
+        false,
+        Commands::Bootstrap(args.clone()),
+    );
+
+    commands::bootstrap::run(&ctx, &args).await.unwrap();
+
+    let program = fs::read_to_string(repo.path.join("PROGRAM.md")).unwrap();
+    assert!(program.contains("## Thesis context"));
+    assert!(program.contains("## Experiment loop"));
+    assert!(program.contains("## Result format"));
+}
+
+#[tokio::test]
+async fn lead_once_uses_fake_agent_to_generate_theses() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("lead-fake-agent");
+    let agent_command = write_fake_agent_script(&repo.path);
+    seed_agent_command(&repo.path, &agent_command);
+    fs::write(repo.path.join("PROGRAM.md"), "lead_github_login: lead\n").unwrap();
+    fs::write(
+        repo.path.join("results.tsv"),
+        "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n",
+    )
+    .unwrap();
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let args = LeadArgs {
+        once: true,
+        sleep_secs: 0,
+    };
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        "lead",
+        false,
+        Commands::Lead(args.clone()),
+    );
+
+    commands::lead::run(&ctx, &args).await.unwrap();
+
+    let created = mock.created_issues.lock().unwrap().clone();
+    let posted = mock.posted_issue_comments.lock().unwrap().clone();
+    assert_eq!(created.len(), 2);
+    assert_eq!(created[0].title, "Fake thesis 1");
+    assert_eq!(created[1].title, "Fake thesis 2");
+    assert_eq!(posted.len(), 2);
+    assert!(posted[0].1.contains("polyresearch:approval"));
+    assert!(posted[1].1.contains("polyresearch:approval"));
+}
+
+#[tokio::test]
+async fn contribute_once_runs_fake_agent_and_releases_no_improvement() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("contribute-fake-agent");
+    init_git_repo(&repo.path);
+    let agent_command = write_fake_agent_script(&repo.path);
+    seed_agent_command(&repo.path, &agent_command);
+    fs::write(
+        repo.path.join("PROGRAM.md"),
+        "# Research Program\n\nlead_github_login: lead\n\n## What you CAN modify\n- `README.md`\n\n## What you CANNOT modify\n- `PREPARE.md`\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path.join("PREPARE.md"),
+        "eval_cores: 1\neval_memory_gb: 1\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path.join("results.tsv"),
+        "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n",
+    )
+    .unwrap();
+
+    let fixture = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "contributor",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let args = ContributeArgs {
+        repo_url: None,
+        max_parallel: Some(1),
+        once: true,
+        sleep_secs: 0,
+    };
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture.lead_github_login,
+        false,
+        Commands::Contribute(args.clone()),
+    );
+
+    commands::contribute::run(&ctx, &args).await.unwrap();
+
+    let posted = mock.posted_issue_comments.lock().unwrap().clone();
+    assert_eq!(posted.len(), 3);
+    assert!(posted.iter().any(|(_, body)| body.contains("polyresearch:claim")));
+    assert!(posted.iter().any(|(_, body)| body.contains("polyresearch:attempt")));
+    assert!(posted.iter().any(|(_, body)| body.contains("polyresearch:release")));
+
+    let worktree = repo
+        .path
+        .join(".worktrees")
+        .join(format!("{}-{}", fixture.issue.number, commands::slugify(&fixture.issue.title)));
+    assert!(!worktree.exists());
 }
 
 #[tokio::test]
@@ -1512,6 +1776,7 @@ fn make_ctx(
             metric_direction: MetricDirection::HigherIsBetter,
             lead_github_login: Some(lead_github_login.to_string()),
             maintainer_github_login: Some("maintainer".to_string()),
+            default_branch: Some("main".to_string()),
             auto_approve: true,
             assignment_timeout: Duration::from_secs(24 * 60 * 60),
             review_timeout: Duration::from_secs(12 * 60 * 60),
@@ -1523,6 +1788,7 @@ fn make_ctx(
             can_modify: vec!["system_prompt.md".to_string()],
             cannot_modify: vec!["PREPARE.md".to_string()],
         },
+        default_branch: "main".to_string(),
     }
 }
 
@@ -1584,6 +1850,74 @@ fn default_rate_limit_status(remaining: u64) -> RateLimitStatus {
             },
         },
     }
+}
+
+fn seed_agent_command(repo_root: &PathBuf, agent_command: &str) {
+    NodeConfig::new(
+        "seed/node",
+        75,
+        DEFAULT_API_BUDGET,
+        DEFAULT_REQUEST_DELAY_MS,
+        Some(AgentConfig {
+            command: agent_command.to_string(),
+        }),
+    )
+    .save(repo_root)
+    .unwrap();
+}
+
+fn write_fake_agent_script(repo_root: &PathBuf) -> String {
+    let script_path = repo_root.join("fake_agent.py");
+    fs::write(
+        &script_path,
+        r#"#!/usr/bin/env python3
+import json
+import pathlib
+import sys
+
+cwd = pathlib.Path.cwd()
+prompt = sys.argv[1] if len(sys.argv) > 1 else ""
+
+if "Bootstrap a polyresearch project" in prompt:
+    program = cwd / "PROGRAM.md"
+    prepare = cwd / "PREPARE.md"
+    poly = cwd / ".polyresearch"
+    poly.mkdir(exist_ok=True)
+    program.write_text(program.read_text() + "\n\nGenerated by fake bootstrap agent.\n")
+    prepare.write_text(prepare.read_text() + "\n\nGenerated by fake bootstrap agent.\n")
+    (poly / "bench.js").write_text("console.log('fake bench')\n")
+elif "Generate " in prompt and "thesis-proposals.json" in prompt:
+    poly = cwd / ".polyresearch"
+    poly.mkdir(exist_ok=True)
+    (poly / "thesis-proposals.json").write_text(json.dumps([
+        {"title": "Fake thesis 1", "body": "Body for fake thesis 1."},
+        {"title": "Fake thesis 2", "body": "Body for fake thesis 2."}
+    ]))
+else:
+    poly = cwd / ".polyresearch"
+    poly.mkdir(exist_ok=True)
+    (poly / "result.json").write_text(json.dumps({
+        "metric": 101.0,
+        "baseline": 100.0,
+        "observation": "no_improvement",
+        "summary": "Fake agent explored one direction and found no win.",
+        "attempts": [
+            {"metric": 101.0, "summary": "Fake attempt"}
+        ]
+    }))
+"#,
+    )
+    .unwrap();
+    let output = Command::new("chmod")
+        .args(["+x", &script_path.to_string_lossy()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "chmod failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    format!("python3 {}", script_path.display())
 }
 
 fn make_submitted_thesis(number: u64) -> ThesisState {

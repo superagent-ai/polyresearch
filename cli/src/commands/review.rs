@@ -33,7 +33,10 @@ pub async fn run(ctx: &AppContext, args: &ReviewArgs) -> Result<()> {
         .head_ref_oid
         .clone()
         .ok_or_else(|| eyre!("PR #{} does not expose a head SHA", args.pr))?;
-    let base_sha = run_git(&ctx.repo_root, &["merge-base", "main", &candidate_sha])?;
+    let base_sha = run_git(
+        &ctx.repo_root,
+        &["merge-base", &ctx.default_branch, &candidate_sha],
+    )?;
     let env_sha = compute_env_sha(&ctx.repo_root.join(".polyresearch"))?;
 
     let comment = ProtocolComment::Review {

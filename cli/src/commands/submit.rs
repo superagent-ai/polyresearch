@@ -57,7 +57,7 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
                 improved_attempt.baseline_metric,
                 improved_attempt.summary
             ),
-            "main",
+            &ctx.default_branch,
         )?)
     };
 

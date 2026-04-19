@@ -6,6 +6,9 @@ This file is the trust boundary. The evaluation code it references is outside th
 
 The maintainer writes this file. It rarely changes.
 
+eval_cores: 1
+eval_memory_gb: 1
+
 ## Setup
 
 One-time setup: data downloads, environment preparation, dependency installation. If `.polyresearch/` exists, reference its setup scripts here.
