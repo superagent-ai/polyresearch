@@ -196,6 +196,14 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
                 Ok(claim) => claim,
                 Err(error) => {
                     eprintln!("Failed to claim thesis #{}: {error}", thesis.issue.number);
+                    let orphan = crate::commands::thesis_worktree_path(
+                        &ctx.repo_root,
+                        thesis.issue.number,
+                        &thesis.issue.title,
+                    );
+                    if orphan.exists() {
+                        let _ = remove_worktree(&ctx.repo_root, &orphan);
+                    }
                     continue;
                 }
             };
