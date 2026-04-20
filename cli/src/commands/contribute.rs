@@ -454,6 +454,7 @@ async fn handle_worker_result(
                 },
             )
             .await?;
+            remove_worktree(&ctx.repo_root, &worktree_path.to_path_buf())?;
         }
         Observation::Crashed | Observation::InfraFailure => {
             release::run(
@@ -464,10 +465,10 @@ async fn handle_worker_result(
                 },
             )
             .await?;
+            remove_worktree(&ctx.repo_root, &worktree_path.to_path_buf())?;
         }
     }
 
-    remove_worktree(&ctx.repo_root, &worktree_path.to_path_buf())?;
     Ok(())
 }
 
