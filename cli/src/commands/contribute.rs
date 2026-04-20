@@ -23,6 +23,12 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
     let program = ProgramSpec::load(&ctx.repo_root, &config)?;
     let default_branch = config.resolve_default_branch(&ctx.repo_root)?;
 
+    let local_ctx = AppContext {
+        config: config.clone(),
+        program: program.clone(),
+        ..ctx.clone()
+    };
+
     ensure_node_config(&ctx.repo_root)?;
     let node_config = NodeConfig::load(&ctx.repo_root)?;
     let node_id = node_config.node_id.clone();
@@ -32,7 +38,7 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
 
     loop {
         match run_iteration(
-            ctx,
+            &local_ctx,
             args,
             &config,
             &program,
@@ -187,6 +193,7 @@ async fn run_iteration(
             agent_command,
             default_branch,
             program,
+            config,
         ));
         prior_attempts_list.push(worker::format_prior_attempts(thesis));
     }
@@ -211,6 +218,7 @@ async fn run_iteration(
             agent_command,
             default_branch,
             program,
+            config,
         ));
         prior_attempts_list.push(worker::format_prior_attempts(thesis));
     }
@@ -245,6 +253,7 @@ fn build_worker_context(
     agent_command: &str,
     default_branch: &str,
     program: &ProgramSpec,
+    config: &ProtocolConfig,
 ) -> WorkerContext {
     WorkerContext {
         issue_number: thesis.issue.number,
@@ -256,6 +265,7 @@ fn build_worker_context(
         default_branch: default_branch.to_string(),
         editable_globs: program.can_modify.clone(),
         protected_globs: program.cannot_modify.clone(),
+        metric_direction: config.metric_direction,
     }
 }
 

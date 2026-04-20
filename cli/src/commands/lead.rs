@@ -271,7 +271,7 @@ fn compute_decision(
             return Ok(Outcome::Stale);
         }
 
-        let env_shas: BTreeSet<_> = pr_state.reviews.iter().filter_map(|r| r.env_sha.clone()).collect();
+        let env_shas: BTreeSet<Option<String>> = pr_state.reviews.iter().map(|r| r.env_sha.clone()).collect();
         if env_shas.len() > 1 {
             return Ok(Outcome::Disagreement);
         }

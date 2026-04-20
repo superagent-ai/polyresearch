@@ -32,6 +32,13 @@ impl ExperimentResult {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct RecoveredMetric {
+    pub metric: f64,
+    pub baseline: Option<f64>,
+    pub summary: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThesisProposal {
     pub title: String,
@@ -73,7 +80,7 @@ pub fn spawn_experiment(
     Ok(None)
 }
 
-pub fn recover_from_logs(worktree_path: &Path) -> Option<ExperimentResult> {
+pub fn recover_from_logs(worktree_path: &Path) -> Option<RecoveredMetric> {
     let polyresearch_dir = worktree_path.join(".polyresearch");
     if !polyresearch_dir.exists() {
         return None;
@@ -107,10 +114,9 @@ pub fn recover_from_logs(worktree_path: &Path) -> Option<ExperimentResult> {
         }
     }
 
-    best_metric.map(|metric| ExperimentResult {
+    best_metric.map(|metric| RecoveredMetric {
         metric,
-        baseline: 0.0,
-        observation: "improved".to_string(),
+        baseline: None,
         summary: "Recovered from run logs".to_string(),
     })
 }
@@ -118,7 +124,7 @@ pub fn recover_from_logs(worktree_path: &Path) -> Option<ExperimentResult> {
 pub fn run_harness_directly(
     worktree_path: &Path,
     baseline_path: &Path,
-) -> Result<Option<ExperimentResult>> {
+) -> Result<Option<RecoveredMetric>> {
     let harness = find_harness(worktree_path);
     let Some(harness_cmd) = harness else {
         return Ok(None);
@@ -128,19 +134,11 @@ pub fn run_harness_directly(
     let baseline_metric = run_harness_in(&harness_cmd, baseline_path)?;
 
     match (candidate_metric, baseline_metric) {
-        (Some(candidate), Some(baseline)) => {
-            let observation = if candidate > baseline {
-                "improved"
-            } else {
-                "no_improvement"
-            };
-            Ok(Some(ExperimentResult {
-                metric: candidate,
-                baseline,
-                observation: observation.to_string(),
-                summary: "Recovered via direct harness execution".to_string(),
-            }))
-        }
+        (Some(candidate), Some(baseline)) => Ok(Some(RecoveredMetric {
+            metric: candidate,
+            baseline: Some(baseline),
+            summary: "Recovered via direct harness execution".to_string(),
+        })),
         _ => Ok(None),
     }
 }
@@ -368,6 +366,7 @@ mod tests {
         assert!(result.is_some());
         let result = result.unwrap();
         assert!((result.metric - 42.5).abs() < f64::EPSILON);
+        assert!(result.baseline.is_none());
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -381,7 +380,9 @@ mod tests {
 
         let result = recover_from_logs(&dir);
         assert!(result.is_some());
-        assert!((result.unwrap().metric - 99.5).abs() < f64::EPSILON);
+        let recovered = result.unwrap();
+        assert!((recovered.metric - 99.5).abs() < f64::EPSILON);
+        assert!(recovered.baseline.is_none());
 
         fs::remove_dir_all(dir).unwrap();
     }

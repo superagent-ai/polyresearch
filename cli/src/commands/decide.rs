@@ -165,8 +165,8 @@ fn decide_with_peer_review(
     let env_shas = pr_state
         .reviews
         .iter()
-        .filter_map(|review| review.env_sha.clone())
-        .collect::<BTreeSet<_>>();
+        .map(|review| review.env_sha.clone())
+        .collect::<BTreeSet<Option<String>>>();
     if env_shas.len() > 1 {
         return Ok(Outcome::Disagreement);
     }

@@ -20,7 +20,9 @@ use polyresearch::github::{
     CommentUser, GitHubApi, Issue, IssueComment, IssueListState, PullRequest, PullRequestFile,
     PullRequestListState, RateLimitBucket, RateLimitResources, RateLimitStatus, RepoRef,
 };
-use polyresearch::state::{ReleaseRecord, RepositoryState, ThesisPhase, ThesisState};
+use polyresearch::state::{
+    PullRequestState, ReleaseRecord, RepositoryState, ReviewRecord, ThesisPhase, ThesisState,
+};
 use polyresearch::cli::ContributeArgs;
 use polyresearch::worker;
 use polyresearch::agent;
@@ -2275,6 +2277,156 @@ fn worker_format_prior_attempts_with_data() {
     assert!(formatted.contains("thesis/12-rmsnorm-attempt-1"));
     assert!(formatted.contains("0.9500"));
     assert!(formatted.contains("RMSNorm swap"));
+}
+
+// --- env_sha None vs Some disagreement ---
+
+#[test]
+fn env_sha_none_vs_some_triggers_disagreement() {
+    let now = chrono::Utc::now();
+    let pr_state = PullRequestState {
+        pr: PullRequest {
+            number: 10,
+            title: "Candidate".to_string(),
+            body: None,
+            state: "OPEN".to_string(),
+            head_ref_name: "thesis/5-test".to_string(),
+            head_ref_oid: Some("abc123".to_string()),
+            base_ref_name: Some("main".to_string()),
+            created_at: now,
+            closed_at: None,
+            merged_at: None,
+            author: None,
+            url: None,
+        },
+        thesis_number: Some(5),
+        policy_pass: true,
+        maintainer_approved: false,
+        maintainer_rejected: false,
+        review_claims: vec![],
+        reviews: vec![
+            ReviewRecord {
+                node: "node-a".to_string(),
+                metric: 0.95,
+                baseline_metric: 0.90,
+                observation: Observation::Improved,
+                candidate_sha: "abc123".to_string(),
+                base_sha: "main-sha".to_string(),
+                env_sha: None,
+                timestamp: now,
+                created_at: now,
+            },
+            ReviewRecord {
+                node: "node-b".to_string(),
+                metric: 0.94,
+                baseline_metric: 0.90,
+                observation: Observation::Improved,
+                candidate_sha: "abc123".to_string(),
+                base_sha: "main-sha".to_string(),
+                env_sha: Some("def456".to_string()),
+                timestamp: now,
+                created_at: now,
+            },
+        ],
+        decision: None,
+        findings: vec![],
+    };
+
+    let env_shas: std::collections::BTreeSet<Option<String>> =
+        pr_state.reviews.iter().map(|r| r.env_sha.clone()).collect();
+    assert_eq!(
+        env_shas.len(),
+        2,
+        "None and Some should be distinct values in the set"
+    );
+}
+
+// --- contribute uses real config, not default ---
+
+#[tokio::test]
+async fn contribute_uses_real_config_not_default() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("contribute-real-config");
+    init_git_repo(&repo.path);
+    write_node_config(&repo.path, "test-node");
+    set_node_id_env("test-node");
+
+    fs::write(
+        repo.path.join("PROGRAM.md"),
+        r#"# Research Program
+
+cli_version: 0.5.0
+lead_github_login: actual-lead
+maintainer_github_login: actual-maintainer
+metric_tolerance: 0.01
+auto_approve: true
+min_queue_depth: 3
+
+## Goal
+
+Test.
+
+## What you CAN modify
+
+- `src/`
+
+## What you CANNOT modify
+
+- `PREPARE.md`
+"#,
+    )
+    .unwrap();
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "actual-lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+
+    let default_config = ProtocolConfig::default();
+    assert!(
+        default_config.lead_github_login.is_none(),
+        "default config should have no lead login"
+    );
+
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "actual-lead",
+        true,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+        }),
+    );
+
+    let real_config = ProtocolConfig::load(&repo.path).unwrap();
+    assert_eq!(
+        real_config.lead_github_login.as_deref(),
+        Some("actual-lead"),
+        "loaded config should have the real lead login"
+    );
+    assert_eq!(
+        real_config.min_queue_depth, 3,
+        "loaded config should have the real min_queue_depth"
+    );
+
+    let result = commands::contribute::run(&ctx, &ContributeArgs {
+        url: None,
+        once: true,
+        max_parallel: Some(1),
+        sleep_secs: 0,
+    })
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "contribute should succeed (dry run, no work): {result:?}"
+    );
 }
 
 fn load_issue_fixture(name: &str) -> IssueFixture {

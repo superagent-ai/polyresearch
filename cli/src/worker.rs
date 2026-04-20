@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 use color_eyre::eyre::{Context, Result, eyre};
 
-use crate::agent::{self, ExperimentResult};
+use crate::agent::{self, ExperimentResult, RecoveredMetric};
 use crate::comments::{Observation, ProtocolComment, ReleaseReason};
 use crate::commands;
+use crate::config::MetricDirection;
 use crate::github::GitHubApi;
 use crate::state::ThesisState;
 
@@ -21,6 +22,7 @@ pub struct WorkerContext {
     pub default_branch: String,
     pub editable_globs: Vec<String>,
     pub protected_globs: Vec<String>,
+    pub metric_direction: MetricDirection,
 }
 
 #[derive(Debug)]
@@ -127,7 +129,7 @@ impl ThesisWorker {
 
         if let Some(recovered) = agent::recover_from_logs(&self.worktree_path) {
             eprintln!("Recovered metric {:.4} from run logs", recovered.metric);
-            return Ok(Some(recovered));
+            return Ok(Some(classify_recovered(recovered, self.ctx.metric_direction)));
         }
 
         eprintln!("Log recovery failed; attempting direct harness execution...");
@@ -138,9 +140,9 @@ impl ThesisWorker {
         self.remove_baseline_worktree(&baseline_path);
 
         match harness_result {
-            Ok(Some(result)) => {
-                eprintln!("Recovered metric {:.4} from direct harness", result.metric);
-                Ok(Some(result))
+            Ok(Some(recovered)) => {
+                eprintln!("Recovered metric {:.4} from direct harness", recovered.metric);
+                Ok(Some(classify_recovered(recovered, self.ctx.metric_direction)))
             }
             Ok(None) => Ok(None),
             Err(err) => {
@@ -412,6 +414,29 @@ impl ThesisWorker {
     }
 }
 
+pub fn classify_recovered(recovered: RecoveredMetric, direction: MetricDirection) -> ExperimentResult {
+    let Some(baseline) = recovered.baseline else {
+        return ExperimentResult {
+            metric: recovered.metric,
+            baseline: 0.0,
+            observation: "no_improvement".to_string(),
+            summary: recovered.summary,
+        };
+    };
+
+    let improved = match direction {
+        MetricDirection::HigherIsBetter => recovered.metric > baseline,
+        MetricDirection::LowerIsBetter => recovered.metric < baseline,
+    };
+
+    ExperimentResult {
+        metric: recovered.metric,
+        baseline,
+        observation: if improved { "improved" } else { "no_improvement" }.to_string(),
+        summary: recovered.summary,
+    }
+}
+
 fn parse_observation(observation: &str) -> Result<Observation> {
     match observation {
         "improved" => Ok(Observation::Improved),
@@ -545,5 +570,69 @@ mod tests {
     #[test]
     fn parse_observation_invalid() {
         assert!(parse_observation("unknown").is_err());
+    }
+
+    #[test]
+    fn classify_recovered_higher_is_better_improved() {
+        let recovered = RecoveredMetric {
+            metric: 0.95,
+            baseline: Some(0.90),
+            summary: "test".to_string(),
+        };
+        let result = classify_recovered(recovered, MetricDirection::HigherIsBetter);
+        assert!(result.is_improved());
+        assert!((result.baseline - 0.90).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn classify_recovered_lower_is_better_improved() {
+        let recovered = RecoveredMetric {
+            metric: 0.85,
+            baseline: Some(0.90),
+            summary: "test".to_string(),
+        };
+        let result = classify_recovered(recovered, MetricDirection::LowerIsBetter);
+        assert!(result.is_improved());
+    }
+
+    #[test]
+    fn classify_recovered_lower_is_better_regression() {
+        let recovered = RecoveredMetric {
+            metric: 0.95,
+            baseline: Some(0.90),
+            summary: "test".to_string(),
+        };
+        let result = classify_recovered(recovered, MetricDirection::LowerIsBetter);
+        assert!(result.is_no_improvement());
+    }
+
+    #[test]
+    fn classify_recovered_without_baseline_is_not_improved() {
+        let recovered = RecoveredMetric {
+            metric: 0.95,
+            baseline: None,
+            summary: "from logs".to_string(),
+        };
+        let higher = classify_recovered(recovered.clone(), MetricDirection::HigherIsBetter);
+        assert!(higher.is_no_improvement());
+
+        let recovered = RecoveredMetric {
+            metric: 0.95,
+            baseline: None,
+            summary: "from logs".to_string(),
+        };
+        let lower = classify_recovered(recovered, MetricDirection::LowerIsBetter);
+        assert!(lower.is_no_improvement());
+    }
+
+    #[test]
+    fn classify_recovered_equal_metric_is_not_improved() {
+        let recovered = RecoveredMetric {
+            metric: 0.90,
+            baseline: Some(0.90),
+            summary: "test".to_string(),
+        };
+        let result = classify_recovered(recovered, MetricDirection::HigherIsBetter);
+        assert!(result.is_no_improvement());
     }
 }
