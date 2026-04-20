@@ -9,6 +9,7 @@ use crate::cli::ContributeArgs;
 use crate::commands::{self, AppContext};
 use crate::comments::{Observation, ProtocolComment, ReleaseReason};
 use crate::config::{NodeConfig, ProtocolConfig, ProgramSpec};
+use crate::github::{GitHubApi, GitHubClient, RepoRef};
 use crate::hardware;
 use crate::state::{RepositoryState, ThesisPhase, ThesisState};
 use crate::worker::{self, ThesisWorker, WorkerContext, WorkerOutcome};
@@ -23,10 +24,22 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
     let program = ProgramSpec::load(&ctx.repo_root, &config)?;
     let default_branch = config.resolve_default_branch(&ctx.repo_root)?;
 
-    let local_ctx = AppContext {
-        config: config.clone(),
-        program: program.clone(),
-        ..ctx.clone()
+    let local_ctx = if args.url.is_some() {
+        let repo = RepoRef::discover(ctx.cli.repo.as_deref(), &ctx.repo_root)?;
+        let github: Arc<dyn GitHubApi> = Arc::new(GitHubClient::new(repo.clone()));
+        AppContext {
+            config: config.clone(),
+            program: program.clone(),
+            repo,
+            github,
+            ..ctx.clone()
+        }
+    } else {
+        AppContext {
+            config: config.clone(),
+            program: program.clone(),
+            ..ctx.clone()
+        }
     };
 
     ensure_node_config(&ctx.repo_root)?;

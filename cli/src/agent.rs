@@ -89,32 +89,35 @@ pub fn recover_from_logs(worktree_path: &Path) -> Option<RecoveredMetric> {
     let ops_per_sec_re = Regex::new(r"ops_per_sec=(\d+\.?\d*)").ok()?;
     let metric_re = Regex::new(r"(?m)^METRIC=(\d+\.?\d*)$").ok()?;
 
-    let mut best_metric: Option<f64> = None;
-
-    if let Ok(entries) = fs::read_dir(&polyresearch_dir) {
-        for entry in entries.flatten() {
+    let mut log_files: Vec<_> = fs::read_dir(&polyresearch_dir)
+        .ok()?
+        .flatten()
+        .filter(|entry| {
             let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            if !name_str.starts_with("run-") || !name_str.ends_with(".log") {
-                continue;
-            }
+            let s = name.to_string_lossy();
+            s.starts_with("run-") && s.ends_with(".log")
+        })
+        .collect();
+    log_files.sort_by_key(|entry| entry.file_name());
 
-            if let Ok(contents) = fs::read_to_string(entry.path()) {
-                if let Some(caps) = ops_per_sec_re.captures(&contents) {
-                    if let Ok(val) = caps[1].parse::<f64>() {
-                        best_metric = Some(best_metric.map_or(val, |b: f64| b.max(val)));
-                    }
+    let mut last_metric: Option<f64> = None;
+
+    for entry in log_files {
+        if let Ok(contents) = fs::read_to_string(entry.path()) {
+            if let Some(caps) = ops_per_sec_re.captures(&contents) {
+                if let Ok(val) = caps[1].parse::<f64>() {
+                    last_metric = Some(val);
                 }
-                if let Some(caps) = metric_re.captures(&contents) {
-                    if let Ok(val) = caps[1].parse::<f64>() {
-                        best_metric = Some(best_metric.map_or(val, |b: f64| b.max(val)));
-                    }
+            }
+            if let Some(caps) = metric_re.captures(&contents) {
+                if let Ok(val) = caps[1].parse::<f64>() {
+                    last_metric = Some(val);
                 }
             }
         }
     }
 
-    best_metric.map(|metric| RecoveredMetric {
+    last_metric.map(|metric| RecoveredMetric {
         metric,
         baseline: None,
         summary: "Recovered from run logs".to_string(),
@@ -393,6 +396,24 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
 
         assert!(recover_from_logs(&dir).is_none());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn recover_from_logs_returns_last_metric_not_max() {
+        let dir = std::env::temp_dir().join(format!("recover-last-{}", std::process::id()));
+        let poly_dir = dir.join(".polyresearch");
+        fs::create_dir_all(&poly_dir).unwrap();
+        fs::write(poly_dir.join("run-001.log"), "METRIC=100.0").unwrap();
+        fs::write(poly_dir.join("run-002.log"), "METRIC=50.0").unwrap();
+
+        let result = recover_from_logs(&dir).unwrap();
+        assert!(
+            (result.metric - 50.0).abs() < f64::EPSILON,
+            "should return metric from the last log file (run-002), not the max; got {}",
+            result.metric
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }

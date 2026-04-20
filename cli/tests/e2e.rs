@@ -2429,6 +2429,50 @@ Test.
     );
 }
 
+// --- recover_from_logs takes last metric, not max ---
+
+#[test]
+fn agent_recover_from_logs_takes_last_metric_not_max() {
+    let dir = std::env::temp_dir().join(format!("e2e-recover-last-{}", std::process::id()));
+    let poly_dir = dir.join(".polyresearch");
+    fs::create_dir_all(&poly_dir).unwrap();
+    fs::write(poly_dir.join("run-001.log"), "METRIC=100.0").unwrap();
+    fs::write(poly_dir.join("run-002.log"), "METRIC=50.0").unwrap();
+    fs::write(poly_dir.join("run-003.log"), "METRIC=75.0").unwrap();
+
+    let result = agent::recover_from_logs(&dir).unwrap();
+    assert!(
+        (result.metric - 75.0).abs() < f64::EPSILON,
+        "should return metric from run-003 (last sorted file), got {}",
+        result.metric
+    );
+    assert!(result.baseline.is_none());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+// --- protected_globs is wired into WorkerContext ---
+
+#[test]
+fn worker_context_carries_protected_globs() {
+    let wctx = worker::WorkerContext {
+        issue_number: 1,
+        thesis_title: "Test".to_string(),
+        thesis_body: String::new(),
+        repo_root: std::path::PathBuf::from("/tmp/test"),
+        node_id: "n".to_string(),
+        agent_command: "echo".to_string(),
+        default_branch: "main".to_string(),
+        editable_globs: vec!["src/**".to_string()],
+        protected_globs: vec!["docs/**".to_string(), "config/".to_string()],
+        metric_direction: polyresearch::config::MetricDirection::HigherIsBetter,
+    };
+
+    assert_eq!(wctx.protected_globs.len(), 2);
+    assert_eq!(wctx.protected_globs[0], "docs/**");
+    assert_eq!(wctx.protected_globs[1], "config/");
+}
+
 fn load_issue_fixture(name: &str) -> IssueFixture {
     serde_json::from_str(include_fixture(name)).unwrap()
 }

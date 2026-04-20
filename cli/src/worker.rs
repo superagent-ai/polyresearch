@@ -348,14 +348,17 @@ impl ThesisWorker {
             let _ = commands::run_git(&self.worktree_path, &["add", glob]);
         }
 
-        let protected = [
+        let always_protected = [
             ".polyresearch/",
             ".polyresearch-node.toml",
             "PROGRAM.md",
             "PREPARE.md",
         ];
-        for path in &protected {
+        for path in &always_protected {
             let _ = commands::run_git(&self.worktree_path, &["reset", "HEAD", "--", path]);
+        }
+        for glob in &self.ctx.protected_globs {
+            let _ = commands::run_git(&self.worktree_path, &["reset", "HEAD", "--", glob]);
         }
 
         let status = commands::run_git(&self.worktree_path, &["status", "--porcelain"])?;
