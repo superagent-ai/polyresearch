@@ -26,6 +26,7 @@ struct BootstrapOutput {
     path: String,
     fork: Option<String>,
     paused: bool,
+    already_bootstrapped: bool,
 }
 
 pub fn prepare_checkout(start: &Path, args: &BootstrapArgs) -> Result<PathBuf> {
@@ -55,6 +56,22 @@ pub fn prepare_checkout(start: &Path, args: &BootstrapArgs) -> Result<PathBuf> {
 }
 
 pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
+    if project_is_bootstrapped(&ctx.repo_root) {
+        let output = BootstrapOutput {
+            repo: ctx.repo.slug(),
+            path: ctx.repo_root.display().to_string(),
+            fork: args.fork.clone(),
+            paused: args.pause_after_bootstrap,
+            already_bootstrapped: true,
+        };
+        return print_value(ctx, &output, |value| {
+            format!(
+                "Project {} at {} already appears bootstrapped.\nNext steps:\n- To continue leading: review PROGRAM.md / PREPARE.md if needed, then run `polyresearch lead`.\n- To continue contributing: run `polyresearch contribute`.",
+                value.repo, value.path
+            )
+        });
+    }
+
     print_progress(ctx, "Seeding project templates...");
     ensure_template_file(
         &ctx.repo_root.join("PROGRAM.md"),
@@ -88,6 +105,7 @@ pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
         path: ctx.repo_root.display().to_string(),
         fork: args.fork.clone(),
         paused: args.pause_after_bootstrap,
+        already_bootstrapped: false,
     };
 
     print_value(ctx, &output, |value| {
@@ -103,6 +121,13 @@ pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
             )
         }
     })
+}
+
+fn project_is_bootstrapped(repo_root: &Path) -> bool {
+    repo_root.join("PROGRAM.md").exists()
+        && repo_root.join("PREPARE.md").exists()
+        && repo_root.join("results.tsv").exists()
+        && repo_root.join(".polyresearch").exists()
 }
 
 fn determine_clone_source(upstream: &RepoRef, fork: Option<&str>) -> Result<RepoRef> {

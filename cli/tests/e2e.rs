@@ -493,6 +493,45 @@ async fn bootstrap_normalizes_legacy_program_file() {
 }
 
 #[tokio::test]
+async fn bootstrap_short_circuits_on_existing_project() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("bootstrap-existing-project");
+    fs::create_dir_all(repo.path.join(".polyresearch")).unwrap();
+    fs::write(repo.path.join("PROGRAM.md"), "already bootstrapped\n").unwrap();
+    fs::write(repo.path.join("PREPARE.md"), "already bootstrapped\n").unwrap();
+    fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let args = BootstrapArgs {
+        repo_url: "test-owner/test-repo".to_string(),
+        fork: None,
+        goal: Some("make it faster".to_string()),
+        pause_after_bootstrap: true,
+    };
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead",
+        false,
+        Commands::Bootstrap(args.clone()),
+    );
+
+    commands::bootstrap::run(&ctx, &args).await.unwrap();
+
+    assert_eq!(
+        fs::read_to_string(repo.path.join("PROGRAM.md")).unwrap(),
+        "already bootstrapped\n"
+    );
+    assert!(!repo.path.join(".polyresearch-node.toml").exists());
+}
+
+#[tokio::test]
 async fn lead_once_uses_fake_agent_to_generate_theses() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("lead-fake-agent");
@@ -585,6 +624,88 @@ async fn contribute_once_runs_fake_agent_and_releases_no_improvement() {
     let posted = mock.posted_issue_comments.lock().unwrap().clone();
     assert_eq!(posted.len(), 3);
     assert!(posted.iter().any(|(_, body)| body.contains("polyresearch:claim")));
+    assert!(posted.iter().any(|(_, body)| body.contains("polyresearch:attempt")));
+    assert!(posted.iter().any(|(_, body)| body.contains("polyresearch:release")));
+
+    let worktree = repo
+        .path
+        .join(".worktrees")
+        .join(format!("{}-{}", fixture.issue.number, commands::slugify(&fixture.issue.title)));
+    assert!(!worktree.exists());
+}
+
+#[tokio::test]
+async fn contribute_once_resumes_same_node_claim_without_reclaiming() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("contribute-resume-claim");
+    init_git_repo(&repo.path);
+    let agent_command = write_fake_agent_script(&repo.path);
+    NodeConfig::new(
+        "test-node",
+        75,
+        DEFAULT_API_BUDGET,
+        DEFAULT_REQUEST_DELAY_MS,
+        Some(AgentConfig {
+            command: agent_command.clone(),
+        }),
+    )
+    .save(&repo.path)
+    .unwrap();
+    fs::write(
+        repo.path.join("PROGRAM.md"),
+        "# Research Program\n\nlead_github_login: lead\n\n## What you CAN modify\n- `README.md`\n\n## What you CANNOT modify\n- `PREPARE.md`\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path.join("PREPARE.md"),
+        "eval_cores: 1\neval_memory_gb: 1\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path.join("results.tsv"),
+        "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n",
+    )
+    .unwrap();
+
+    let fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    let workspace = commands::create_thesis_worktree(
+        &repo.path,
+        fixture.issue.number,
+        &fixture.issue.title,
+        "main",
+    )
+    .unwrap();
+    run_git(
+        &repo.path,
+        &["worktree", "remove", &workspace.worktree_path.to_string_lossy()],
+    );
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "contributor",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let args = ContributeArgs {
+        repo_url: None,
+        max_parallel: Some(1),
+        once: true,
+        sleep_secs: 0,
+    };
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture.lead_github_login,
+        false,
+        Commands::Contribute(args.clone()),
+    );
+
+    commands::contribute::run(&ctx, &args).await.unwrap();
+
+    let posted = mock.posted_issue_comments.lock().unwrap().clone();
+    assert_eq!(posted.len(), 2);
+    assert!(!posted.iter().any(|(_, body)| body.contains("polyresearch:claim")));
     assert!(posted.iter().any(|(_, body)| body.contains("polyresearch:attempt")));
     assert!(posted.iter().any(|(_, body)| body.contains("polyresearch:release")));
 

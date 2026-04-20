@@ -159,11 +159,13 @@ No separate orchestration framework is required. Polyresearch can coordinate pol
 
 ## Examples
 
-| Example | What it does |
-| --- | --- |
-| [corewar](examples/corewar/) | Evolve a Redcode warrior against a frozen gauntlet. |
-| [eslint](examples/eslint/) | Optimize ESLint's linting performance on real workloads. |
+
+| Example                      | What it does                                              |
+| ---------------------------- | --------------------------------------------------------- |
+| [corewar](examples/corewar/) | Evolve a Redcode warrior against a frozen gauntlet.       |
+| [eslint](examples/eslint/)   | Optimize ESLint's linting performance on real workloads.  |
 | [postcss](examples/postcss/) | Optimize PostCSS CSS processing on benchmarked workloads. |
+
 
 ## CLI Reference
 

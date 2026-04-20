@@ -12,7 +12,7 @@ use crate::agent::{AgentRunner, ExperimentResult, ShellAgentRunner, recover_expe
 use crate::cli::{AttemptArgs, ContributeArgs, InitArgs, ReleaseArgs};
 use crate::comments::{Observation, ReleaseReason};
 use crate::commands::claim::claim_selected_thesis;
-use crate::commands::{AppContext, print_progress, print_value, read_node_config};
+use crate::commands::{AppContext, print_progress, print_value, read_node_config, resume_thesis_worktree};
 use crate::commands::{attempt, duties, init, release, submit};
 use crate::github::RepoRef;
 use crate::hardware;
@@ -78,8 +78,10 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
 
         let target_parallel = determine_parallelism(ctx, args, &repo_state)?;
         let node = crate::commands::read_node_id(&ctx.repo_root)?;
-        let theses = select_claimable_theses(&repo_state, &node, target_parallel);
-        if theses.is_empty() || target_parallel == 0 {
+        let resumable = select_resumable_theses(&repo_state, &node, target_parallel);
+        let remaining_slots = target_parallel.saturating_sub(resumable.len());
+        let theses = select_claimable_theses(&repo_state, &node, remaining_slots);
+        if (resumable.is_empty() && theses.is_empty()) || target_parallel == 0 {
             if args.once {
                 return print_summary(ctx, target_parallel, 0, 0);
             }
@@ -97,7 +99,77 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
         let mut tasks = JoinSet::new();
         let mut claimed_count = 0usize;
 
-        print_progress(ctx, format!("Claiming {} thesis(es)...", theses.len()));
+        if !resumable.is_empty() {
+            print_progress(ctx, format!("Resuming {} claimed thesis(es)...", resumable.len()));
+        }
+        for thesis in resumable {
+            let workspace = match resume_thesis_worktree(
+                &ctx.repo_root,
+                thesis.issue.number,
+                &thesis.issue.title,
+            ) {
+                Ok(workspace) => workspace,
+                Err(error) => {
+                    print_progress(
+                        ctx,
+                        format!(
+                            "Could not resume thesis #{} cleanly; releasing claim as infra_failure...",
+                            thesis.issue.number
+                        ),
+                    );
+                    release::run(
+                        ctx,
+                        &ReleaseArgs {
+                            issue: thesis.issue.number,
+                            reason: ReleaseReason::InfraFailure,
+                        },
+                    )
+                    .await?;
+                    eprintln!("Resume failed for thesis #{}: {error}", thesis.issue.number);
+                    continue;
+                }
+            };
+            claimed_count += 1;
+            let worktree_path = workspace.worktree_path;
+            sync_node_config_to_worktree(&ctx.repo_root, &worktree_path)?;
+            write_thesis_context(&worktree_path, thesis)?;
+
+            let prompt = "Read PROGRAM.md, PREPARE.md, and .polyresearch/thesis.md, then work only the current thesis. Run one baseline plus at most 3 serious candidate attempts in this session. If you find a clear improvement earlier, stop early. When you are done, write .polyresearch/result.json exactly as PROGRAM.md specifies and exit immediately.".to_string();
+            let issue = thesis.issue.number;
+            let runner = runner.clone();
+            let default_branch = default_branch.clone();
+            let primary_repo_root = primary_repo_root.clone();
+
+            tasks.spawn_blocking(move || -> Result<WorkerResult> {
+                let result = match runner.run_experiment(&prompt, &worktree_path) {
+                    Ok(result) => result,
+                    Err(error) => recover_experiment_result(&worktree_path, direction, tolerance)
+                        .or_else(|_| {
+                            evaluate_with_harness(
+                                &worktree_path,
+                                &primary_repo_root,
+                                &default_branch,
+                                direction,
+                                tolerance,
+                            )
+                        })
+                        .map_err(|recovery_error| {
+                            eyre!(
+                                "{error}\n\nFallback recovery from run logs also failed: {recovery_error}"
+                            )
+                        })?,
+                };
+                Ok(WorkerResult {
+                    issue,
+                    worktree_path,
+                    result,
+                })
+            });
+        }
+
+        if !theses.is_empty() {
+            print_progress(ctx, format!("Claiming {} thesis(es)...", theses.len()));
+        }
         for thesis in theses {
             let claim = claim_selected_thesis(ctx, thesis, &node)?;
             claimed_count += 1;
@@ -232,6 +304,23 @@ fn select_claimable_theses<'a>(
         .filter(|thesis| matches!(thesis.phase, ThesisPhase::Approved))
         .filter(|thesis| thesis.active_claims.is_empty())
         .filter(|thesis| !thesis.releases.iter().any(|release| release.node == node))
+        .collect::<Vec<_>>();
+    theses.sort_by_key(|thesis| thesis.issue.number);
+    theses.truncate(count);
+    theses
+}
+
+fn select_resumable_theses<'a>(
+    repo_state: &'a RepositoryState,
+    node: &str,
+    count: usize,
+) -> Vec<&'a ThesisState> {
+    let mut theses = repo_state
+        .theses
+        .iter()
+        .filter(|thesis| thesis.issue.state == "OPEN")
+        .filter(|thesis| thesis.is_claimed_by(node))
+        .filter(|thesis| matches!(thesis.phase, ThesisPhase::Claimed))
         .collect::<Vec<_>>();
     theses.sort_by_key(|thesis| thesis.issue.number);
     theses.truncate(count);

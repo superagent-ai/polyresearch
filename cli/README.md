@@ -209,3 +209,4 @@ These are the building blocks used internally by `lead` and `contribute`. They r
 - The CLI derives protocol state from validated events only.
 - `results.tsv` is maintained by the lead loop and sync logic.
 - All GitHub traffic goes through the CLI, not through the experiment agent.
+

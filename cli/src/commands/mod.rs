@@ -214,14 +214,18 @@ pub fn thesis_worktree_path(repo_root: &PathBuf, issue_number: u64, title: &str)
         .join(format!("{issue_number}-{slug}"))
 }
 
+pub fn thesis_branch_name(issue_number: u64, title: &str) -> String {
+    let slug = slugify(title);
+    format!("thesis/{issue_number}-{slug}")
+}
+
 pub fn create_thesis_worktree(
     repo_root: &PathBuf,
     issue_number: u64,
     title: &str,
     default_branch: &str,
 ) -> Result<ThesisWorkspace> {
-    let slug = slugify(title);
-    let branch = format!("thesis/{issue_number}-{slug}");
+    let branch = thesis_branch_name(issue_number, title);
     let worktree_root = repo_root.join(".worktrees");
     let worktree_path = thesis_worktree_path(repo_root, issue_number, title);
 
@@ -255,6 +259,42 @@ pub fn create_thesis_worktree(
             default_branch,
         ],
     )?;
+
+    Ok(ThesisWorkspace {
+        branch,
+        worktree_path,
+    })
+}
+
+pub fn resume_thesis_worktree(
+    repo_root: &PathBuf,
+    issue_number: u64,
+    title: &str,
+) -> Result<ThesisWorkspace> {
+    let branch = thesis_branch_name(issue_number, title);
+    let worktree_root = repo_root.join(".worktrees");
+    let worktree_path = thesis_worktree_path(repo_root, issue_number, title);
+
+    fs::create_dir_all(&worktree_root)
+        .wrap_err_with(|| format!("failed to create {}", worktree_root.display()))?;
+
+    if worktree_path.exists() {
+        return Ok(ThesisWorkspace {
+            branch,
+            worktree_path,
+        });
+    }
+
+    if run_git(repo_root, &["rev-parse", "--verify", &branch]).is_err() {
+        return Err(eyre!(
+            "cannot resume thesis #{} because branch `{}` no longer exists",
+            issue_number,
+            branch
+        ));
+    }
+
+    let worktree_path_arg = worktree_path.to_string_lossy().into_owned();
+    run_git(repo_root, &["worktree", "add", &worktree_path_arg, &branch])?;
 
     Ok(ThesisWorkspace {
         branch,
