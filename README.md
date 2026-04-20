@@ -66,22 +66,7 @@ A single evaluation often doesn't saturate a machine. The `contribute` command h
 
 ### Run on a remote machine
 
-#### Pattern A: Remote evaluation over SSH
-
-The contributor runs on your local machine. The experiments run on a remote server. Set up the repo, CLI, and `gh` auth on the remote, then:
-
-```bash
-polyresearch contribute https://github.com/owner/repo
-# evaluations are dispatched to the remote via the agent's SSH access
-```
-
-Your local machine only needs the agent; the remote server does the compute.
-
-#### Pattern B: Run the contributor on the server
-
-The recommended pattern. The contributor runs directly on the server, so file access, git operations, and evaluations are all local.
-
-Use `tmux` so the session survives disconnects:
+Run the contributor directly on the server so file access, git operations, and evaluations are all local. Use `tmux` so the session survives disconnects:
 
 ```bash
 ssh user@remote-host
