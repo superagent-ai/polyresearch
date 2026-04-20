@@ -27,9 +27,19 @@ async fn main() -> Result<()> {
     let github: Arc<dyn GitHubApi> = Arc::new(GitHubClient::new(repo.clone()));
     let api_budget = NodeConfig::load_api_budget(&repo_root);
     let config = ProtocolConfig::load(&repo_root)?;
-    config.check_cli_version(env!("CARGO_PKG_VERSION"))?;
+    let is_bootstrap = matches!(cli.command, Commands::Bootstrap(_));
+    if !is_bootstrap {
+        config.check_cli_version(env!("CARGO_PKG_VERSION"))?;
+    }
     let program = load_program_spec(&repo_root, &config, &cli.command)?;
-    let default_branch = resolve_default_branch(&repo_root, &repo.slug(), &config)?;
+    let default_branch = if is_bootstrap {
+        config
+            .default_branch
+            .clone()
+            .unwrap_or_else(|| "main".to_string())
+    } else {
+        resolve_default_branch(&repo_root, &repo.slug(), &config)?
+    };
 
     let ctx = AppContext {
         cli,
