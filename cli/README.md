@@ -101,6 +101,12 @@ polyresearch contribute --max-parallel 4
 
 These three commands handle complete workflows. The sections below document the lower-level commands for manual operation and debugging.
 
+### Hardware utilization
+
+A single evaluation often doesn't saturate a machine. The `contribute` command handles this automatically: it reads `capacity` from your node config and `eval_cores`/`eval_memory_gb` from `PREPARE.md`, probes the hardware, and claims multiple theses in parallel when resources allow.
+
+`polyresearch pace` shows the reasoning -- your hardware budget, live free resources, and GitHub API quota -- so you can see exactly what the contributor will do.
+
 ## Manual workflow
 
 Initialize the local node identity (the high-level commands do this automatically):
