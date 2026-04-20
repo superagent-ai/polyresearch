@@ -3,10 +3,13 @@ use std::collections::BTreeSet;
 use color_eyre::eyre::{Context, Result, eyre};
 use serde::Serialize;
 
+use std::sync::Arc;
+
 use crate::cli::PrArgs;
 use crate::commands::guards::{ensure_current_ledger, ensure_lead, require_decidable_pr};
 use crate::commands::{AppContext, print_value};
 use crate::comments::{Observation, Outcome, ProtocolComment};
+use crate::github::GitHubApi;
 use crate::ledger::Ledger;
 use crate::state::{RepositoryState, ReviewRecord, metric_beats};
 
@@ -63,28 +66,14 @@ pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
         confirmations,
     };
     if !ctx.cli.dry_run {
-        match outcome {
-            Outcome::Accepted => {
-                ctx.github
-                    .merge_pull_request(args.pr)
-                    .wrap_err("merge failed — decision NOT posted (resolve conflict first)")?;
-                ctx.github.post_issue_comment(args.pr, &comment.render())?;
-                ctx.github.close_issue(thesis.issue.number)?;
-            }
-            Outcome::InfraFailure | Outcome::Stale => {
-                ctx.github.post_issue_comment(args.pr, &comment.render())?;
-                ctx.github.close_pull_request(args.pr)?;
-            }
-            Outcome::NonImprovement | Outcome::Disagreement | Outcome::PolicyRejection => {
-                ctx.github.post_issue_comment(args.pr, &comment.render())?;
-                ctx.github.close_pull_request(args.pr)?;
-                if ctx.config.required_confirmations > 0
-                    || !matches!(outcome, Outcome::NonImprovement)
-                {
-                    ctx.github.close_issue(thesis.issue.number)?;
-                }
-            }
-        }
+        execute_decision(
+            &ctx.github,
+            args.pr,
+            thesis.issue.number,
+            outcome,
+            &comment,
+            ctx.config.required_confirmations,
+        )?;
     }
 
     let output = DecideOutput {
@@ -102,7 +91,27 @@ pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
     })
 }
 
-fn decide_without_peer_review(
+pub(crate) fn is_pr_decidable(
+    config: &crate::config::ProtocolConfig,
+    pr_state: &crate::state::PullRequestState,
+    required_reviews: usize,
+) -> bool {
+    if pr_state.pr.state != "OPEN" || !pr_state.policy_pass || pr_state.decision.is_some() {
+        return false;
+    }
+    if pr_state.maintainer_rejected {
+        return false;
+    }
+    if !config.auto_approve && !pr_state.maintainer_approved {
+        return false;
+    }
+    if required_reviews > 0 && pr_state.reviews.len() < required_reviews {
+        return false;
+    }
+    true
+}
+
+pub(crate) fn decide_without_peer_review(
     ctx: &AppContext,
     thesis: &crate::state::ThesisState,
     pr_state: &crate::state::PullRequestState,
@@ -116,12 +125,10 @@ fn decide_without_peer_review(
         .find(|attempt| &attempt.branch == branch)
         .ok_or_else(|| eyre!("candidate PR branch `{branch}` has no recorded attempt"))?;
 
-    if !metric_beats(
-        attempt.metric,
-        attempt.baseline_metric,
-        tolerance,
-        ctx.config.metric_direction,
-    ) {
+    let Some(baseline) = attempt.baseline_metric else {
+        return Ok(Outcome::NonImprovement);
+    };
+    if !metric_beats(attempt.metric, baseline, tolerance, ctx.config.metric_direction) {
         return Ok(Outcome::NonImprovement);
     }
 
@@ -138,7 +145,7 @@ fn decide_without_peer_review(
     Ok(Outcome::Accepted)
 }
 
-fn decide_with_peer_review(
+pub(crate) fn decide_with_peer_review(
     ctx: &AppContext,
     pr_state: &crate::state::PullRequestState,
 ) -> Result<Outcome> {
@@ -165,8 +172,8 @@ fn decide_with_peer_review(
     let env_shas = pr_state
         .reviews
         .iter()
-        .filter_map(|review| review.env_sha.clone())
-        .collect::<BTreeSet<_>>();
+        .map(|review| review.env_sha.clone())
+        .collect::<BTreeSet<Option<String>>>();
     if env_shas.len() > 1 {
         return Ok(Outcome::Disagreement);
     }
@@ -198,6 +205,37 @@ fn decide_with_peer_review(
     }
 
     Ok(Outcome::Disagreement)
+}
+
+pub fn execute_decision(
+    github: &Arc<dyn GitHubApi>,
+    pr_number: u64,
+    thesis_number: u64,
+    outcome: Outcome,
+    comment: &ProtocolComment,
+    required_confirmations: u64,
+) -> Result<()> {
+    match outcome {
+        Outcome::Accepted => {
+            github
+                .merge_pull_request(pr_number)
+                .wrap_err("merge failed — decision NOT posted (resolve conflict first)")?;
+            github.post_issue_comment(pr_number, &comment.render())?;
+            github.close_issue(thesis_number)?;
+        }
+        Outcome::InfraFailure | Outcome::Stale => {
+            github.post_issue_comment(pr_number, &comment.render())?;
+            github.close_pull_request(pr_number)?;
+        }
+        Outcome::NonImprovement | Outcome::Disagreement | Outcome::PolicyRejection => {
+            github.post_issue_comment(pr_number, &comment.render())?;
+            github.close_pull_request(pr_number)?;
+            if required_confirmations > 0 || !matches!(outcome, Outcome::NonImprovement) {
+                github.close_issue(thesis_number)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn all_observations(reviews: &[ReviewRecord], observation: Observation) -> bool {

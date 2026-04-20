@@ -69,7 +69,7 @@ pub struct AttemptRecord {
     pub node: String,
     pub branch: String,
     pub metric: f64,
-    pub baseline_metric: f64,
+    pub baseline_metric: Option<f64>,
     pub observation: Observation,
     pub summary: String,
     pub author: String,
@@ -706,6 +706,7 @@ mod tests {
             min_queue_depth: 5,
             max_queue_depth: Some(10),
             cli_version: None,
+            default_branch: None,
         }
     }
 }

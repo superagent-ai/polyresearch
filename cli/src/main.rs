@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use color_eyre::eyre::{Context, Result};
-use polyresearch::cli::Cli;
+use polyresearch::cli::{Cli, Commands};
 use polyresearch::commands;
 use polyresearch::commands::AppContext;
 use polyresearch::config::{NodeConfig, ProgramSpec, ProtocolConfig};
@@ -19,7 +19,45 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     github_debug::init(cli.github_debug);
+
+    let needs_deferred_setup = match &cli.command {
+        Commands::Bootstrap(_) => true,
+        Commands::Contribute(args) if args.url.is_some() => true,
+        _ => false,
+    };
+
     let cwd = env::current_dir().wrap_err("failed to determine current working directory")?;
+
+    if needs_deferred_setup {
+        let repo_root = discover_repo_root(&cwd).unwrap_or(cwd);
+        throttle::init(NodeConfig::load_request_delay_ms(&repo_root));
+        let repo = RepoRef::discover(cli.repo.as_deref(), &repo_root)
+            .ok()
+            .unwrap_or_else(|| RepoRef {
+                owner: String::new(),
+                name: String::new(),
+            });
+        let github: Arc<dyn GitHubApi> = Arc::new(GitHubClient::new(repo.clone()));
+        let api_budget = NodeConfig::load_api_budget(&repo_root);
+        let config = ProtocolConfig::default();
+        let program = ProgramSpec {
+            can_modify: Vec::new(),
+            cannot_modify: Vec::new(),
+        };
+
+        let ctx = AppContext {
+            cli,
+            repo_root,
+            repo,
+            github,
+            api_budget,
+            config,
+            program,
+        };
+
+        return run_and_handle_exit(ctx).await;
+    }
+
     let repo_root = discover_repo_root(&cwd)?;
     throttle::init(NodeConfig::load_request_delay_ms(&repo_root));
     let repo = RepoRef::discover(cli.repo.as_deref(), &repo_root)?;
@@ -39,6 +77,10 @@ async fn main() -> Result<()> {
         program,
     };
 
+    run_and_handle_exit(ctx).await
+}
+
+async fn run_and_handle_exit(ctx: AppContext) -> Result<()> {
     match commands::run(ctx).await {
         Ok(()) => Ok(()),
         Err(error) => {

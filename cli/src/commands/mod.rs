@@ -3,12 +3,15 @@ pub mod annotate;
 pub mod attempt;
 pub mod audit;
 pub mod batch_claim;
+pub mod bootstrap;
 pub mod claim;
+pub mod contribute;
 pub mod decide;
 pub mod duties;
 pub mod generate;
 pub mod guards;
 pub mod init;
+pub mod lead;
 pub mod pace;
 pub mod policy_check;
 pub mod prune;
@@ -20,7 +23,7 @@ pub mod submit;
 pub mod sync;
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
@@ -78,6 +81,9 @@ pub async fn run(ctx: AppContext) -> Result<()> {
         Commands::PolicyCheck(args) => policy_check::run(&ctx, args).await,
         Commands::Decide(args) => decide::run(&ctx, args).await,
         Commands::Prune => prune::run(&ctx).await,
+        Commands::Bootstrap(args) => bootstrap::run(&ctx, args).await,
+        Commands::Lead(args) => lead::run(&ctx, args).await,
+        Commands::Contribute(args) => contribute::run(&ctx, args).await,
     }
 }
 
@@ -131,13 +137,40 @@ pub fn write_node_config(
         .as_ref()
         .map(|config| config.capacity)
         .unwrap_or(crate::config::DEFAULT_CAPACITY);
+    let existing_agent = existing.as_ref().map(|config| config.agent.clone());
     NodeConfig::new(
         node.to_string(),
         capacity.unwrap_or(existing_capacity),
         existing_budget,
         existing_request_delay_ms,
+        existing_agent,
     )
     .save(repo_root)
+}
+
+pub fn ensure_node_config(repo_root: &Path) -> Result<()> {
+    let config_path = repo_root.join(".polyresearch-node.toml");
+    if config_path.exists() {
+        return Ok(());
+    }
+    eprintln!("No node config found, initializing...");
+    let hostname = Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let suffix: String = {
+        use rand::RngExt;
+        let mut rng = rand::rng();
+        (0..4)
+            .map(|_| format!("{:x}", rng.random_range(0u8..16)))
+            .collect()
+    };
+    let node_id = format!("{hostname}-{suffix}");
+    write_node_config(&repo_root.to_path_buf(), &node_id, None)?;
+    eprintln!("Initialized node as `{node_id}`");
+    Ok(())
 }
 
 pub fn node_active_claims(repo_state: &RepositoryState, node_id: &str) -> usize {

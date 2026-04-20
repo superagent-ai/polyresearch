@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod cli;
 pub mod commands;
 pub mod comments;
@@ -10,3 +11,4 @@ pub mod state;
 pub mod throttle;
 pub mod tui;
 pub mod validation;
+pub mod worker;

@@ -40,7 +40,7 @@ pub async fn run(ctx: &AppContext, args: &AttemptArgs) -> Result<()> {
         thesis: args.issue,
         branch: branch.clone(),
         metric: args.metric,
-        baseline_metric: args.baseline,
+        baseline_metric: Some(args.baseline),
         observation: args.observation,
         summary: args.summary.clone(),
         annotations,
