@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, eyre};
 use serde::Serialize;
 
 use crate::agent::{AgentRunner, ShellAgentRunner, thesis_proposals_path};
@@ -127,7 +127,13 @@ pub async fn run(ctx: &AppContext, args: &LeadArgs) -> Result<()> {
                     repo_state.queue_depth, ctx.config.min_queue_depth
                 ),
             );
-            let mut proposals = generate_proposals(ctx, &repo_state)?;
+            let ctx_for_generate = ctx.clone();
+            let repo_state_for_generate = repo_state.clone();
+            let mut proposals = tokio::task::spawn_blocking(move || {
+                generate_proposals(&ctx_for_generate, &repo_state_for_generate)
+            })
+            .await
+            .map_err(|err| eyre!("thesis generation task failed: {err}"))??;
             let desired = ctx.config.min_queue_depth.saturating_sub(repo_state.queue_depth).max(1);
             proposals.truncate(desired);
             for proposal in proposals {

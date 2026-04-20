@@ -152,7 +152,7 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
             };
             claimed_count += 1;
             let worktree_path = workspace.worktree_path;
-            sync_node_config_to_worktree(&ctx.repo_root, &worktree_path)?;
+            sync_project_files_to_worktree(&ctx.repo_root, &worktree_path)?;
             write_thesis_context(&worktree_path, thesis)?;
 
             let prompt = "Read PROGRAM.md, PREPARE.md, and .polyresearch/thesis.md, then work only the current thesis. Run one baseline plus at most 3 serious candidate attempts in this session. If you find a clear improvement earlier, stop early. When you are done, write .polyresearch/result.json exactly as PROGRAM.md specifies and exit immediately.".to_string();
@@ -196,7 +196,7 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
             claimed_count += 1;
 
             let worktree_path = PathBuf::from(&claim.worktree_path);
-            sync_node_config_to_worktree(&ctx.repo_root, &worktree_path)?;
+            sync_project_files_to_worktree(&ctx.repo_root, &worktree_path)?;
             write_thesis_context(&worktree_path, thesis)?;
 
             let prompt = "Read PROGRAM.md, PREPARE.md, and .polyresearch/thesis.md, then work only the current thesis. Run one baseline plus at most 3 serious candidate attempts in this session. If you find a clear improvement earlier, stop early. When you are done, write .polyresearch/result.json exactly as PROGRAM.md specifies and exit immediately.".to_string();
@@ -429,19 +429,21 @@ fn remove_worktree(repo_root: &PathBuf, worktree_path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn sync_node_config_to_worktree(repo_root: &PathBuf, worktree_path: &PathBuf) -> Result<()> {
-    let source = repo_root.join(".polyresearch-node.toml");
-    let destination = worktree_path.join(".polyresearch-node.toml");
-    if !source.exists() {
-        return Ok(());
+fn sync_project_files_to_worktree(repo_root: &PathBuf, worktree_path: &PathBuf) -> Result<()> {
+    for name in [".polyresearch-node.toml", "PROGRAM.md", "PREPARE.md"] {
+        let source = repo_root.join(name);
+        if !source.exists() {
+            continue;
+        }
+        let destination = worktree_path.join(name);
+        fs::copy(&source, &destination).wrap_err_with(|| {
+            format!(
+                "failed to copy {} to {}",
+                source.display(),
+                destination.display()
+            )
+        })?;
     }
-    fs::copy(&source, &destination).wrap_err_with(|| {
-        format!(
-            "failed to copy {} to {}",
-            source.display(),
-            destination.display()
-        )
-    })?;
     Ok(())
 }
 
