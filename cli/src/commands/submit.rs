@@ -50,13 +50,16 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
         Some(ctx.github.create_pull_request(
             &branch,
             &format!("Thesis #{}: {}", args.issue, thesis.issue.title),
-            &format!(
-                "References #{}\n\nSelf-reported metric: {:.4}\nBaseline: {:.4}\nSummary: {}",
-                args.issue,
-                improved_attempt.metric,
-                improved_attempt.baseline_metric,
-                improved_attempt.summary
-            ),
+            &match improved_attempt.baseline_metric {
+                Some(b) => format!(
+                    "References #{}\n\nSelf-reported metric: {:.4}\nBaseline: {:.4}\nSummary: {}",
+                    args.issue, improved_attempt.metric, b, improved_attempt.summary
+                ),
+                None => format!(
+                    "References #{}\n\nSelf-reported metric: {:.4}\nBaseline: N/A\nSummary: {}",
+                    args.issue, improved_attempt.metric, improved_attempt.summary
+                ),
+            },
             "main",
         )?)
     };

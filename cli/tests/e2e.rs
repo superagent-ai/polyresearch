@@ -2139,7 +2139,7 @@ fn agent_experiment_result_all_observations() {
     ] {
         let result = agent::ExperimentResult {
             metric: 1.0,
-            baseline: 0.5,
+            baseline: Some(0.5),
             observation: obs.to_string(),
             summary: "test".to_string(),
         };
@@ -2260,7 +2260,7 @@ fn worker_format_prior_attempts_with_data() {
                 node: "node-a".to_string(),
                 branch: "thesis/12-rmsnorm-attempt-1".to_string(),
                 metric: 0.95,
-                baseline_metric: 0.90,
+                baseline_metric: Some(0.90),
                 observation: Observation::Improved,
                 summary: "RMSNorm swap".to_string(),
                 author: "alice".to_string(),

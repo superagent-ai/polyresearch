@@ -156,7 +156,7 @@ fn rows_for_thesis(thesis: &ThesisState) -> Vec<LedgerRow> {
             thesis: format!("#{}", thesis.issue.number),
             attempt: attempt.branch.clone(),
             metric,
-            baseline: format!("{:.4}", attempt.baseline_metric),
+            baseline: attempt.baseline_metric.map(|b| format!("{b:.4}")).unwrap_or_else(|| "N/A".to_string()),
             status,
             summary: attempt.summary.clone(),
         });

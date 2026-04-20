@@ -114,7 +114,7 @@ pub enum ProtocolComment {
         thesis: u64,
         branch: String,
         metric: f64,
-        baseline_metric: f64,
+        baseline_metric: Option<f64>,
         observation: Observation,
         summary: String,
         annotations: Option<Vec<AttemptAnnotation>>,
@@ -220,7 +220,7 @@ impl ProtocolComment {
                 thesis: parse_u64(fields, "thesis")?,
                 branch: parse_string(fields, "branch")?,
                 metric: parse_f64(fields, "metric")?,
-                baseline_metric: parse_f64(fields, "baseline_metric")?,
+                baseline_metric: parse_optional_f64(fields, "baseline_metric")?,
                 observation: parse_observation(fields, "observation")?,
                 summary: parse_string(fields, "summary")?,
                 annotations: parse_optional_annotations(fields, "annotations")?,
@@ -529,6 +529,17 @@ fn parse_f64(fields: &BTreeMap<String, String>, key: &str) -> Result<f64> {
         .map_err(|err| eyre!("invalid `{key}` value: {err}"))
 }
 
+fn parse_optional_f64(fields: &BTreeMap<String, String>, key: &str) -> Result<Option<f64>> {
+    let Some(value) = parse_optional_string(fields, key)? else {
+        return Ok(None);
+    };
+    Ok(Some(
+        value
+            .parse::<f64>()
+            .map_err(|err| eyre!("invalid `{key}` value: {err}"))?,
+    ))
+}
+
 fn parse_timestamp(fields: &BTreeMap<String, String>, key: &str) -> Result<DateTime<Utc>> {
     let value = parse_string(fields, key)?;
     Ok(DateTime::parse_from_rfc3339(&value)
@@ -590,7 +601,7 @@ fn attempt_fields(
     thesis: String,
     branch: &str,
     metric: f64,
-    baseline_metric: f64,
+    baseline_metric: Option<f64>,
     observation: Observation,
     summary: &str,
     annotations: Option<&Vec<AttemptAnnotation>>,
@@ -599,10 +610,12 @@ fn attempt_fields(
         ("thesis", thesis),
         ("branch", branch.to_string()),
         ("metric", format!("{metric:.4}")),
-        ("baseline_metric", format!("{baseline_metric:.4}")),
-        ("observation", observation.to_string()),
-        ("summary", summary.to_string()),
     ];
+    if let Some(b) = baseline_metric {
+        fields.push(("baseline_metric", format!("{b:.4}")));
+    }
+    fields.push(("observation", observation.to_string()));
+    fields.push(("summary", summary.to_string()));
     if let Some(annotations) = annotations {
         fields.push((
             "annotations",
@@ -675,7 +688,7 @@ summary: RMSNorm instead of LayerNorm
             ProtocolComment::Attempt {
                 thesis: 12,
                 metric,
-                baseline_metric,
+                baseline_metric: Some(baseline_metric),
                 observation: Observation::Improved,
                 ..
             } if (metric - 0.9934).abs() < f64::EPSILON && (baseline_metric - 0.9979).abs() < f64::EPSILON
@@ -706,7 +719,7 @@ annotations: [{"category":"failure_analysis","task_id":"task-7","text":"Tool sel
                 thesis: 12,
                 branch: "thesis/12-rmsnorm-attempt-1".to_string(),
                 metric: 0.9934,
-                baseline_metric: 0.9979,
+                baseline_metric: Some(0.9979),
                 observation: Observation::Improved,
                 summary: "RMSNorm instead of LayerNorm".to_string(),
                 annotations: Some(vec![AttemptAnnotation {

@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentResult {
     pub metric: f64,
-    pub baseline: f64,
+    #[serde(default)]
+    pub baseline: Option<f64>,
     pub observation: String,
     pub summary: String,
 }
@@ -128,13 +129,12 @@ pub fn run_harness_directly(
     worktree_path: &Path,
     baseline_path: &Path,
 ) -> Result<Option<RecoveredMetric>> {
-    let harness = find_harness(worktree_path);
-    let Some(harness_cmd) = harness else {
+    let Some(harness) = find_harness(worktree_path) else {
         return Ok(None);
     };
 
-    let candidate_metric = run_harness_in(&harness_cmd, worktree_path)?;
-    let baseline_metric = run_harness_in(&harness_cmd, baseline_path)?;
+    let candidate_metric = run_harness_in(&harness, worktree_path)?;
+    let baseline_metric = run_harness_in(&harness, baseline_path)?;
 
     match (candidate_metric, baseline_metric) {
         (Some(candidate), Some(baseline)) => Ok(Some(RecoveredMetric {
@@ -220,35 +220,31 @@ pub fn thesis_generation_prompt(count: usize) -> String {
     )
 }
 
-fn find_harness(worktree_path: &Path) -> Option<String> {
-    let candidates = [
-        ".polyresearch/run.sh",
-        "bench.js",
-        "bench.mjs",
+struct HarnessSpec {
+    runner: &'static str,
+    relative_path: &'static str,
+}
+
+fn find_harness(worktree_path: &Path) -> Option<HarnessSpec> {
+    let candidates: &[(&str, &str)] = &[
+        (".polyresearch/run.sh", "bash"),
+        ("bench.js", "node"),
+        ("bench.mjs", "node"),
     ];
 
-    for candidate in &candidates {
-        let path = worktree_path.join(candidate);
-        if path.exists() {
-            if candidate.ends_with(".sh") {
-                return Some(format!("bash {}", path.display()));
-            } else if candidate.ends_with(".js") || candidate.ends_with(".mjs") {
-                return Some(format!("node {}", path.display()));
-            }
+    for &(relative_path, runner) in candidates {
+        if worktree_path.join(relative_path).exists() {
+            return Some(HarnessSpec { runner, relative_path });
         }
     }
 
     None
 }
 
-fn run_harness_in(harness_cmd: &str, work_dir: &Path) -> Result<Option<f64>> {
-    let parts = shell_words(harness_cmd);
-    if parts.is_empty() {
-        return Ok(None);
-    }
-
-    let output = Command::new(&parts[0])
-        .args(&parts[1..])
+fn run_harness_in(harness: &HarnessSpec, work_dir: &Path) -> Result<Option<f64>> {
+    let script_path = work_dir.join(harness.relative_path);
+    let output = Command::new(harness.runner)
+        .arg(&script_path)
         .current_dir(work_dir)
         .output()
         .wrap_err("failed to run evaluation harness")?;
@@ -333,6 +329,7 @@ mod tests {
         let result: ExperimentResult = serde_json::from_str(json).unwrap();
         assert!(result.is_improved());
         assert!((result.metric - 0.95).abs() < f64::EPSILON);
+        assert!((result.baseline.unwrap() - 0.90).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -446,7 +443,7 @@ mod tests {
     fn experiment_result_observation_checks() {
         let result = ExperimentResult {
             metric: 1.0,
-            baseline: 0.5,
+            baseline: Some(0.5),
             observation: "no_improvement".to_string(),
             summary: "test".to_string(),
         };
@@ -454,5 +451,12 @@ mod tests {
         assert!(!result.is_improved());
         assert!(!result.is_crashed());
         assert!(!result.is_infra_failure());
+    }
+
+    #[test]
+    fn experiment_result_deserializes_without_baseline() {
+        let json = r#"{"metric": 0.95, "observation": "improved", "summary": "test"}"#;
+        let result: ExperimentResult = serde_json::from_str(json).unwrap();
+        assert!(result.baseline.is_none());
     }
 }

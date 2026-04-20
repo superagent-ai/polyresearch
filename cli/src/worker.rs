@@ -179,16 +179,20 @@ impl ThesisWorker {
             commands::run_git(&self.worktree_path, &["push", "-u", "origin", &self.branch])?;
 
             let default_branch = &self.ctx.default_branch;
+            let body = match result.baseline {
+                Some(b) => format!(
+                    "References #{}\n\nMetric: {:.4}\nBaseline: {:.4}\nSummary: {}",
+                    self.ctx.issue_number, result.metric, b, result.summary
+                ),
+                None => format!(
+                    "References #{}\n\nMetric: {:.4}\nBaseline: N/A (recovered from logs)\nSummary: {}",
+                    self.ctx.issue_number, result.metric, result.summary
+                ),
+            };
             github.create_pull_request(
                 &self.branch,
                 &format!("Thesis #{}: {}", self.ctx.issue_number, self.ctx.thesis_title),
-                &format!(
-                    "References #{}\n\nMetric: {:.4}\nBaseline: {:.4}\nSummary: {}",
-                    self.ctx.issue_number,
-                    result.metric,
-                    result.baseline,
-                    result.summary
-                ),
+                &body,
                 default_branch,
             )?;
         }
@@ -421,7 +425,7 @@ pub fn classify_recovered(recovered: RecoveredMetric, direction: MetricDirection
     let Some(baseline) = recovered.baseline else {
         return ExperimentResult {
             metric: recovered.metric,
-            baseline: 0.0,
+            baseline: None,
             observation: "no_improvement".to_string(),
             summary: recovered.summary,
         };
@@ -434,7 +438,7 @@ pub fn classify_recovered(recovered: RecoveredMetric, direction: MetricDirection
 
     ExperimentResult {
         metric: recovered.metric,
-        baseline,
+        baseline: Some(baseline),
         observation: if improved { "improved" } else { "no_improvement" }.to_string(),
         summary: recovered.summary,
     }
@@ -457,12 +461,16 @@ pub fn format_prior_attempts(thesis: &ThesisState) -> String {
 
     let mut output = String::new();
     for (i, attempt) in thesis.attempts.iter().enumerate() {
+        let baseline_str = attempt
+            .baseline_metric
+            .map(|b| format!("{b:.4}"))
+            .unwrap_or_else(|| "N/A".to_string());
         output.push_str(&format!(
-            "### Attempt {} (branch: {})\n- Metric: {:.4}\n- Baseline: {:.4}\n- Observation: {}\n- Summary: {}\n\n",
+            "### Attempt {} (branch: {})\n- Metric: {:.4}\n- Baseline: {}\n- Observation: {}\n- Summary: {}\n\n",
             i + 1,
             attempt.branch,
             attempt.metric,
-            attempt.baseline_metric,
+            baseline_str,
             attempt.observation,
             attempt.summary,
         ));
@@ -589,7 +597,7 @@ mod tests {
         };
         let result = classify_recovered(recovered, MetricDirection::HigherIsBetter);
         assert!(result.is_improved());
-        assert!((result.baseline - 0.90).abs() < f64::EPSILON);
+        assert!((result.baseline.unwrap() - 0.90).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -623,6 +631,7 @@ mod tests {
         };
         let higher = classify_recovered(recovered.clone(), MetricDirection::HigherIsBetter);
         assert!(higher.is_no_improvement());
+        assert!(higher.baseline.is_none());
 
         let recovered = RecoveredMetric {
             metric: 0.95,
@@ -631,6 +640,7 @@ mod tests {
         };
         let lower = classify_recovered(recovered, MetricDirection::LowerIsBetter);
         assert!(lower.is_no_improvement());
+        assert!(lower.baseline.is_none());
     }
 
     #[test]

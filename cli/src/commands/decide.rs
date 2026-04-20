@@ -91,6 +91,26 @@ pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
     })
 }
 
+pub(crate) fn is_pr_decidable(
+    config: &crate::config::ProtocolConfig,
+    pr_state: &crate::state::PullRequestState,
+    required_reviews: usize,
+) -> bool {
+    if pr_state.pr.state != "OPEN" || !pr_state.policy_pass || pr_state.decision.is_some() {
+        return false;
+    }
+    if pr_state.maintainer_rejected {
+        return false;
+    }
+    if !config.auto_approve && !pr_state.maintainer_approved {
+        return false;
+    }
+    if required_reviews > 0 && pr_state.reviews.len() < required_reviews {
+        return false;
+    }
+    true
+}
+
 pub(crate) fn decide_without_peer_review(
     ctx: &AppContext,
     thesis: &crate::state::ThesisState,
@@ -105,12 +125,10 @@ pub(crate) fn decide_without_peer_review(
         .find(|attempt| &attempt.branch == branch)
         .ok_or_else(|| eyre!("candidate PR branch `{branch}` has no recorded attempt"))?;
 
-    if !metric_beats(
-        attempt.metric,
-        attempt.baseline_metric,
-        tolerance,
-        ctx.config.metric_direction,
-    ) {
+    let Some(baseline) = attempt.baseline_metric else {
+        return Ok(Outcome::NonImprovement);
+    };
+    if !metric_beats(attempt.metric, baseline, tolerance, ctx.config.metric_direction) {
         return Ok(Outcome::NonImprovement);
     }
 

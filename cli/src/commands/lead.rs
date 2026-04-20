@@ -159,15 +159,7 @@ fn decide_ready_prs(ctx: &AppContext, config: &ProtocolConfig, repo_state: &Repo
 
     for thesis in &repo_state.theses {
         for pr_state in &thesis.pull_requests {
-            if pr_state.pr.state != "OPEN" || !pr_state.policy_pass || pr_state.decision.is_some() {
-                continue;
-            }
-
-            if !config.auto_approve && !pr_state.maintainer_approved {
-                continue;
-            }
-
-            if required > 0 && pr_state.reviews.len() < required {
+            if !decide::is_pr_decidable(config, pr_state, required) {
                 continue;
             }
 

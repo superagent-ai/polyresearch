@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use color_eyre::eyre::{Result, eyre};
-use rand::RngExt;
 
 use crate::cli::ContributeArgs;
 use crate::commands::{self, AppContext};
@@ -376,25 +375,7 @@ fn clone_repo(url: &str, repo_root: &Path) -> Result<()> {
 }
 
 fn ensure_node_config(repo_root: &Path) -> Result<()> {
-    let config_path = repo_root.join(".polyresearch-node.toml");
-    if config_path.exists() {
-        return Ok(());
-    }
-    eprintln!("No node config found, initializing...");
-    let hostname = std::process::Command::new("hostname")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-    let suffix: String = {
-        let mut rng = rand::rng();
-        (0..4)
-            .map(|_| format!("{:x}", rng.random_range(0u8..16)))
-            .collect()
-    };
-    let node_id = format!("{hostname}-{suffix}");
-    commands::write_node_config(&repo_root.to_path_buf(), &node_id, None)
+    commands::ensure_node_config(repo_root)
 }
 
 fn parse_eval_footprint_cores(repo_root: &Path) -> usize {

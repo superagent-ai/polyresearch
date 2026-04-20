@@ -69,7 +69,7 @@ pub struct AttemptRecord {
     pub node: String,
     pub branch: String,
     pub metric: f64,
-    pub baseline_metric: f64,
+    pub baseline_metric: Option<f64>,
     pub observation: Observation,
     pub summary: String,
     pub author: String,
