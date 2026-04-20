@@ -18,6 +18,8 @@ use crate::github::RepoRef;
 use crate::hardware;
 use crate::state::{RepositoryState, ThesisPhase, ThesisState};
 
+const EXPERIMENT_PROMPT: &str = "Read PROGRAM.md, PREPARE.md, and .polyresearch/thesis.md, then work only the current thesis. Run one baseline plus at most 3 serious candidate attempts in this session. If you find a clear improvement earlier, stop early. When you are done, write .polyresearch/result.json exactly as PROGRAM.md specifies and exit immediately.";
+
 #[derive(Debug, Serialize)]
 struct ContributeOutput {
     repo: String,
@@ -36,28 +38,7 @@ struct WorkerResult {
 pub fn prepare_checkout(start: &Path, repo_url: &str) -> Result<PathBuf> {
     let repo = RepoRef::parse(repo_url)?;
     let target_dir = start.join(&repo.name);
-    if target_dir.exists() {
-        if !target_dir.join(".git").exists() {
-            return Err(eyre!(
-                "target directory `{}` already exists and is not a git repository",
-                target_dir.display()
-            ));
-        }
-        return Ok(target_dir);
-    }
-
-    let url = format!("https://github.com/{}.git", repo.slug());
-    let output = Command::new("git")
-        .args(["clone", &url, &target_dir.to_string_lossy()])
-        .output()
-        .wrap_err("failed to run `git clone`")?;
-    if !output.status.success() {
-        return Err(eyre!(
-            "failed to clone {}: {}",
-            repo.slug(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
+    crate::commands::ensure_git_repo_or_clone(&target_dir, &repo)?;
     Ok(target_dir)
 }
 
@@ -155,7 +136,6 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
             sync_node_config_to_worktree(&ctx.repo_root, &worktree_path)?;
             write_thesis_context(&worktree_path, thesis)?;
 
-            let prompt = "Read PROGRAM.md, PREPARE.md, and .polyresearch/thesis.md, then work only the current thesis. Run one baseline plus at most 3 serious candidate attempts in this session. If you find a clear improvement earlier, stop early. When you are done, write .polyresearch/result.json exactly as PROGRAM.md specifies and exit immediately.".to_string();
             let issue = thesis.issue.number;
             let runner = runner.clone();
             let default_branch = default_branch.clone();
@@ -163,7 +143,7 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
 
             tasks.spawn_blocking(move || {
                 let result = runner
-                    .run_experiment(&prompt, &worktree_path)
+                    .run_experiment(EXPERIMENT_PROMPT, &worktree_path)
                     .or_else(|error| {
                         recover_experiment_result(&worktree_path, direction, tolerance).or_else(
                             |_| {
@@ -220,7 +200,6 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
                 continue;
             }
 
-            let prompt = "Read PROGRAM.md, PREPARE.md, and .polyresearch/thesis.md, then work only the current thesis. Run one baseline plus at most 3 serious candidate attempts in this session. If you find a clear improvement earlier, stop early. When you are done, write .polyresearch/result.json exactly as PROGRAM.md specifies and exit immediately.".to_string();
             let issue = claim.issue;
             let runner = runner.clone();
             let default_branch = default_branch.clone();
@@ -228,7 +207,7 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
 
             tasks.spawn_blocking(move || {
                 let result = runner
-                    .run_experiment(&prompt, &worktree_path)
+                    .run_experiment(EXPERIMENT_PROMPT, &worktree_path)
                     .or_else(|error| {
                         recover_experiment_result(&worktree_path, direction, tolerance).or_else(
                             |_| {
@@ -294,14 +273,7 @@ async fn ensure_initialized(ctx: &AppContext) -> Result<()> {
         return Ok(());
     }
 
-    init::run(
-        ctx,
-        &InitArgs {
-            node: None,
-            capacity: None,
-        },
-    )
-    .await
+    init::run(ctx, &InitArgs::default()).await
 }
 
 async fn auto_submit_blocking(ctx: &AppContext, repo_state: &RepositoryState) -> Result<usize> {
@@ -384,18 +356,7 @@ fn select_claimable_theses<'a>(
     node: &str,
     count: usize,
 ) -> Vec<&'a ThesisState> {
-    let mut theses = repo_state
-        .theses
-        .iter()
-        .filter(|thesis| thesis.issue.state == "OPEN")
-        .filter(|thesis| thesis.approved)
-        .filter(|thesis| matches!(thesis.phase, ThesisPhase::Approved))
-        .filter(|thesis| thesis.active_claims.is_empty())
-        .filter(|thesis| !thesis.releases.iter().any(|release| release.node == node))
-        .collect::<Vec<_>>();
-    theses.sort_by_key(|thesis| thesis.issue.number);
-    theses.truncate(count);
-    theses
+    crate::commands::select_claimable_theses(repo_state, node, count)
 }
 
 fn select_resumable_theses<'a>(

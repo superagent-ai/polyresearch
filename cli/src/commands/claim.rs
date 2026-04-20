@@ -23,17 +23,7 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
 
     let duty_report = duties::check(ctx, &repo_state)?;
-    if !duty_report.blocking.is_empty() {
-        let items: Vec<String> = duty_report
-            .blocking
-            .iter()
-            .map(|d| format!("  [{}] {} Run: {}", d.category, d.message, d.command))
-            .collect();
-        return Err(eyre!(
-            "cannot claim while blocking duties exist:\n{}",
-            items.join("\n")
-        ));
-    }
+    duties::require_no_blocking(&duty_report, "claim")?;
     let thesis = require_claimable_thesis(&repo_state, args.issue)?;
     if !thesis.active_claims.is_empty() {
         let nodes = thesis

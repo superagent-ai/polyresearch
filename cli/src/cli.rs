@@ -49,7 +49,7 @@ pub enum Commands {
     Prune,
 }
 
-#[derive(Debug, Args, Clone)]
+#[derive(Debug, Args, Clone, Default)]
 pub struct InitArgs {
     #[arg(long)]
     pub node: Option<String>,

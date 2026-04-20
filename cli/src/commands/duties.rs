@@ -1,4 +1,4 @@
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, eyre};
 use serde::Serialize;
 
 use crate::commands::{AppContext, print_value, read_node_id};
@@ -18,6 +18,21 @@ pub struct DutyReport {
     pub blocking: Vec<DutyItem>,
     pub advisory: Vec<DutyItem>,
     pub clean: bool,
+}
+
+pub fn require_no_blocking(report: &DutyReport, action: &str) -> Result<()> {
+    if report.blocking.is_empty() {
+        return Ok(());
+    }
+    let items: Vec<String> = report
+        .blocking
+        .iter()
+        .map(|d| format!("  [{}] {} Run: {}", d.category, d.message, d.command))
+        .collect();
+    Err(eyre!(
+        "cannot {action} while blocking duties exist:\n{}",
+        items.join("\n")
+    ))
 }
 
 pub fn check(ctx: &AppContext, repo_state: &RepositoryState) -> Result<DutyReport> {

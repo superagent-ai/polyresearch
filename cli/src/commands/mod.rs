@@ -23,7 +23,7 @@ pub mod submit;
 pub mod sync;
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
@@ -155,6 +155,25 @@ pub fn write_node_config(
         existing_agent,
     )
     .save(repo_root)
+}
+
+pub fn select_claimable_theses<'a>(
+    repo_state: &'a RepositoryState,
+    node: &str,
+    count: usize,
+) -> Vec<&'a crate::state::ThesisState> {
+    let mut theses = repo_state
+        .theses
+        .iter()
+        .filter(|thesis| thesis.issue.state == "OPEN")
+        .filter(|thesis| thesis.approved)
+        .filter(|thesis| matches!(thesis.phase, crate::state::ThesisPhase::Approved))
+        .filter(|thesis| thesis.active_claims.is_empty())
+        .filter(|thesis| !thesis.releases.iter().any(|release| release.node == node))
+        .collect::<Vec<_>>();
+    theses.sort_by_key(|thesis| thesis.issue.number);
+    theses.truncate(count);
+    theses
 }
 
 pub fn node_active_claims(repo_state: &RepositoryState, node_id: &str) -> usize {
@@ -300,6 +319,35 @@ pub fn resume_thesis_worktree(
         branch,
         worktree_path,
     })
+}
+
+pub fn ensure_git_repo_or_clone(target_dir: &Path, repo: &RepoRef) -> Result<()> {
+    if target_dir.exists() {
+        if !target_dir.join(".git").exists() {
+            return Err(eyre!(
+                "target directory `{}` already exists and is not a git repository",
+                target_dir.display()
+            ));
+        }
+        return Ok(());
+    }
+    clone_github_repo(repo, target_dir)
+}
+
+pub fn clone_github_repo(repo: &RepoRef, target_dir: &Path) -> Result<()> {
+    let url = format!("https://github.com/{}.git", repo.slug());
+    let output = std::process::Command::new("git")
+        .args(["clone", &url, &target_dir.to_string_lossy()])
+        .output()
+        .wrap_err("failed to run `git clone`")?;
+    if !output.status.success() {
+        return Err(eyre!(
+            "failed to clone {}: {}",
+            repo.slug(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 
 pub fn push_current_branch(repo_root: &PathBuf) -> Result<String> {

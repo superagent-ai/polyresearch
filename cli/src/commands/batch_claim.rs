@@ -5,7 +5,7 @@ use crate::cli::BatchClaimArgs;
 use crate::commands::claim::{ClaimOutput, claim_selected_thesis};
 use crate::commands::duties;
 use crate::commands::{AppContext, node_active_claims, print_value, read_node_id};
-use crate::state::{RepositoryState, ThesisPhase, ThesisState};
+use crate::state::{RepositoryState, ThesisState};
 
 #[derive(Debug, Serialize)]
 struct BatchClaimOutput {
@@ -21,17 +21,7 @@ pub async fn run(ctx: &AppContext, args: &BatchClaimArgs) -> Result<()> {
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
 
     let duty_report = duties::check(ctx, &repo_state)?;
-    if !duty_report.blocking.is_empty() {
-        let items: Vec<String> = duty_report
-            .blocking
-            .iter()
-            .map(|d| format!("  [{}] {} Run: {}", d.category, d.message, d.command))
-            .collect();
-        return Err(eyre!(
-            "cannot batch-claim while blocking duties exist:\n{}",
-            items.join("\n")
-        ));
-    }
+    duties::require_no_blocking(&duty_report, "batch-claim")?;
 
     if matches!(args.count, Some(0)) {
         return Err(eyre!("batch-claim count must be at least 1"));
@@ -124,16 +114,5 @@ fn select_claimable_theses<'a>(
     node: &str,
     count: usize,
 ) -> Vec<&'a ThesisState> {
-    let mut theses = repo_state
-        .theses
-        .iter()
-        .filter(|thesis| thesis.issue.state == "OPEN")
-        .filter(|thesis| thesis.approved)
-        .filter(|thesis| matches!(thesis.phase, ThesisPhase::Approved))
-        .filter(|thesis| thesis.active_claims.is_empty())
-        .filter(|thesis| !thesis.releases.iter().any(|release| release.node == node))
-        .collect::<Vec<_>>();
-    theses.sort_by_key(|thesis| thesis.issue.number);
-    theses.truncate(count);
-    theses
+    crate::commands::select_claimable_theses(repo_state, node, count)
 }

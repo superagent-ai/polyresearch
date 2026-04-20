@@ -35,16 +35,11 @@ pub fn prepare_checkout(start: &Path, args: &BootstrapArgs) -> Result<PathBuf> {
     let target_dir = start.join(&upstream.name);
 
     if target_dir.exists() {
-        if !target_dir.join(".git").exists() {
-            return Err(eyre!(
-                "target directory `{}` already exists and is not a git repository",
-                target_dir.display()
-            ));
-        }
+        crate::commands::ensure_git_repo_or_clone(&target_dir, &clone_source)?;
         eprintln!("→ Reusing existing checkout at {}", target_dir.display());
     } else {
         eprintln!("→ Cloning {} into {}", clone_source.slug(), target_dir.display());
-        clone_repo(&clone_source, &target_dir)?;
+        crate::commands::clone_github_repo(&clone_source, &target_dir)?;
     }
 
     if clone_source.slug() != upstream.slug() {
@@ -83,14 +78,7 @@ pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
         .wrap_err_with(|| format!("failed to create {}", ctx.repo_root.join(".polyresearch").display()))?;
 
     print_progress(ctx, "Initializing node configuration...");
-    init::run(
-        ctx,
-        &InitArgs {
-            node: None,
-            capacity: None,
-        },
-    )
-    .await?;
+    init::run(ctx, &InitArgs::default()).await?;
 
     let node_config = read_node_config(&ctx.repo_root)?;
     let runner = ShellAgentRunner::from_node_config(&node_config)?;
@@ -169,22 +157,6 @@ fn create_fork(upstream: &RepoRef) -> Result<()> {
         return Err(eyre!(
             "failed to create fork for {}: {}",
             upstream.slug(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    Ok(())
-}
-
-fn clone_repo(repo: &RepoRef, target_dir: &Path) -> Result<()> {
-    let url = format!("https://github.com/{}.git", repo.slug());
-    let output = Command::new("git")
-        .args(["clone", &url, &target_dir.to_string_lossy()])
-        .output()
-        .wrap_err("failed to run `git clone`")?;
-    if !output.status.success() {
-        return Err(eyre!(
-            "failed to clone {}: {}",
-            repo.slug(),
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }

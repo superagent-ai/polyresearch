@@ -23,21 +23,16 @@ pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
     let _ = ensure_current_ledger(ctx, &repo_state)?;
 
     let duty_report = duties::check(ctx, &repo_state)?;
-    let lead_blocking: Vec<_> = duty_report
-        .blocking
-        .iter()
-        .filter(|d| d.category == "decide" || d.category == "policy-check")
-        .collect();
-    if !lead_blocking.is_empty() {
-        let items: Vec<String> = lead_blocking
-            .iter()
-            .map(|d| format!("  [{}] {} Run: {}", d.category, d.message, d.command))
-            .collect();
-        return Err(eyre!(
-            "cannot generate theses while PRs need processing:\n{}",
-            items.join("\n")
-        ));
-    }
+    let lead_report = duties::DutyReport {
+        blocking: duty_report
+            .blocking
+            .into_iter()
+            .filter(|d| d.category == "decide" || d.category == "policy-check")
+            .collect(),
+        advisory: Vec::new(),
+        clean: true,
+    };
+    duties::require_no_blocking(&lead_report, "generate theses while PRs need processing")?;
 
     if let Some(max_queue_depth) = ctx.config.max_queue_depth {
         if repo_state.queue_depth >= max_queue_depth {
