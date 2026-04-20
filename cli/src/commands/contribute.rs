@@ -73,8 +73,11 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
 
     loop {
         print_progress(ctx, "Checking duties and available work...");
-        let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
-        auto_submit_blocking(ctx, &repo_state).await?;
+        let mut repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
+        let submitted = auto_submit_blocking(ctx, &repo_state).await?;
+        if submitted > 0 {
+            repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
+        }
 
         let duty_report = duties::check(ctx, &repo_state)?;
         if !duty_report.blocking.is_empty() {
@@ -260,8 +263,9 @@ async fn ensure_initialized(ctx: &AppContext) -> Result<()> {
     .await
 }
 
-async fn auto_submit_blocking(ctx: &AppContext, repo_state: &RepositoryState) -> Result<()> {
+async fn auto_submit_blocking(ctx: &AppContext, repo_state: &RepositoryState) -> Result<usize> {
     let duty_report = duties::check(ctx, repo_state)?;
+    let mut submitted = 0usize;
     for item in duty_report.blocking {
         if item.category != "submit" {
             continue;
@@ -277,8 +281,9 @@ async fn auto_submit_blocking(ctx: &AppContext, repo_state: &RepositoryState) ->
         };
 
         submit::run(ctx, &crate::cli::IssueArgs { issue }).await?;
+        submitted += 1;
     }
-    Ok(())
+    Ok(submitted)
 }
 
 fn determine_parallelism(
@@ -323,6 +328,7 @@ fn select_claimable_theses<'a>(
         .theses
         .iter()
         .filter(|thesis| thesis.issue.state == "OPEN")
+        .filter(|thesis| thesis.approved)
         .filter(|thesis| matches!(thesis.phase, ThesisPhase::Approved))
         .filter(|thesis| thesis.active_claims.is_empty())
         .filter(|thesis| !thesis.releases.iter().any(|release| release.node == node))

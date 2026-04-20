@@ -127,7 +127,9 @@ pub async fn run(ctx: &AppContext, args: &LeadArgs) -> Result<()> {
                     repo_state.queue_depth, ctx.config.min_queue_depth
                 ),
             );
-            let proposals = generate_proposals(ctx, &repo_state)?;
+            let mut proposals = generate_proposals(ctx, &repo_state)?;
+            let desired = ctx.config.min_queue_depth.saturating_sub(repo_state.queue_depth).max(1);
+            proposals.truncate(desired);
             for proposal in proposals {
                 generate::run(
                     ctx,
