@@ -16,13 +16,13 @@ const THROTTLE_FILE_NAME: &str = ".polyresearch-throttle";
 static REQUEST_THROTTLE: OnceLock<RequestThrottle> = OnceLock::new();
 
 #[derive(Debug, Clone)]
-pub struct RequestThrottle {
+struct RequestThrottle {
     request_delay: Duration,
     state_path: PathBuf,
 }
 
 impl RequestThrottle {
-    pub fn new(request_delay_ms: u64) -> Self {
+    fn new(request_delay_ms: u64) -> Self {
         Self::with_path(request_delay_ms, default_state_path())
     }
 

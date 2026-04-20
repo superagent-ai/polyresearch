@@ -133,7 +133,7 @@ impl RepositoryState {
         Self::derive_from_fetched(issues, prs, &mut issue_comments, &mut pr_comments, config)
     }
 
-    pub fn derive_from_fetched(
+    fn derive_from_fetched(
         issues: Vec<Issue>,
         prs: Vec<PullRequest>,
         issue_comments: &mut std::collections::HashMap<u64, Vec<IssueComment>>,
@@ -491,7 +491,7 @@ pub fn parse_thesis_number_from_branch(branch: &str) -> Option<u64> {
     number.parse::<u64>().ok()
 }
 
-pub fn select_metric(current: Option<f64>, candidate: f64, direction: MetricDirection) -> f64 {
+fn select_metric(current: Option<f64>, candidate: f64, direction: MetricDirection) -> f64 {
     match current {
         None => candidate,
         Some(existing) => match direction {
