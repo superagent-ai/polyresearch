@@ -70,9 +70,7 @@ node .polyresearch/bench.js
 
 You should see output with `METRIC_A`, `METRIC_B`, and `METRIC` lines. The composite `METRIC` should be approximately 350 on modern hardware.
 
-The canonical protocol file for this repo is [POLYRESEARCH.md](../../POLYRESEARCH.md).
-
-See [PREPARE.md](PREPARE.md) for full evaluation details and [PROGRAM.md](PROGRAM.md) for the research playbook.
+See [PREPARE.md](PREPARE.md) for full evaluation details, [PROGRAM.md](PROGRAM.md) for the research playbook, and [cli/README.md](../../cli/README.md) for the CLI command reference.
 
 ## Why this is a good polyresearch example
 

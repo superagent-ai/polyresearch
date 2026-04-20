@@ -40,7 +40,6 @@ replication logic, imp launchers, decoys, process management.
 - `.polyresearch/` - the trusted environment: setup, evaluator, LLM helper,
 prompts, simulator, gauntlet, vendored source notes, and dependencies
 - `PREPARE.md` - the trust boundary
-- `POLYRESEARCH.md` - the coordination protocol
 - `results.tsv` - maintained by the lead on `main`
 
 ## Constraints

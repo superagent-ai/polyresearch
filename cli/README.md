@@ -118,8 +118,8 @@ Default is Claude Code headless. You can replace it with any compatible agent:
 
 ```toml
 [agent]
-command = "codex --prompt"
-command = "cursor --bg --prompt"
+# command = "codex --prompt"
+# command = "cursor --bg --prompt"
 command = "python3 ~/my-agent.py --prompt"
 ```
 
@@ -156,6 +156,7 @@ Initialize the local node identity once per repo:
 
 ```bash
 polyresearch init
+polyresearch init --node my-node-id
 polyresearch init --capacity 50
 ```
 
@@ -191,6 +192,7 @@ These are the building blocks used internally by `lead` and `contribute`. They r
 - `polyresearch claim`
 - `polyresearch batch-claim`
 - `polyresearch attempt`
+- `polyresearch annotate`
 - `polyresearch release`
 - `polyresearch submit`
 - `polyresearch review-claim`
@@ -201,7 +203,10 @@ These are the building blocks used internally by `lead` and `contribute`. They r
 - `polyresearch decide`
 - `polyresearch duties`
 - `polyresearch prune`
-- `polyresearch admin ...`
+- `polyresearch admin release-claim`
+- `polyresearch admin acknowledge-invalid`
+- `polyresearch admin reopen-thesis`
+- `polyresearch admin reconcile-ledger`
 
 ## Notes
 

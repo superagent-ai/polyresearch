@@ -55,9 +55,7 @@ The final warrior is an 8-instruction paper replicator scoring 0.785, with perfe
 grep "^battle_score:" run.log     # parse the metric
 ```
 
-The canonical protocol file for this repo is [POLYRESEARCH.md](POLYRESEARCH.md).
-
-See [PREPARE.md](PREPARE.md) for full evaluation details and [PROGRAM.md](PROGRAM.md) for the research playbook.
+See [PREPARE.md](PREPARE.md) for full evaluation details, [PROGRAM.md](PROGRAM.md) for the research playbook, and [cli/README.md](../../cli/README.md) for the CLI command reference.
 
 ## Why this is a good polyresearch example
 

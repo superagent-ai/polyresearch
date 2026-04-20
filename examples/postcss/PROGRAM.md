@@ -36,7 +36,6 @@ Secondary constraint: correctness. Workload A must produce fingerprint `4b81f7a5
 ## What you CANNOT modify
 
 - `.polyresearch/` — the reproducible environment (benchmark harness)
-- `POLYRESEARCH.md` — the coordination protocol
 - `PROGRAM.md` — the research playbook
 - `PREPARE.md` — the evaluation setup
 - `results.tsv` — maintained by the lead on `main`

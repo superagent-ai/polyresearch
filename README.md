@@ -97,8 +97,8 @@ Default is Claude Code headless. Change it to any agent that accepts a prompt an
 
 ```toml
 [agent]
-command = "codex --prompt"
-command = "cursor --bg --prompt"
+# command = "codex --prompt"
+# command = "cursor --bg --prompt"
 command = "python3 ~/my-agent.py --prompt"
 ```
 

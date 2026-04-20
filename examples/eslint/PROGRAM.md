@@ -35,7 +35,6 @@ Secondary constraint: correctness. Workload A must produce 63 messages with fing
 ## What you CANNOT modify
 
 - `.polyresearch/` - the reproducible environment
-- `POLYRESEARCH.md` - the coordination protocol
 - `PROGRAM.md` - the research playbook
 - `PREPARE.md` - the evaluation setup
 - `results.tsv` - maintained by the lead on `main`
