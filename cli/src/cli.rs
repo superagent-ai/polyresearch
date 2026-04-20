@@ -44,6 +44,9 @@ pub enum Commands {
     PolicyCheck(PrArgs),
     Decide(PrArgs),
     Prune,
+    Bootstrap(BootstrapArgs),
+    Lead(LeadArgs),
+    Contribute(ContributeArgs),
 }
 
 #[derive(Debug, Args, Clone)]
@@ -181,4 +184,41 @@ pub struct AdminReopenThesisArgs {
 
     #[arg(long, default_value = "Lead repair reopened the thesis.")]
     pub note: String,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct BootstrapArgs {
+    pub url: String,
+
+    #[arg(long)]
+    pub fork: Option<String>,
+
+    #[arg(long)]
+    pub goal: Option<String>,
+
+    #[arg(long)]
+    pub pause_after_bootstrap: bool,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct LeadArgs {
+    #[arg(long)]
+    pub once: bool,
+
+    #[arg(long, default_value = "60")]
+    pub sleep_secs: u64,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct ContributeArgs {
+    pub url: Option<String>,
+
+    #[arg(long)]
+    pub once: bool,
+
+    #[arg(long)]
+    pub max_parallel: Option<usize>,
+
+    #[arg(long, default_value = "60")]
+    pub sleep_secs: u64,
 }

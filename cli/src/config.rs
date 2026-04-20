@@ -22,6 +22,19 @@ pub enum MetricDirection {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentConfig {
+    pub command: String,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            command: "claude -p --permission-mode bypassPermissions".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NodeConfig {
     pub node_id: String,
     #[serde(default = "default_capacity")]
@@ -30,6 +43,8 @@ pub struct NodeConfig {
     pub api_budget: u64,
     #[serde(default = "default_request_delay_ms")]
     pub request_delay_ms: u64,
+    #[serde(default)]
+    pub agent: AgentConfig,
 }
 
 impl NodeConfig {
@@ -38,12 +53,14 @@ impl NodeConfig {
         capacity: u8,
         api_budget: u64,
         request_delay_ms: u64,
+        agent: Option<AgentConfig>,
     ) -> Self {
         Self {
             node_id: node_id.into(),
             capacity: normalize_capacity(capacity),
             api_budget: normalize_api_budget(api_budget),
             request_delay_ms: normalize_request_delay_ms(request_delay_ms),
+            agent: agent.unwrap_or_default(),
         }
     }
 
@@ -87,7 +104,7 @@ impl NodeConfig {
             .map(|config| config.request_delay_ms)
             .unwrap_or(DEFAULT_REQUEST_DELAY_MS);
 
-        Ok(Self::new(node_id, capacity, api_budget, request_delay_ms))
+        Ok(Self::new(node_id, capacity, api_budget, request_delay_ms, file_config.as_ref().map(|c| c.agent.clone())))
     }
 
     pub fn load_api_budget(repo_root: &Path) -> u64 {
@@ -206,6 +223,7 @@ pub struct ProtocolConfig {
     pub min_queue_depth: usize,
     pub max_queue_depth: Option<usize>,
     pub cli_version: Option<String>,
+    pub default_branch: Option<String>,
 }
 
 impl Default for ProtocolConfig {
@@ -222,6 +240,7 @@ impl Default for ProtocolConfig {
             min_queue_depth: 5,
             max_queue_depth: None,
             cli_version: None,
+            default_branch: None,
         }
     }
 }
@@ -302,6 +321,9 @@ impl ProtocolConfig {
                 "cli_version" => {
                     config.cli_version = Some(value.to_string());
                 }
+                "default_branch" => {
+                    config.default_branch = Some(value.to_string());
+                }
                 _ => {}
             }
         }
@@ -336,6 +358,23 @@ impl ProtocolConfig {
         Err(eyre!(
             "this project requires polyresearch CLI v{required}, but you are running v{current}"
         ))
+    }
+
+    pub fn resolve_default_branch(&self, repo_root: &Path) -> Result<String> {
+        if let Some(branch) = &self.default_branch {
+            return Ok(branch.clone());
+        }
+        let output = std::process::Command::new("git")
+            .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
+            .current_dir(repo_root)
+            .output()
+            .wrap_err("failed to detect default branch")?;
+        if output.status.success() {
+            let branch = String::from_utf8(output.stdout)?.trim().to_string();
+            let branch = branch.strip_prefix("origin/").unwrap_or(&branch).to_string();
+            return Ok(branch);
+        }
+        Ok("main".to_string())
     }
 }
 
@@ -726,7 +765,7 @@ capacity = 50
 
     #[test]
     fn defaults_capacity_when_zero() {
-        let config = NodeConfig::new("node-7f83", 0, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS);
+        let config = NodeConfig::new("node-7f83", 0, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS, None);
         assert_eq!(config.capacity, DEFAULT_CAPACITY);
     }
 
@@ -737,19 +776,20 @@ capacity = 50
             200,
             DEFAULT_API_BUDGET,
             DEFAULT_REQUEST_DELAY_MS,
+            None,
         );
         assert_eq!(config.capacity, 100);
     }
 
     #[test]
     fn defaults_api_budget_when_missing() {
-        let config = NodeConfig::new("node-7f83", DEFAULT_CAPACITY, 0, DEFAULT_REQUEST_DELAY_MS);
+        let config = NodeConfig::new("node-7f83", DEFAULT_CAPACITY, 0, DEFAULT_REQUEST_DELAY_MS, None);
         assert_eq!(config.effective_api_budget(), DEFAULT_API_BUDGET);
     }
 
     #[test]
     fn defaults_request_delay_when_zero() {
-        let config = NodeConfig::new("node-7f83", DEFAULT_CAPACITY, DEFAULT_API_BUDGET, 0);
+        let config = NodeConfig::new("node-7f83", DEFAULT_CAPACITY, DEFAULT_API_BUDGET, 0, None);
         assert_eq!(
             config.effective_request_delay_ms(),
             DEFAULT_REQUEST_DELAY_MS

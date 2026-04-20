@@ -3,12 +3,15 @@ pub mod annotate;
 pub mod attempt;
 pub mod audit;
 pub mod batch_claim;
+pub mod bootstrap;
 pub mod claim;
+pub mod contribute;
 pub mod decide;
 pub mod duties;
 pub mod generate;
 pub mod guards;
 pub mod init;
+pub mod lead;
 pub mod pace;
 pub mod policy_check;
 pub mod prune;
@@ -78,6 +81,9 @@ pub async fn run(ctx: AppContext) -> Result<()> {
         Commands::PolicyCheck(args) => policy_check::run(&ctx, args).await,
         Commands::Decide(args) => decide::run(&ctx, args).await,
         Commands::Prune => prune::run(&ctx).await,
+        Commands::Bootstrap(args) => bootstrap::run(&ctx, args).await,
+        Commands::Lead(args) => lead::run(&ctx, args).await,
+        Commands::Contribute(args) => contribute::run(&ctx, args).await,
     }
 }
 
@@ -131,11 +137,13 @@ pub fn write_node_config(
         .as_ref()
         .map(|config| config.capacity)
         .unwrap_or(crate::config::DEFAULT_CAPACITY);
+    let existing_agent = existing.as_ref().map(|config| config.agent.clone());
     NodeConfig::new(
         node.to_string(),
         capacity.unwrap_or(existing_capacity),
         existing_budget,
         existing_request_delay_ms,
+        existing_agent,
     )
     .save(repo_root)
 }

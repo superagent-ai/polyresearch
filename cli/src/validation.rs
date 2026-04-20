@@ -962,6 +962,7 @@ mod tests {
             min_queue_depth: 5,
             max_queue_depth: Some(10),
             cli_version: None,
+            default_branch: None,
         }
     }
 }

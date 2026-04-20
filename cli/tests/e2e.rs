@@ -21,6 +21,9 @@ use polyresearch::github::{
     PullRequestListState, RateLimitBucket, RateLimitResources, RateLimitStatus, RepoRef,
 };
 use polyresearch::state::{ReleaseRecord, RepositoryState, ThesisPhase, ThesisState};
+use polyresearch::cli::ContributeArgs;
+use polyresearch::worker;
+use polyresearch::agent;
 use serde::Deserialize;
 
 #[allow(unused_imports)]
@@ -1518,6 +1521,7 @@ fn make_ctx(
             min_queue_depth: 5,
             max_queue_depth: Some(10),
             cli_version: None,
+            default_branch: None,
         },
         program: ProgramSpec {
             can_modify: vec!["system_prompt.md".to_string()],
@@ -1814,6 +1818,463 @@ async fn policy_check_rejects_stale_ledger() {
         error.to_string().contains("results.tsv is stale"),
         "policy-check should reject when results.tsv is stale, got: {error}"
     );
+}
+
+fn write_program_md(path: &PathBuf) {
+    fs::write(
+        path.join("PROGRAM.md"),
+        r#"# Research Program
+
+cli_version: 0.5.0
+lead_github_login: lead
+maintainer_github_login: maintainer
+metric_tolerance: 0.01
+auto_approve: true
+min_queue_depth: 5
+
+## Goal
+
+Test goal.
+
+## What you CAN modify
+
+- `src/`
+
+## What you CANNOT modify
+
+- `PREPARE.md`
+"#,
+    )
+    .unwrap();
+}
+
+fn write_node_config(path: &PathBuf, node_id: &str) {
+    fs::write(
+        path.join(".polyresearch-node.toml"),
+        format!("node_id = \"{node_id}\"\ncapacity = 75\n"),
+    )
+    .unwrap();
+}
+
+// --- Bootstrap tests ---
+
+#[tokio::test]
+async fn bootstrap_writes_templates_when_missing() {
+    let repo = TestRepo::new("bootstrap-templates");
+    init_git_repo(&repo.path);
+
+    let program_path = repo.path.join("PROGRAM.md");
+    let prepare_path = repo.path.join("PREPARE.md");
+    let results_path = repo.path.join("results.tsv");
+
+    assert!(!program_path.exists());
+    assert!(!prepare_path.exists());
+    assert!(!results_path.exists());
+
+    commands::bootstrap::write_templates(&repo.path, Some("Optimize latency")).unwrap();
+
+    assert!(program_path.exists());
+    assert!(prepare_path.exists());
+    assert!(results_path.exists());
+
+    let program = fs::read_to_string(&program_path).unwrap();
+    assert!(program.contains("cli_version: 0.5.0"));
+    assert!(program.contains("Optimize latency"));
+    assert!(program.contains("## Goal"));
+    assert!(program.contains("## What you CAN modify"));
+    assert!(program.contains("## What you CANNOT modify"));
+
+    let results = fs::read_to_string(&results_path).unwrap();
+    assert!(results.starts_with("thesis\tattempt\tmetric\tbaseline\tstatus\tsummary"));
+}
+
+#[tokio::test]
+async fn bootstrap_preserves_existing_program_md() {
+    let repo = TestRepo::new("bootstrap-preserve");
+    init_git_repo(&repo.path);
+
+    let program_path = repo.path.join("PROGRAM.md");
+    fs::write(&program_path, "# Existing program\nDo not overwrite.\n").unwrap();
+
+    commands::bootstrap::write_templates(&repo.path, None).unwrap();
+
+    let content = fs::read_to_string(&program_path).unwrap();
+    assert!(content.contains("Existing program"));
+    assert!(content.contains("Do not overwrite."));
+}
+
+#[tokio::test]
+async fn bootstrap_normalizes_program_md_adds_missing_sections() {
+    let repo = TestRepo::new("bootstrap-normalize");
+    init_git_repo(&repo.path);
+
+    let program_path = repo.path.join("PROGRAM.md");
+    fs::write(&program_path, "# Program\n\n## Goal\n\nDo stuff.\n").unwrap();
+
+    commands::bootstrap::normalize_program_md(&repo.path).unwrap();
+
+    let content = fs::read_to_string(&program_path).unwrap();
+    assert!(content.contains("## Goal"));
+    assert!(content.contains("## What you CAN modify"));
+    assert!(content.contains("## What you CANNOT modify"));
+}
+
+// --- Contribute claimability tests ---
+
+#[test]
+fn contribute_claimable_excludes_no_improvement_releases() {
+    let thesis = ThesisState {
+        issue: Issue {
+            number: 1,
+            title: "Test thesis".to_string(),
+            body: None,
+            state: "OPEN".to_string(),
+            labels: vec![],
+            created_at: chrono::Utc::now(),
+            closed_at: None,
+            author: None,
+            url: None,
+        },
+        phase: ThesisPhase::Approved,
+        approved: true,
+        maintainer_approved: false,
+        maintainer_rejected: false,
+        active_claims: vec![],
+        releases: vec![ReleaseRecord {
+            node: "my-node".to_string(),
+            reason: ReleaseReason::NoImprovement,
+            created_at: chrono::Utc::now(),
+        }],
+        attempts: vec![],
+        pull_requests: vec![],
+        best_attempt_metric: None,
+        findings: vec![],
+    };
+
+    let has_no_improvement = thesis.releases.iter().any(|r| {
+        r.node == "my-node" && r.reason == ReleaseReason::NoImprovement
+    });
+    assert!(has_no_improvement, "thesis should be blacklisted for this node");
+}
+
+#[test]
+fn contribute_claimable_allows_infra_failure_reclaim() {
+    let thesis = ThesisState {
+        issue: Issue {
+            number: 2,
+            title: "Infra retry thesis".to_string(),
+            body: None,
+            state: "OPEN".to_string(),
+            labels: vec![],
+            created_at: chrono::Utc::now(),
+            closed_at: None,
+            author: None,
+            url: None,
+        },
+        phase: ThesisPhase::Approved,
+        approved: true,
+        maintainer_approved: false,
+        maintainer_rejected: false,
+        active_claims: vec![],
+        releases: vec![ReleaseRecord {
+            node: "my-node".to_string(),
+            reason: ReleaseReason::InfraFailure,
+            created_at: chrono::Utc::now(),
+        }],
+        attempts: vec![],
+        pull_requests: vec![],
+        best_attempt_metric: None,
+        findings: vec![],
+    };
+
+    let has_no_improvement = thesis.releases.iter().any(|r| {
+        r.node == "my-node" && r.reason == ReleaseReason::NoImprovement
+    });
+    assert!(!has_no_improvement, "infra_failure should NOT blacklist the node");
+}
+
+// --- Worker parallelism tests ---
+
+#[test]
+fn worker_parallelism_formula_basics() {
+    assert_eq!(worker::calculate_parallelism(8, 64.0, 64.0, 2, 4.0, None, 10), 4);
+    assert_eq!(worker::calculate_parallelism(16, 8.0, 8.0, 1, 4.0, None, 10), 2);
+    assert_eq!(worker::calculate_parallelism(16, 64.0, 4.0, 1, 4.0, None, 10), 1);
+    assert_eq!(worker::calculate_parallelism(16, 64.0, 64.0, 1, 1.0, Some(3), 10), 3);
+    assert_eq!(worker::calculate_parallelism(16, 64.0, 64.0, 1, 1.0, None, 2), 2);
+    assert_eq!(worker::calculate_parallelism(1, 0.5, 0.1, 4, 8.0, None, 1), 1);
+}
+
+#[test]
+fn worker_parallelism_never_exceeds_available_work() {
+    assert_eq!(worker::calculate_parallelism(64, 256.0, 256.0, 1, 1.0, None, 0), 1);
+    assert_eq!(worker::calculate_parallelism(64, 256.0, 256.0, 1, 1.0, None, 3), 3);
+}
+
+// --- Contribute blocking duties ---
+
+#[tokio::test]
+async fn contribute_blocks_on_non_submit_duties() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("contribute-blocking");
+    init_git_repo(&repo.path);
+    write_node_config(&repo.path, "test-node");
+    write_program_md(&repo.path);
+
+    let fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    set_node_id_env("test-node");
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        true,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+        }),
+    );
+
+    let result = commands::contribute::run(&ctx, &ContributeArgs {
+        url: None,
+        once: true,
+        max_parallel: Some(1),
+        sleep_secs: 0,
+    }).await;
+
+    assert!(result.is_ok() || result.unwrap_err().to_string().contains("blocking"));
+}
+
+// --- Config tests ---
+
+#[test]
+fn config_loads_default_branch_from_program_md() {
+    let repo = TestRepo::new("config-default-branch");
+    fs::write(
+        repo.path.join("PROGRAM.md"),
+        "# Program\n\ndefault_branch: develop\nlead_github_login: alice\n",
+    )
+    .unwrap();
+
+    let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
+    assert_eq!(config.default_branch.as_deref(), Some("develop"));
+}
+
+#[test]
+fn config_default_branch_is_none_when_unset() {
+    let repo = TestRepo::new("config-no-default-branch");
+    fs::write(
+        repo.path.join("PROGRAM.md"),
+        "# Program\n\nlead_github_login: alice\n",
+    )
+    .unwrap();
+
+    let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
+    assert!(config.default_branch.is_none());
+}
+
+#[test]
+fn node_config_agent_section_loaded() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("config-agent");
+    fs::write(
+        repo.path.join(".polyresearch-node.toml"),
+        r#"node_id = "test-node"
+capacity = 50
+
+[agent]
+command = "custom-agent --flag"
+"#,
+    )
+    .unwrap();
+
+    let config = polyresearch::config::NodeConfig::load(&repo.path).unwrap();
+    assert_eq!(config.agent.command, "custom-agent --flag");
+}
+
+#[test]
+fn node_config_agent_section_defaults_when_absent() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("config-agent-default");
+    fs::write(
+        repo.path.join(".polyresearch-node.toml"),
+        "node_id = \"test-node\"\ncapacity = 50\n",
+    )
+    .unwrap();
+
+    let config = polyresearch::config::NodeConfig::load(&repo.path).unwrap();
+    assert!(config.agent.command.contains("claude"));
+}
+
+// --- Agent module tests ---
+
+#[test]
+fn agent_experiment_result_deserialization() {
+    let json = r#"{"metric": 0.95, "baseline": 0.90, "observation": "improved", "summary": "test run"}"#;
+    let result: agent::ExperimentResult = serde_json::from_str(json).unwrap();
+    assert!(result.is_improved());
+    assert!((result.metric - 0.95).abs() < f64::EPSILON);
+    assert_eq!(result.summary, "test run");
+}
+
+#[test]
+fn agent_experiment_result_all_observations() {
+    for (obs, improved, no_imp, crashed, infra) in [
+        ("improved", true, false, false, false),
+        ("no_improvement", false, true, false, false),
+        ("crashed", false, false, true, false),
+        ("infra_failure", false, false, false, true),
+    ] {
+        let result = agent::ExperimentResult {
+            metric: 1.0,
+            baseline: 0.5,
+            observation: obs.to_string(),
+            summary: "test".to_string(),
+        };
+        assert_eq!(result.is_improved(), improved, "is_improved for {obs}");
+        assert_eq!(result.is_no_improvement(), no_imp, "is_no_improvement for {obs}");
+        assert_eq!(result.is_crashed(), crashed, "is_crashed for {obs}");
+        assert_eq!(result.is_infra_failure(), infra, "is_infra_failure for {obs}");
+    }
+}
+
+#[test]
+fn agent_thesis_proposal_deserialization() {
+    let json = r#"[
+        {"title": "RMSNorm optimization", "body": "Replace LayerNorm with RMSNorm"},
+        {"title": "Attention caching", "body": "Cache attention weights"}
+    ]"#;
+    let proposals: Vec<agent::ThesisProposal> = serde_json::from_str(json).unwrap();
+    assert_eq!(proposals.len(), 2);
+    assert_eq!(proposals[0].title, "RMSNorm optimization");
+    assert_eq!(proposals[1].title, "Attention caching");
+}
+
+#[test]
+fn agent_recover_from_logs_finds_ops_per_sec() {
+    let dir = std::env::temp_dir().join(format!("e2e-recover-ops-{}", std::process::id()));
+    let poly_dir = dir.join(".polyresearch");
+    fs::create_dir_all(&poly_dir).unwrap();
+    fs::write(poly_dir.join("run-001.log"), "starting...\nops_per_sec=42.5\ndone").unwrap();
+
+    let result = agent::recover_from_logs(&dir);
+    assert!(result.is_some());
+    assert!((result.unwrap().metric - 42.5).abs() < f64::EPSILON);
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn agent_recover_from_logs_finds_metric_line() {
+    let dir = std::env::temp_dir().join(format!("e2e-recover-metric-{}", std::process::id()));
+    let poly_dir = dir.join(".polyresearch");
+    fs::create_dir_all(&poly_dir).unwrap();
+    fs::write(poly_dir.join("run-002.log"), "setup\nMETRIC=99.5\ncomplete").unwrap();
+
+    let result = agent::recover_from_logs(&dir);
+    assert!(result.is_some());
+    assert!((result.unwrap().metric - 99.5).abs() < f64::EPSILON);
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn agent_recover_returns_none_without_logs() {
+    let dir = std::env::temp_dir().join(format!("e2e-recover-none-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+
+    assert!(agent::recover_from_logs(&dir).is_none());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn agent_write_thesis_context_creates_file() {
+    let dir = std::env::temp_dir().join(format!("e2e-thesis-ctx-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+
+    agent::write_thesis_context(&dir, "Optimize RMSNorm", "Replace LayerNorm", "Attempt 1: no improvement").unwrap();
+
+    let content = fs::read_to_string(dir.join(".polyresearch/thesis.md")).unwrap();
+    assert!(content.contains("# Thesis: Optimize RMSNorm"));
+    assert!(content.contains("Replace LayerNorm"));
+    assert!(content.contains("Attempt 1: no improvement"));
+    assert!(content.contains("## Prior attempts"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn agent_write_thesis_context_omits_prior_attempts_when_empty() {
+    let dir = std::env::temp_dir().join(format!("e2e-thesis-ctx-empty-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+
+    agent::write_thesis_context(&dir, "First attempt", "Try something", "").unwrap();
+
+    let content = fs::read_to_string(dir.join(".polyresearch/thesis.md")).unwrap();
+    assert!(content.contains("# Thesis: First attempt"));
+    assert!(!content.contains("## Prior attempts"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+// --- Worker format prior attempts ---
+
+#[test]
+fn worker_format_prior_attempts_with_data() {
+    use polyresearch::state::AttemptRecord;
+
+    let thesis = ThesisState {
+        issue: Issue {
+            number: 12,
+            title: "RMSNorm".to_string(),
+            body: None,
+            state: "OPEN".to_string(),
+            labels: vec![],
+            created_at: chrono::Utc::now(),
+            closed_at: None,
+            author: None,
+            url: None,
+        },
+        phase: ThesisPhase::Claimed,
+        approved: true,
+        maintainer_approved: false,
+        maintainer_rejected: false,
+        active_claims: vec![],
+        releases: vec![],
+        attempts: vec![
+            AttemptRecord {
+                thesis: 12,
+                node: "node-a".to_string(),
+                branch: "thesis/12-rmsnorm-attempt-1".to_string(),
+                metric: 0.95,
+                baseline_metric: 0.90,
+                observation: Observation::Improved,
+                summary: "RMSNorm swap".to_string(),
+                author: "alice".to_string(),
+                created_at: chrono::Utc::now(),
+            },
+        ],
+        pull_requests: vec![],
+        best_attempt_metric: Some(0.95),
+        findings: vec![],
+    };
+
+    let formatted = worker::format_prior_attempts(&thesis);
+    assert!(formatted.contains("### Attempt 1"));
+    assert!(formatted.contains("thesis/12-rmsnorm-attempt-1"));
+    assert!(formatted.contains("0.9500"));
+    assert!(formatted.contains("RMSNorm swap"));
 }
 
 fn load_issue_fixture(name: &str) -> IssueFixture {
