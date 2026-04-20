@@ -281,13 +281,15 @@ impl ThesisWorker {
                 worktree_path: self.worktree_path.clone(),
                 result,
             }
+        } else if result.is_crashed() || result.is_infra_failure() {
+            let _ = self.release(&github, ReleaseReason::InfraFailure, dry_run);
+            WorkerOutcome::Failed {
+                issue_number: self.ctx.issue_number,
+                worktree_path: self.worktree_path.clone(),
+                reason: format!("experiment {}", result.observation),
+            }
         } else {
-            let reason = if result.is_crashed() || result.is_infra_failure() {
-                ReleaseReason::InfraFailure
-            } else {
-                ReleaseReason::NoImprovement
-            };
-            let _ = self.release(&github, reason, dry_run);
+            let _ = self.release(&github, ReleaseReason::NoImprovement, dry_run);
             WorkerOutcome::NoImprovement {
                 issue_number: self.ctx.issue_number,
                 worktree_path: self.worktree_path.clone(),
@@ -365,8 +367,12 @@ impl ThesisWorker {
             let _ = commands::run_git(&self.worktree_path, &["reset", "HEAD", "--", glob]);
         }
 
-        let status = commands::run_git(&self.worktree_path, &["status", "--porcelain"])?;
-        if status.is_empty() {
+        let has_staged = commands::run_git(
+            &self.worktree_path,
+            &["diff", "--cached", "--quiet"],
+        )
+        .is_err();
+        if !has_staged {
             return Err(eyre!("no changes to commit within the editable surface"));
         }
 

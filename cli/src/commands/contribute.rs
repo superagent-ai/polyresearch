@@ -118,17 +118,18 @@ async fn run_iteration(
             if worktree_path.exists() {
                 let branch = commands::current_branch(&worktree_path).unwrap_or_default();
                 if !branch.is_empty() && !ctx.cli.dry_run {
-                    let _ = commands::run_git(&worktree_path, &["push", "-u", "origin", &branch]);
-                    let _ = ctx.github.create_pull_request(
-                        &branch,
-                        &format!(
-                            "Thesis #{}: {}",
-                            thesis.issue.number, thesis.issue.title
-                        ),
-                        &format!("References #{}", thesis.issue.number),
-                        default_branch,
-                    );
-                    submitted_any = true;
+                    match commands::run_git(&worktree_path, &["push", "-u", "origin", &branch]) {
+                        Ok(_) => match ctx.github.create_pull_request(
+                            &branch,
+                            &format!("Thesis #{}: {}", thesis.issue.number, thesis.issue.title),
+                            &format!("References #{}", thesis.issue.number),
+                            default_branch,
+                        ) {
+                            Ok(_) => { submitted_any = true; }
+                            Err(err) => eprintln!("Warning: PR creation failed for thesis #{}: {err}", thesis.issue.number),
+                        },
+                        Err(err) => eprintln!("Warning: push failed for thesis #{}: {err}", thesis.issue.number),
+                    }
                 }
             }
         }
