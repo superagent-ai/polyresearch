@@ -282,14 +282,18 @@ fn determine_parallelism(
         target_parallel = target_parallel.min(max_parallel.max(1));
     }
 
-    let claimable = repo_state
+    let node = crate::commands::read_node_id(&ctx.repo_root).unwrap_or_default();
+    let available_work = repo_state
         .theses
         .iter()
         .filter(|thesis| thesis.issue.state == "OPEN")
-        .filter(|thesis| matches!(thesis.phase, ThesisPhase::Approved))
+        .filter(|thesis| {
+            matches!(thesis.phase, ThesisPhase::Approved)
+                || (matches!(thesis.phase, ThesisPhase::Claimed) && thesis.is_claimed_by(&node))
+        })
         .count();
 
-    Ok(target_parallel.min(claimable.max(1)))
+    Ok(target_parallel.min(available_work.max(1)))
 }
 
 fn select_claimable_theses<'a>(
@@ -566,16 +570,7 @@ fn create_baseline_worktree(repo_root: &PathBuf, default_branch: &str) -> Result
 }
 
 fn extract_metric_from_log(contents: &str) -> Option<f64> {
-    let ops = regex::Regex::new(r"ops_per_sec=([0-9]+(?:\.[0-9]+)?)").ok()?;
-    if let Some(captures) = ops.captures(contents) {
-        return captures.get(1).and_then(|m| m.as_str().parse::<f64>().ok());
-    }
-
-    let metric = regex::Regex::new(r"(?m)^METRIC=([0-9]+(?:\.[0-9]+)?)$").ok()?;
-    metric
-        .captures(contents)
-        .and_then(|captures| captures.get(1))
-        .and_then(|m| m.as_str().parse::<f64>().ok())
+    crate::agent::extract_metric_from_log(contents)
 }
 
 fn print_summary(

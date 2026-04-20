@@ -272,7 +272,7 @@ pub fn recover_experiment_result(
     })
 }
 
-fn extract_metric_from_log(contents: &str) -> Option<f64> {
+pub fn extract_metric_from_log(contents: &str) -> Option<f64> {
     static OPS_RE: OnceLock<Regex> = OnceLock::new();
     static METRIC_RE: OnceLock<Regex> = OnceLock::new();
 
