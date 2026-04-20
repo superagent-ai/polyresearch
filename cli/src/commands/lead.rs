@@ -56,10 +56,11 @@ async fn run_iteration(
 
     sync_if_stale(ctx, &repo_state, default_branch)?;
     policy_check_open_prs(ctx, &repo_state)?;
+
+    let repo_state = RepositoryState::derive(&ctx.github, config).await?;
     decide_ready_prs(ctx, config, &repo_state)?;
 
     let repo_state = RepositoryState::derive(&ctx.github, config).await?;
-
     generate_if_needed(ctx, config, &repo_state, agent_command, default_branch).await?;
 
     Ok(())
@@ -237,7 +238,7 @@ async fn generate_if_needed(
         return Ok(());
     }
 
-    let needed = config.min_queue_depth - repo_state.queue_depth;
+    let needed = config.min_queue_depth.saturating_sub(repo_state.queue_depth);
     let capped = config.max_queue_depth
         .map(|max| needed.min(max.saturating_sub(repo_state.queue_depth)))
         .unwrap_or(needed);
