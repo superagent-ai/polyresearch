@@ -73,7 +73,7 @@ fn fork_and_clone(url: &str, fork_owner: &str, repo_root: &Path) -> Result<()> {
 fn clone_if_needed(url: &str, repo_root: &Path) -> Result<()> {
     if repo_root.join(".git").exists() {
         eprintln!("Repository already exists at {}", repo_root.display());
-        commands::run_git(&repo_root.to_path_buf(), &["fetch", "origin"])?;
+        let _ = commands::run_git(&repo_root.to_path_buf(), &["fetch", "origin"]);
         return Ok(());
     }
 
