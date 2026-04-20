@@ -152,7 +152,7 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
             };
             claimed_count += 1;
             let worktree_path = workspace.worktree_path;
-            sync_project_files_to_worktree(&ctx.repo_root, &worktree_path)?;
+            sync_node_config_to_worktree(&ctx.repo_root, &worktree_path)?;
             write_thesis_context(&worktree_path, thesis)?;
 
             let prompt = "Read PROGRAM.md, PREPARE.md, and .polyresearch/thesis.md, then work only the current thesis. Run one baseline plus at most 3 serious candidate attempts in this session. If you find a clear improvement earlier, stop early. When you are done, write .polyresearch/result.json exactly as PROGRAM.md specifies and exit immediately.".to_string();
@@ -192,12 +192,30 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
             print_progress(ctx, format!("Claiming {} thesis(es)...", theses.len()));
         }
         for thesis in theses {
-            let claim = claim_selected_thesis(ctx, thesis, &node)?;
+            let claim = match claim_selected_thesis(ctx, thesis, &node) {
+                Ok(claim) => claim,
+                Err(error) => {
+                    eprintln!("Failed to claim thesis #{}: {error}", thesis.issue.number);
+                    continue;
+                }
+            };
             claimed_count += 1;
 
             let worktree_path = PathBuf::from(&claim.worktree_path);
-            sync_project_files_to_worktree(&ctx.repo_root, &worktree_path)?;
-            write_thesis_context(&worktree_path, thesis)?;
+            if let Err(error) = sync_node_config_to_worktree(&ctx.repo_root, &worktree_path)
+                .and_then(|()| write_thesis_context(&worktree_path, thesis))
+            {
+                eprintln!("Failed to set up worktree for thesis #{}: {error}", claim.issue);
+                let _ = release::run(
+                    ctx,
+                    &ReleaseArgs {
+                        issue: claim.issue,
+                        reason: ReleaseReason::InfraFailure,
+                    },
+                )
+                .await;
+                continue;
+            }
 
             let prompt = "Read PROGRAM.md, PREPARE.md, and .polyresearch/thesis.md, then work only the current thesis. Run one baseline plus at most 3 serious candidate attempts in this session. If you find a clear improvement earlier, stop early. When you are done, write .polyresearch/result.json exactly as PROGRAM.md specifies and exit immediately.".to_string();
             let issue = claim.issue;
@@ -236,10 +254,22 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
 
         let mut processed = 0usize;
         while let Some(next) = tasks.join_next().await {
-            let worker = next.map_err(|error| eyre!("experiment worker task failed: {error}"))??;
+            let worker = match next {
+                Ok(Ok(worker)) => worker,
+                Ok(Err(error)) => {
+                    eprintln!("Experiment worker failed: {error}");
+                    continue;
+                }
+                Err(error) => {
+                    eprintln!("Experiment worker task panicked: {error}");
+                    continue;
+                }
+            };
             processed += 1;
             print_progress(ctx, format!("Recording result for thesis #{}...", worker.issue));
-            handle_worker_result(ctx, worker).await?;
+            if let Err(error) = handle_worker_result(ctx, worker).await {
+                eprintln!("Failed to record worker result: {error}");
+            }
         }
 
         if args.once {
@@ -448,21 +478,19 @@ fn remove_worktree(repo_root: &PathBuf, worktree_path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn sync_project_files_to_worktree(repo_root: &PathBuf, worktree_path: &PathBuf) -> Result<()> {
-    for name in [".polyresearch-node.toml", "PROGRAM.md", "PREPARE.md"] {
-        let source = repo_root.join(name);
-        if !source.exists() {
-            continue;
-        }
-        let destination = worktree_path.join(name);
-        fs::copy(&source, &destination).wrap_err_with(|| {
-            format!(
-                "failed to copy {} to {}",
-                source.display(),
-                destination.display()
-            )
-        })?;
+fn sync_node_config_to_worktree(repo_root: &PathBuf, worktree_path: &PathBuf) -> Result<()> {
+    let source = repo_root.join(".polyresearch-node.toml");
+    let destination = worktree_path.join(".polyresearch-node.toml");
+    if !source.exists() {
+        return Ok(());
     }
+    fs::copy(&source, &destination).wrap_err_with(|| {
+        format!(
+            "failed to copy {} to {}",
+            source.display(),
+            destination.display()
+        )
+    })?;
     Ok(())
 }
 
