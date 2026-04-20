@@ -76,6 +76,24 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
         let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
         auto_submit_blocking(ctx, &repo_state).await?;
 
+        let duty_report = duties::check(ctx, &repo_state)?;
+        if !duty_report.blocking.is_empty() {
+            if args.once {
+                let items: Vec<String> = duty_report
+                    .blocking
+                    .iter()
+                    .map(|d| format!("  [{}] {} Run: {}", d.category, d.message, d.command))
+                    .collect();
+                return Err(eyre!(
+                    "cannot contribute while blocking duties exist:\n{}",
+                    items.join("\n")
+                ));
+            }
+            print_progress(ctx, "Blocking duties remain after auto-submit. Sleeping before retry...");
+            tokio::time::sleep(Duration::from_secs(args.sleep_secs)).await;
+            continue;
+        }
+
         let target_parallel = determine_parallelism(ctx, args, &repo_state)?;
         let node = crate::commands::read_node_id(&ctx.repo_root)?;
         let resumable = select_resumable_theses(&repo_state, &node, target_parallel);
@@ -293,7 +311,7 @@ fn determine_parallelism(
         })
         .count();
 
-    Ok(target_parallel.min(available_work.max(1)))
+    Ok(target_parallel.min(available_work))
 }
 
 fn select_claimable_theses<'a>(
