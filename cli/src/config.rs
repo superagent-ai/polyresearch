@@ -226,7 +226,6 @@ pub struct ProtocolConfig {
     pub default_branch: Option<String>,
     pub auto_approve: bool,
     pub assignment_timeout: Duration,
-    pub review_timeout: Duration,
     pub min_queue_depth: usize,
     pub max_queue_depth: Option<usize>,
     pub cli_version: Option<String>,
@@ -243,7 +242,6 @@ impl Default for ProtocolConfig {
             default_branch: None,
             auto_approve: true,
             assignment_timeout: Duration::from_secs(24 * 60 * 60),
-            review_timeout: Duration::from_secs(12 * 60 * 60),
             min_queue_depth: 5,
             max_queue_depth: None,
             cli_version: None,
@@ -317,7 +315,6 @@ impl ProtocolConfig {
                 }
                 "auto_approve" => config.auto_approve = parse_bool(value)?,
                 "assignment_timeout" => config.assignment_timeout = parse_duration(value)?,
-                "review_timeout" => config.review_timeout = parse_duration(value)?,
                 "min_queue_depth" => {
                     config.min_queue_depth = value
                         .parse()
@@ -396,7 +393,7 @@ pub struct ProgramSpec {
 }
 
 impl ProgramSpec {
-    pub fn load(repo_root: &Path, _config: &ProtocolConfig) -> Result<Self> {
+    pub fn load(repo_root: &Path) -> Result<Self> {
         let path = repo_root.join("PROGRAM.md");
         let contents = fs::read_to_string(&path)
             .wrap_err_with(|| format!("failed to read {}", path.display()))?;

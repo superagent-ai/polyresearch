@@ -1900,7 +1900,6 @@ fn make_ctx(
             default_branch: Some("main".to_string()),
             auto_approve: true,
             assignment_timeout: Duration::from_secs(24 * 60 * 60),
-            review_timeout: Duration::from_secs(12 * 60 * 60),
             min_queue_depth: 5,
             max_queue_depth: Some(10),
             cli_version: None,

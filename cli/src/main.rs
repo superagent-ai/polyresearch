@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
     if !is_bootstrap {
         config.check_cli_version(env!("CARGO_PKG_VERSION"))?;
     }
-    let program = load_program_spec(&repo_root, &config, &cli.command)?;
+    let program = load_program_spec(&repo_root, &cli.command)?;
     let default_branch = if is_bootstrap {
         config
             .default_branch
@@ -75,11 +75,7 @@ fn prepare_repo_root(start: &PathBuf, command: &Commands) -> Result<PathBuf> {
     }
 }
 
-fn load_program_spec(
-    repo_root: &PathBuf,
-    config: &ProtocolConfig,
-    command: &Commands,
-) -> Result<ProgramSpec> {
+fn load_program_spec(repo_root: &PathBuf, command: &Commands) -> Result<ProgramSpec> {
     if matches!(command, Commands::Bootstrap(_)) && !repo_root.join("PROGRAM.md").exists() {
         return Ok(ProgramSpec {
             can_modify: Vec::new(),
@@ -87,7 +83,7 @@ fn load_program_spec(
         });
     }
 
-    ProgramSpec::load(repo_root, config)
+    ProgramSpec::load(repo_root)
 }
 
 fn discover_repo_root(start: &PathBuf) -> Result<PathBuf> {

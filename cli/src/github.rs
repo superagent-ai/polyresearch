@@ -664,8 +664,6 @@ pub struct IssueComment {
     pub body: String,
     pub user: CommentUser,
     pub created_at: DateTime<Utc>,
-    #[serde(default)]
-    pub updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

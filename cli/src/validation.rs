@@ -98,27 +98,12 @@ pub struct ValidDecisionRecord {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MaintainerVerdict {
-    Approve,
-    Reject,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct MaintainerFeedback {
-    pub verdict: MaintainerVerdict,
-    pub reason: Option<String>,
-    pub created_at: DateTime<Utc>,
-}
-
 #[derive(Debug, Clone)]
 pub struct PullRequestValidation {
     pub thesis_number: Option<u64>,
     pub policy_pass: bool,
     pub maintainer_approved: bool,
     pub maintainer_rejected: bool,
-    pub maintainer_feedback: Vec<MaintainerFeedback>,
     pub review_claims: Vec<ValidReviewClaimRecord>,
     pub reviews: Vec<ValidReviewRecord>,
     pub decision: Option<ValidDecisionRecord>,
@@ -130,7 +115,6 @@ pub struct IssueValidation {
     pub approved: bool,
     pub maintainer_approved: bool,
     pub maintainer_rejected: bool,
-    pub maintainer_feedback: Vec<MaintainerFeedback>,
     pub active_claims: Vec<ValidClaimRecord>,
     pub releases: Vec<ValidReleaseRecord>,
     pub attempts: Vec<ValidAttemptRecord>,
@@ -160,7 +144,6 @@ pub fn validate_pull_request(
     let mut policy_pass = false;
     let mut maintainer_approved = false;
     let mut maintainer_rejected = false;
-    let mut maintainer_feedback = Vec::new();
     let mut review_claims = Vec::new();
     let mut claimed_nodes = BTreeSet::new();
     let mut reviews = Vec::new();
@@ -173,7 +156,7 @@ pub fn validate_pull_request(
 
     for comment in sorted_comments {
         match &comment.protocol {
-            Some(ProtocolComment::SlashApprove { reason }) => {
+            Some(ProtocolComment::SlashApprove { .. }) => {
                 if !is_maintainer_actor(&comment.author, config) {
                     if config.auto_approve {
                         continue;
@@ -186,14 +169,9 @@ pub fn validate_pull_request(
                 } else {
                     maintainer_approved = true;
                     maintainer_rejected = false;
-                    maintainer_feedback.push(MaintainerFeedback {
-                        verdict: MaintainerVerdict::Approve,
-                        reason: reason.clone(),
-                        created_at: comment.created_at,
-                    });
                 }
             }
-            Some(ProtocolComment::SlashReject { reason }) => {
+            Some(ProtocolComment::SlashReject { .. }) => {
                 if !is_maintainer_actor(&comment.author, config) {
                     findings.push(invalid_issue_like(
                         AuditScope::PullRequest { number: pr.number },
@@ -203,11 +181,6 @@ pub fn validate_pull_request(
                 } else {
                     maintainer_approved = false;
                     maintainer_rejected = true;
-                    maintainer_feedback.push(MaintainerFeedback {
-                        verdict: MaintainerVerdict::Reject,
-                        reason: reason.clone(),
-                        created_at: comment.created_at,
-                    });
                 }
             }
             Some(ProtocolComment::AdminNote {
@@ -393,7 +366,6 @@ pub fn validate_pull_request(
         policy_pass,
         maintainer_approved,
         maintainer_rejected,
-        maintainer_feedback,
         review_claims,
         reviews,
         decision,
@@ -413,7 +385,6 @@ pub fn validate_issue(
     let mut approved = false;
     let mut maintainer_approved = false;
     let mut maintainer_rejected = false;
-    let mut maintainer_feedback = Vec::new();
     let mut findings = Vec::new();
     let mut acknowledged_comment_ids = BTreeSet::new();
     let mut active_claims = HashMap::<String, ValidClaimRecord>::new();
@@ -425,7 +396,7 @@ pub fn validate_issue(
 
     for comment in sorted_comments {
         match &comment.protocol {
-            Some(ProtocolComment::SlashApprove { reason }) => {
+            Some(ProtocolComment::SlashApprove { .. }) => {
                 if !is_maintainer_actor(&comment.author, config) {
                     if config.auto_approve {
                         continue;
@@ -441,14 +412,9 @@ pub fn validate_issue(
                     approved = true;
                     maintainer_approved = true;
                     maintainer_rejected = false;
-                    maintainer_feedback.push(MaintainerFeedback {
-                        verdict: MaintainerVerdict::Approve,
-                        reason: reason.clone(),
-                        created_at: comment.created_at,
-                    });
                 }
             }
-            Some(ProtocolComment::SlashReject { reason }) => {
+            Some(ProtocolComment::SlashReject { .. }) => {
                 if !is_maintainer_actor(&comment.author, config) {
                     findings.push(invalid_issue_like(
                         AuditScope::Issue {
@@ -461,11 +427,6 @@ pub fn validate_issue(
                     approved = false;
                     maintainer_approved = false;
                     maintainer_rejected = true;
-                    maintainer_feedback.push(MaintainerFeedback {
-                        verdict: MaintainerVerdict::Reject,
-                        reason: reason.clone(),
-                        created_at: comment.created_at,
-                    });
                 }
             }
             Some(ProtocolComment::AdminNote {
@@ -709,7 +670,6 @@ pub fn validate_issue(
         approved,
         maintainer_approved,
         maintainer_rejected,
-        maintainer_feedback,
         active_claims,
         releases,
         attempts,
@@ -901,7 +861,6 @@ mod tests {
         assert!(validation.approved);
         assert!(validation.maintainer_approved);
         assert!(!validation.maintainer_rejected);
-        assert_eq!(validation.maintainer_feedback.len(), 1);
         assert!(validation.findings.is_empty());
     }
 
@@ -921,7 +880,6 @@ mod tests {
         assert!(!validation.approved);
         assert!(!validation.maintainer_approved);
         assert!(validation.maintainer_rejected);
-        assert_eq!(validation.maintainer_feedback.len(), 1);
         assert!(validation.findings.is_empty());
     }
 
@@ -981,7 +939,6 @@ mod tests {
             default_branch: Some("main".to_string()),
             auto_approve: true,
             assignment_timeout: std::time::Duration::from_secs(24 * 60 * 60),
-            review_timeout: std::time::Duration::from_secs(12 * 60 * 60),
             min_queue_depth: 5,
             max_queue_depth: Some(10),
             cli_version: None,
