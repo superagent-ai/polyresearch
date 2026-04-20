@@ -42,6 +42,8 @@ Review `PROGRAM.md` and `PREPARE.md`, tweak them for your project, commit, and p
 
 ### 2. Run the lead
 
+From the root of your project (where you ran `bootstrap`):
+
 ```bash
 polyresearch lead
 ```
@@ -58,12 +60,6 @@ polyresearch contribute https://github.com/owner/repo
 
 The contributor clones the repo, claims theses from the issue queue, spawns an agent for each one, records results, and submits PRs. Launch as many contributor machines as you want -- they all pull from the same queue.
 
-### Hardware utilization
-
-A single evaluation often doesn't saturate a machine. The `contribute` command handles this automatically: it reads `capacity` from your node config and `eval_cores`/`eval_memory_gb` from `PREPARE.md`, probes the hardware, and claims multiple theses in parallel when resources allow.
-
-`polyresearch pace` shows the reasoning -- your hardware budget, live free resources, and GitHub API quota -- so you can see exactly what the contributor will do.
-
 ### Run on a remote machine
 
 Run the contributor directly on the server so file access, git operations, and evaluations are all local. Use `tmux` so the session survives disconnects:
@@ -72,10 +68,10 @@ Run the contributor directly on the server so file access, git operations, and e
 ssh user@remote-host
 tmux new-session -s polyresearch
 polyresearch contribute https://github.com/owner/repo
-# Detach with Ctrl-B D. Reconnect with: tmux attach -t polyresearch
+# Detach with Ctrl-B D
 ```
 
-If your laptop sleeps or your network drops, the contributor keeps working. Reconnect later with `tmux attach -t polyresearch`.
+Detach and reconnect later with `tmux attach -t polyresearch` -- the session persists even if your SSH connection drops.
 
 ## CLI
 
@@ -85,21 +81,15 @@ Full command reference in [cli/README.md](cli/README.md).
 
 ## Design
 
-**Protocol, not a platform.** Two markdown files (`PROGRAM.md` and `PREPARE.md`) and an optional environment directory dropped into any repo. No opinions on agent, model, sandbox, or language.
+**Agent-agnostic.** The CLI handles all coordination. Agents only need to read `PROGRAM.md`, run experiments, and report results. No opinions on model, sandbox, or language.
 
 **Structured comments as state.** Coordination happens through structured HTML comments on GitHub Issues and PRs. State is derived from the comment trail, not from labels or a database. Every transition is append-only and auditable.
 
-**Claim-based work distribution.** Theses live on GitHub Issues. Contributors claim them atomically through the CLI. Stale claims expire after a configurable timeout and return to the queue.
-
 **The evaluation is the trust boundary.** `PREPARE.md` defines how results are judged. The evaluation code lives outside the editable surface. Agents cannot modify the evaluator or the scoring logic.
-
-**Peer review.** When enabled, reviewers independently check out the candidate and the baseline, run the evaluation themselves, and post their own measurements. The lead only merges when reviewers agree.
 
 **Human-in-the-loop.** Set `auto_approve: false` and the lead waits for the maintainer to `/approve` or `/reject` each thesis and PR. Maintainer feedback steers future thesis generation.
 
-**Failed experiments are data.** Every attempt gets a row in `results.tsv` and stays as an unmerged branch. The lead reads the full history to generate new theses and avoid dead ends.
-
-**Resource pacing.** Each node sets a `capacity` percentage in `.polyresearch-node.toml` (default 75). `polyresearch pace` probes the hardware, prints the project's share plus live load, and determines how many theses to run in parallel given each eval's footprint.
+**Hardware utilization.** Each node sets a `capacity` percentage in `.polyresearch-node.toml` (default 75). `polyresearch pace` probes the hardware, prints the project's share plus live load, and determines how many theses to run in parallel given each eval's footprint.
 
 ## Examples
 
