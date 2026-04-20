@@ -30,7 +30,7 @@ struct ContributeOutput {
 struct WorkerResult {
     issue: u64,
     worktree_path: PathBuf,
-    result: ExperimentResult,
+    result: Result<ExperimentResult>,
 }
 
 pub fn prepare_checkout(start: &Path, repo_url: &str) -> Result<PathBuf> {
@@ -161,30 +161,25 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
             let default_branch = default_branch.clone();
             let primary_repo_root = primary_repo_root.clone();
 
-            tasks.spawn_blocking(move || -> Result<WorkerResult> {
-                let result = match runner.run_experiment(&prompt, &worktree_path) {
-                    Ok(result) => result,
-                    Err(error) => recover_experiment_result(&worktree_path, direction, tolerance)
-                        .or_else(|_| {
-                            evaluate_with_harness(
-                                &worktree_path,
-                                &primary_repo_root,
-                                &default_branch,
-                                direction,
-                                tolerance,
-                            )
+            tasks.spawn_blocking(move || {
+                let result = runner
+                    .run_experiment(&prompt, &worktree_path)
+                    .or_else(|error| {
+                        recover_experiment_result(&worktree_path, direction, tolerance).or_else(
+                            |_| {
+                                evaluate_with_harness(
+                                    &worktree_path,
+                                    &primary_repo_root,
+                                    &default_branch,
+                                    direction,
+                                    tolerance,
+                                )
+                            },
+                        ).map_err(|recovery_error| {
+                            eyre!("{error}\n\nFallback recovery from run logs also failed: {recovery_error}")
                         })
-                        .map_err(|recovery_error| {
-                            eyre!(
-                                "{error}\n\nFallback recovery from run logs also failed: {recovery_error}"
-                            )
-                        })?,
-                };
-                Ok(WorkerResult {
-                    issue,
-                    worktree_path,
-                    result,
-                })
+                    });
+                WorkerResult { issue, worktree_path, result }
             });
         }
 
@@ -231,30 +226,25 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
             let default_branch = default_branch.clone();
             let primary_repo_root = primary_repo_root.clone();
 
-            tasks.spawn_blocking(move || -> Result<WorkerResult> {
-                let result = match runner.run_experiment(&prompt, &worktree_path) {
-                    Ok(result) => result,
-                    Err(error) => recover_experiment_result(&worktree_path, direction, tolerance)
-                        .or_else(|_| {
-                            evaluate_with_harness(
-                                &worktree_path,
-                                &primary_repo_root,
-                                &default_branch,
-                                direction,
-                                tolerance,
-                            )
+            tasks.spawn_blocking(move || {
+                let result = runner
+                    .run_experiment(&prompt, &worktree_path)
+                    .or_else(|error| {
+                        recover_experiment_result(&worktree_path, direction, tolerance).or_else(
+                            |_| {
+                                evaluate_with_harness(
+                                    &worktree_path,
+                                    &primary_repo_root,
+                                    &default_branch,
+                                    direction,
+                                    tolerance,
+                                )
+                            },
+                        ).map_err(|recovery_error| {
+                            eyre!("{error}\n\nFallback recovery from run logs also failed: {recovery_error}")
                         })
-                        .map_err(|recovery_error| {
-                            eyre!(
-                                "{error}\n\nFallback recovery from run logs also failed: {recovery_error}"
-                            )
-                        })?,
-                };
-                Ok(WorkerResult {
-                    issue,
-                    worktree_path,
-                    result,
-                })
+                    });
+                WorkerResult { issue, worktree_path, result }
             });
         }
 
@@ -263,20 +253,33 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
         let mut processed = 0usize;
         while let Some(next) = tasks.join_next().await {
             let worker = match next {
-                Ok(Ok(worker)) => worker,
-                Ok(Err(error)) => {
-                    eprintln!("Experiment worker failed: {error}");
-                    continue;
-                }
-                Err(error) => {
-                    eprintln!("Experiment worker task panicked: {error}");
+                Ok(worker) => worker,
+                Err(panic_err) => {
+                    eprintln!("Experiment worker task panicked: {panic_err}");
                     continue;
                 }
             };
             processed += 1;
-            print_progress(ctx, format!("Recording result for thesis #{}...", worker.issue));
-            if let Err(error) = handle_worker_result(ctx, worker).await {
-                eprintln!("Failed to record worker result: {error}");
+            match worker.result {
+                Ok(experiment) => {
+                    print_progress(ctx, format!("Recording result for thesis #{}...", worker.issue));
+                    if let Err(error) = handle_worker_result(
+                        ctx, worker.issue, &worker.worktree_path, experiment,
+                    ).await {
+                        eprintln!("Failed to record result for thesis #{}: {error}", worker.issue);
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Experiment failed for thesis #{}: {error}", worker.issue);
+                    let _ = release::run(
+                        ctx,
+                        &ReleaseArgs {
+                            issue: worker.issue,
+                            reason: ReleaseReason::InfraFailure,
+                        },
+                    ).await;
+                    let _ = remove_worktree(&ctx.repo_root, &worker.worktree_path);
+                }
             }
         }
 
@@ -412,36 +415,41 @@ fn select_resumable_theses<'a>(
     theses
 }
 
-async fn handle_worker_result(ctx: &AppContext, worker: WorkerResult) -> Result<()> {
-    let mut worker_ctx = ctx.clone();
-    worker_ctx.repo_root = worker.worktree_path.clone();
+async fn handle_worker_result(
+    ctx: &AppContext,
+    issue: u64,
+    worktree_path: &Path,
+    result: ExperimentResult,
+) -> Result<()> {
+    let mut worktree_ctx = ctx.clone();
+    worktree_ctx.repo_root = worktree_path.to_path_buf();
 
-    if worker.result.observation == Observation::Improved {
-        commit_if_dirty(&worker.worktree_path, worker.issue)?;
+    if result.observation == Observation::Improved {
+        commit_if_dirty(worktree_path, issue)?;
     }
 
     attempt::run(
-        &worker_ctx,
+        &worktree_ctx,
         &AttemptArgs {
-            issue: worker.issue,
-            metric: worker.result.metric,
-            baseline: worker.result.baseline,
-            observation: worker.result.observation,
-            summary: worker.result.summary.clone(),
+            issue,
+            metric: result.metric,
+            baseline: result.baseline,
+            observation: result.observation,
+            summary: result.summary.clone(),
             annotations: None,
         },
     )
     .await?;
 
-    match worker.result.observation {
+    match result.observation {
         Observation::Improved => {
-            submit::run(&worker_ctx, &crate::cli::IssueArgs { issue: worker.issue }).await?;
+            submit::run(&worktree_ctx, &crate::cli::IssueArgs { issue }).await?;
         }
         Observation::NoImprovement => {
             release::run(
-                &worker_ctx,
+                &worktree_ctx,
                 &ReleaseArgs {
-                    issue: worker.issue,
+                    issue,
                     reason: ReleaseReason::NoImprovement,
                 },
             )
@@ -449,9 +457,9 @@ async fn handle_worker_result(ctx: &AppContext, worker: WorkerResult) -> Result<
         }
         Observation::Crashed | Observation::InfraFailure => {
             release::run(
-                &worker_ctx,
+                &worktree_ctx,
                 &ReleaseArgs {
-                    issue: worker.issue,
+                    issue,
                     reason: ReleaseReason::InfraFailure,
                 },
             )
@@ -459,19 +467,20 @@ async fn handle_worker_result(ctx: &AppContext, worker: WorkerResult) -> Result<
         }
     }
 
-    remove_worktree(&ctx.repo_root, &worker.worktree_path)?;
+    remove_worktree(&ctx.repo_root, &worktree_path.to_path_buf())?;
     Ok(())
 }
 
-fn commit_if_dirty(worktree_path: &PathBuf, issue: u64) -> Result<()> {
-    let status = crate::commands::run_git(worktree_path, &["status", "--porcelain"])?;
+fn commit_if_dirty(worktree_path: &Path, issue: u64) -> Result<()> {
+    let path = &worktree_path.to_path_buf();
+    let status = crate::commands::run_git(path, &["status", "--porcelain"])?;
     if status.trim().is_empty() {
         return Ok(());
     }
 
-    crate::commands::run_git(worktree_path, &["add", "-A"])?;
+    crate::commands::run_git(path, &["add", "-A"])?;
     crate::commands::run_git(
-        worktree_path,
+        path,
         &["commit", "-m", &format!("Finalize best experiment for thesis #{issue}.")],
     )?;
     Ok(())

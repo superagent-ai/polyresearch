@@ -119,7 +119,11 @@ pub async fn run(ctx: &AppContext, args: &LeadArgs) -> Result<()> {
 
         let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
         let invalid_audit = !repo_state.audit_findings.is_empty();
-        if !invalid_audit && repo_state.queue_depth < ctx.config.min_queue_depth {
+        let at_max = ctx
+            .config
+            .max_queue_depth
+            .is_some_and(|max| repo_state.queue_depth >= max);
+        if !invalid_audit && !at_max && repo_state.queue_depth < ctx.config.min_queue_depth {
             print_progress(
                 ctx,
                 format!(
@@ -134,7 +138,14 @@ pub async fn run(ctx: &AppContext, args: &LeadArgs) -> Result<()> {
             })
             .await
             .map_err(|err| eyre!("thesis generation task failed: {err}"))??;
-            let desired = ctx.config.min_queue_depth.saturating_sub(repo_state.queue_depth).max(1);
+            let mut desired = ctx
+                .config
+                .min_queue_depth
+                .saturating_sub(repo_state.queue_depth)
+                .max(1);
+            if let Some(max) = ctx.config.max_queue_depth {
+                desired = desired.min(max.saturating_sub(repo_state.queue_depth));
+            }
             proposals.truncate(desired);
             for proposal in proposals {
                 generate::run(
