@@ -32,7 +32,7 @@ pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
         advisory: Vec::new(),
         clean: true,
     };
-    duties::require_no_blocking(&lead_report, "generate theses while PRs need processing")?;
+    duties::require_no_blocking(&lead_report, "generate")?;
 
     if let Some(max_queue_depth) = ctx.config.max_queue_depth {
         if repo_state.queue_depth >= max_queue_depth {
