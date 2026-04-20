@@ -117,7 +117,17 @@ async fn run_iteration(
             );
             if worktree_path.exists() {
                 let branch = commands::current_branch(&worktree_path).unwrap_or_default();
-                if !branch.is_empty() && !ctx.cli.dry_run {
+                let expected_prefix = format!("thesis/{}-", thesis.issue.number);
+                if !branch.starts_with(&expected_prefix) {
+                    if !branch.is_empty() {
+                        eprintln!(
+                            "Warning: thesis #{} worktree on unexpected branch `{branch}`, skipping auto-submit",
+                            thesis.issue.number
+                        );
+                    }
+                    continue;
+                }
+                if !ctx.cli.dry_run {
                     match commands::run_git(&worktree_path, &["push", "-u", "origin", &branch]) {
                         Ok(_) => match ctx.github.create_pull_request(
                             &branch,

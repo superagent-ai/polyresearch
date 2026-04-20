@@ -103,6 +103,11 @@ fn policy_check_open_prs(ctx: &AppContext, repo_state: &RepositoryState) -> Resu
                 continue;
             }
 
+            let Some(thesis_num) = pr_state.thesis_number else {
+                eprintln!("Skipping PR #{} (no thesis reference)", pr_state.pr.number);
+                continue;
+            };
+
             eprintln!("Policy-checking PR #{}...", pr_state.pr.number);
 
             let files = ctx.github.list_pull_request_files(pr_state.pr.number)?;
@@ -129,15 +134,13 @@ fn policy_check_open_prs(ctx: &AppContext, repo_state: &RepositoryState) -> Resu
             }
 
             if violations.is_empty() {
-                if let Some(thesis_num) = pr_state.thesis_number {
-                    let comment = ProtocolComment::PolicyPass {
-                        thesis: thesis_num,
-                        candidate_sha: pr_state.pr.head_ref_oid.clone().unwrap_or_default(),
-                    };
-                    ctx.github.post_issue_comment(pr_state.pr.number, &comment.render())?;
-                    eprintln!("Policy-pass posted on PR #{}", pr_state.pr.number);
-                }
-            } else if let Some(thesis_num) = pr_state.thesis_number {
+                let comment = ProtocolComment::PolicyPass {
+                    thesis: thesis_num,
+                    candidate_sha: pr_state.pr.head_ref_oid.clone().unwrap_or_default(),
+                };
+                ctx.github.post_issue_comment(pr_state.pr.number, &comment.render())?;
+                eprintln!("Policy-pass posted on PR #{}", pr_state.pr.number);
+            } else {
                 let comment = ProtocolComment::Decision {
                     thesis: thesis_num,
                     candidate_sha: pr_state.pr.head_ref_oid.clone().unwrap_or_default(),
@@ -157,6 +160,17 @@ fn policy_check_open_prs(ctx: &AppContext, repo_state: &RepositoryState) -> Resu
 fn decide_ready_prs(ctx: &AppContext, config: &ProtocolConfig, repo_state: &RepositoryState) -> Result<()> {
     let required = config.required_confirmations as usize;
 
+    let ledger = if config.required_confirmations == 0 {
+        let l = Ledger::load(&ctx.repo_root)?;
+        if !l.is_current(repo_state) {
+            eprintln!("Warning: results.tsv is stale, skipping PR decisions this iteration");
+            return Ok(());
+        }
+        Some(l)
+    } else {
+        None
+    };
+
     for thesis in &repo_state.theses {
         for pr_state in &thesis.pull_requests {
             if !decide::is_pr_decidable(config, pr_state, required) {
@@ -170,9 +184,8 @@ fn decide_ready_prs(ctx: &AppContext, config: &ProtocolConfig, repo_state: &Repo
                 continue;
             }
 
-            let outcome = if config.required_confirmations == 0 {
-                let ledger = Ledger::load(&ctx.repo_root)?;
-                decide::decide_without_peer_review(ctx, thesis, pr_state, &ledger)?
+            let outcome = if let Some(ref ledger) = ledger {
+                decide::decide_without_peer_review(ctx, thesis, pr_state, ledger)?
             } else {
                 decide::decide_with_peer_review(ctx, pr_state)?
             };
