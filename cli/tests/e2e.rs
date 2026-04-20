@@ -138,7 +138,6 @@ impl GitHubApi for MockGitHubClient {
                         login: self.current_login.clone(),
                     },
                     created_at: latest + chrono::Duration::seconds(1 + idx as i64),
-                    updated_at: None,
                 });
             }
         }
@@ -182,7 +181,6 @@ impl GitHubApi for MockGitHubClient {
                 login: self.current_login.clone(),
             },
             created_at: chrono::Utc::now(),
-            updated_at: None,
         })
     }
 
