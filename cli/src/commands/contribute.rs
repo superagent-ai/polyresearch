@@ -280,7 +280,26 @@ async fn auto_submit_blocking(ctx: &AppContext, repo_state: &RepositoryState) ->
             continue;
         };
 
-        submit::run(ctx, &crate::cli::IssueArgs { issue }).await?;
+        let Some(thesis) = repo_state
+            .theses
+            .iter()
+            .find(|t| t.issue.number == issue)
+        else {
+            continue;
+        };
+
+        let workspace = match resume_thesis_worktree(
+            &ctx.repo_root,
+            thesis.issue.number,
+            &thesis.issue.title,
+        ) {
+            Ok(ws) => ws,
+            Err(_) => continue,
+        };
+
+        let mut submit_ctx = ctx.clone();
+        submit_ctx.repo_root = workspace.worktree_path;
+        submit::run(&submit_ctx, &crate::cli::IssueArgs { issue }).await?;
         submitted += 1;
     }
     Ok(submitted)
