@@ -1829,7 +1829,7 @@ async fn duties_reports_waiting_for_approval_when_queue_has_only_submitted_these
 // --- B6: Duty gate on claim ---
 
 #[tokio::test]
-async fn claim_allows_additional_claims_under_sub_agent_capacity() {
+async fn claim_allows_additional_claims_on_different_thesis() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("claim-gate");
     init_git_repo(&repo.path);
