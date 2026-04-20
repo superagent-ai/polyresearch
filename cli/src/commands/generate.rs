@@ -23,14 +23,15 @@ pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
     let _ = ensure_current_ledger(ctx, &repo_state)?;
 
     let duty_report = duties::check(ctx, &repo_state)?;
+    let lead_blocking: Vec<_> = duty_report
+        .blocking
+        .into_iter()
+        .filter(|d| d.category == "decide" || d.category == "policy-check")
+        .collect();
     let lead_report = duties::DutyReport {
-        blocking: duty_report
-            .blocking
-            .into_iter()
-            .filter(|d| d.category == "decide" || d.category == "policy-check")
-            .collect(),
+        clean: lead_blocking.is_empty(),
+        blocking: lead_blocking,
         advisory: Vec::new(),
-        clean: true,
     };
     duties::require_no_blocking(&lead_report, "generate")?;
 
