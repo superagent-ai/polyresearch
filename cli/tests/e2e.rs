@@ -2009,7 +2009,7 @@ fn worker_parallelism_formula_basics() {
 
 #[test]
 fn worker_parallelism_never_exceeds_available_work() {
-    assert_eq!(worker::calculate_parallelism(64, 256.0, 256.0, 1, 1.0, None, 0), 1);
+    assert_eq!(worker::calculate_parallelism(64, 256.0, 256.0, 1, 1.0, None, 0), 0);
     assert_eq!(worker::calculate_parallelism(64, 256.0, 256.0, 1, 1.0, None, 3), 3);
 }
 

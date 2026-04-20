@@ -736,3 +736,152 @@ async fn scenario_lead_reject_non_improvement() {
         "should have posted non_improvement decision on PR #51"
     );
 }
+
+// ---------------------------------------------------------------------------
+// execute_decision unit tests (using ScenarioGitHub as a stateful mock)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn execute_decision_non_improvement_zero_conf_keeps_thesis_open() {
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_pull_request(PullRequest {
+        number: 70,
+        title: "Candidate".to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        head_ref_name: "thesis/70-test".to_string(),
+        head_ref_oid: Some("sha".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: chrono::Utc::now(),
+        closed_at: None,
+        merged_at: None,
+        author: None,
+        url: None,
+    });
+
+    let comment = ProtocolComment::Decision {
+        thesis: 70,
+        candidate_sha: "sha".to_string(),
+        outcome: polyresearch::comments::Outcome::NonImprovement,
+        confirmations: 0,
+    };
+
+    commands::decide::execute_decision(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        70,
+        70,
+        polyresearch::comments::Outcome::NonImprovement,
+        &comment,
+        0,
+    )
+    .unwrap();
+
+    assert!(
+        github.is_pr_closed(70),
+        "PR should be closed on non_improvement"
+    );
+    assert!(
+        !github.is_issue_closed(70),
+        "thesis should stay open in zero-conf non_improvement"
+    );
+}
+
+#[test]
+fn execute_decision_disagreement_zero_conf_closes_thesis() {
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_pull_request(PullRequest {
+        number: 71,
+        title: "Candidate".to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        head_ref_name: "thesis/71-test".to_string(),
+        head_ref_oid: Some("sha".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: chrono::Utc::now(),
+        closed_at: None,
+        merged_at: None,
+        author: None,
+        url: None,
+    });
+
+    let comment = ProtocolComment::Decision {
+        thesis: 71,
+        candidate_sha: "sha".to_string(),
+        outcome: polyresearch::comments::Outcome::Disagreement,
+        confirmations: 0,
+    };
+
+    commands::decide::execute_decision(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        71,
+        71,
+        polyresearch::comments::Outcome::Disagreement,
+        &comment,
+        0,
+    )
+    .unwrap();
+
+    assert!(
+        github.is_pr_closed(71),
+        "PR should be closed on disagreement"
+    );
+    assert!(
+        github.is_issue_closed(71),
+        "thesis should be closed for disagreement even in zero-conf"
+    );
+}
+
+#[test]
+fn execute_decision_accepted_merges_and_closes() {
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_pull_request(PullRequest {
+        number: 72,
+        title: "Candidate".to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        head_ref_name: "thesis/72-test".to_string(),
+        head_ref_oid: Some("sha".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: chrono::Utc::now(),
+        closed_at: None,
+        merged_at: None,
+        author: None,
+        url: None,
+    });
+
+    let comment = ProtocolComment::Decision {
+        thesis: 72,
+        candidate_sha: "sha".to_string(),
+        outcome: polyresearch::comments::Outcome::Accepted,
+        confirmations: 0,
+    };
+
+    commands::decide::execute_decision(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        72,
+        72,
+        polyresearch::comments::Outcome::Accepted,
+        &comment,
+        0,
+    )
+    .unwrap();
+
+    assert!(github.is_pr_merged(72), "PR should be merged on accepted");
+    assert!(
+        github.is_issue_closed(72),
+        "thesis should be closed on accepted"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Parallelism contract: zero work returns zero
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parallelism_returns_zero_for_zero_work() {
+    assert_eq!(
+        polyresearch::worker::calculate_parallelism(64, 256.0, 256.0, 1, 1.0, None, 0),
+        0,
+        "should return 0 when no work is available"
+    );
+}

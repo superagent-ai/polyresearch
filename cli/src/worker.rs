@@ -497,7 +497,7 @@ pub fn calculate_parallelism(
         target = target.min(max);
     }
 
-    target.min(available_work).max(1)
+    target.min(available_work)
 }
 
 #[cfg(test)]
@@ -530,7 +530,12 @@ mod tests {
     }
 
     #[test]
-    fn parallelism_never_zero() {
+    fn parallelism_returns_zero_when_no_work() {
+        assert_eq!(calculate_parallelism(16, 64.0, 64.0, 1, 1.0, None, 0), 0);
+    }
+
+    #[test]
+    fn parallelism_at_least_one_when_work_exists() {
         assert_eq!(calculate_parallelism(1, 0.5, 0.1, 4, 8.0, None, 1), 1);
     }
 

@@ -45,8 +45,23 @@ fn fork_and_clone(url: &str, fork_owner: &str, repo_root: &Path) -> Result<()> {
     }
 
     eprintln!("Forking {url} to {fork_owner}...");
+    let mut args = vec!["repo", "fork", url, "--clone=false"];
+
+    let current_user = Command::new("gh")
+        .args(["api", "user", "--jq", ".login"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+
+    let org_flag = format!("--org={fork_owner}");
+    if !current_user.is_empty() && fork_owner != current_user {
+        args.push(&org_flag);
+    }
+
     let output = Command::new("gh")
-        .args(["repo", "fork", url, "--org", fork_owner, "--clone=false"])
+        .args(&args)
         .output()
         .wrap_err("failed to fork repository")?;
 

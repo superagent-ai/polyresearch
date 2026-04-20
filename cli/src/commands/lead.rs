@@ -5,6 +5,7 @@ use color_eyre::eyre::{Result, eyre};
 use crate::agent;
 use crate::cli::LeadArgs;
 use crate::commands::{self, AppContext};
+use crate::commands::decide;
 use crate::comments::{Outcome, ProtocolComment};
 use crate::config::{NodeConfig, ProtocolConfig, ProgramSpec};
 use crate::ledger::Ledger;
@@ -177,7 +178,13 @@ fn decide_ready_prs(ctx: &AppContext, config: &ProtocolConfig, repo_state: &Repo
                 continue;
             }
 
-            let outcome = compute_decision(ctx, config, thesis, pr_state)?;
+            let outcome = if config.required_confirmations == 0 {
+                let ledger = Ledger::load(&ctx.repo_root)?;
+                decide::decide_without_peer_review(ctx, thesis, pr_state, &ledger)?
+            } else {
+                decide::decide_with_peer_review(ctx, pr_state)?
+            };
+
             let candidate_sha = pr_state.pr.head_ref_oid.clone().unwrap_or_default();
             let confirmations = if required == 0 { 0 } else { pr_state.reviews.len() as u64 };
 
@@ -188,119 +195,19 @@ fn decide_ready_prs(ctx: &AppContext, config: &ProtocolConfig, repo_state: &Repo
                 confirmations,
             };
 
-            match outcome {
-                Outcome::Accepted => {
-                    if let Err(err) = ctx.github.merge_pull_request(pr_state.pr.number) {
-                        eprintln!("Merge failed for PR #{}: {err}", pr_state.pr.number);
-                        continue;
-                    }
-                    ctx.github.post_issue_comment(pr_state.pr.number, &comment.render())?;
-                    ctx.github.close_issue(thesis.issue.number)?;
-                    eprintln!("PR #{} accepted and merged", pr_state.pr.number);
-                }
-                Outcome::NonImprovement => {
-                    ctx.github.post_issue_comment(pr_state.pr.number, &comment.render())?;
-                    ctx.github.close_pull_request(pr_state.pr.number)?;
-                    if required > 0 {
-                        ctx.github.close_issue(thesis.issue.number)?;
-                    }
-                    eprintln!("PR #{} decided as non_improvement", pr_state.pr.number);
-                }
-                Outcome::InfraFailure | Outcome::Stale => {
-                    ctx.github.post_issue_comment(pr_state.pr.number, &comment.render())?;
-                    ctx.github.close_pull_request(pr_state.pr.number)?;
-                    eprintln!("PR #{} decided as {outcome}", pr_state.pr.number);
-                }
-                _ => {
-                    ctx.github.post_issue_comment(pr_state.pr.number, &comment.render())?;
-                    ctx.github.close_pull_request(pr_state.pr.number)?;
-                    ctx.github.close_issue(thesis.issue.number)?;
-                    eprintln!("PR #{} decided as {outcome}", pr_state.pr.number);
-                }
-            }
+            decide::execute_decision(
+                &ctx.github,
+                pr_state.pr.number,
+                thesis.issue.number,
+                outcome,
+                &comment,
+                config.required_confirmations,
+            )?;
+
+            eprintln!("PR #{} decided as {outcome}", pr_state.pr.number);
         }
     }
     Ok(())
-}
-
-fn compute_decision(
-    ctx: &AppContext,
-    config: &ProtocolConfig,
-    thesis: &crate::state::ThesisState,
-    pr_state: &crate::state::PullRequestState,
-) -> Result<Outcome> {
-    use crate::state::metric_beats;
-
-    if config.required_confirmations == 0 {
-        let tolerance = config.tolerance()?;
-        let branch = &pr_state.pr.head_ref_name;
-        let attempt = thesis
-            .attempts
-            .iter()
-            .find(|a| &a.branch == branch)
-            .ok_or_else(|| eyre!("no attempt found for branch `{branch}`"))?;
-
-        if !metric_beats(attempt.metric, attempt.baseline_metric, tolerance, config.metric_direction) {
-            return Ok(Outcome::NonImprovement);
-        }
-
-        let ledger = Ledger::load(&ctx.repo_root)?;
-        if let Some(best) = ledger.best_accepted_metric(config) {
-            let meets = match config.metric_direction {
-                crate::config::MetricDirection::HigherIsBetter => attempt.metric >= best,
-                crate::config::MetricDirection::LowerIsBetter => attempt.metric <= best,
-            };
-            if !meets {
-                return Ok(Outcome::NonImprovement);
-            }
-        }
-
-        Ok(Outcome::Accepted)
-    } else {
-        use std::collections::BTreeSet;
-        use crate::comments::Observation;
-
-        let required = config.required_confirmations as usize;
-        if pr_state.reviews.len() < required {
-            return Err(eyre!("not enough reviews"));
-        }
-
-        let tolerance = config.tolerance()?;
-        let main_head = commands::run_git(&ctx.repo_root, &["rev-parse", "main"])?;
-        if pr_state.reviews.iter().any(|r| r.base_sha.trim() != main_head.trim()) {
-            return Ok(Outcome::Stale);
-        }
-
-        let env_shas: BTreeSet<Option<String>> = pr_state.reviews.iter().map(|r| r.env_sha.clone()).collect();
-        if env_shas.len() > 1 {
-            return Ok(Outcome::Disagreement);
-        }
-
-        let crashed_count = pr_state.reviews.iter()
-            .filter(|r| matches!(r.observation, Observation::Crashed | Observation::InfraFailure))
-            .count();
-        if crashed_count * 2 >= pr_state.reviews.len() {
-            return Ok(Outcome::InfraFailure);
-        }
-
-        let all_improved = pr_state.reviews.iter().all(|r| r.observation == Observation::Improved);
-        let metrics_close = {
-            let metrics: Vec<f64> = pr_state.reviews.iter().map(|r| r.metric).collect();
-            let (min, max) = (metrics.iter().cloned().reduce(f64::min), metrics.iter().cloned().reduce(f64::max));
-            matches!((min, max), (Some(lo), Some(hi)) if hi - lo <= tolerance)
-        };
-
-        if all_improved && metrics_close {
-            return Ok(Outcome::Accepted);
-        }
-
-        let all_no_improvement = pr_state.reviews.iter().all(|r| r.observation == Observation::NoImprovement);
-        if all_no_improvement && metrics_close {
-            return Ok(Outcome::NonImprovement);
-        }
-
-        Ok(Outcome::Disagreement)
-    }
 }
 
 async fn generate_if_needed(
