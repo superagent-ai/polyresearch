@@ -60,13 +60,16 @@ impl RepoRef {
     }
 
     fn parse_remote(remote: &str) -> Result<Self> {
-        Self::parse(strip_github_url(remote))
+        let stripped = strip_github_prefix(remote)
+            .unwrap_or_else(|| remote.trim().trim_end_matches(".git"));
+        Self::parse(stripped)
     }
 
     pub fn parse_url(url: &str) -> Option<Self> {
-        let stripped = strip_github_url(url);
-        let (owner, name) = stripped.split_once('/')?;
-        if owner.is_empty() || name.is_empty() {
+        let stripped = strip_github_prefix(url)?;
+        let (owner, rest) = stripped.split_once('/')?;
+        let name = rest.split('/').next().unwrap_or("");
+        if owner.is_empty() || name.is_empty() || name != rest {
             return None;
         }
         Some(Self {
@@ -80,13 +83,19 @@ impl RepoRef {
     }
 }
 
-fn strip_github_url(url: &str) -> &str {
-    url.trim()
-        .trim_end_matches(".git")
-        .trim_start_matches("https://github.com/")
-        .trim_start_matches("http://github.com/")
-        .trim_start_matches("git@github.com:")
-        .trim_end_matches('/')
+fn strip_github_prefix(url: &str) -> Option<&str> {
+    let trimmed = url.trim().trim_end_matches(".git");
+    const PREFIXES: &[&str] = &[
+        "https://github.com/",
+        "http://github.com/",
+        "git@github.com:",
+    ];
+    for prefix in PREFIXES {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            return Some(rest.trim_end_matches('/'));
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone)]
@@ -1059,5 +1068,24 @@ mod tests {
         let r = RepoRef::parse_url("https://github.com/owner/repo/").unwrap();
         assert_eq!(r.owner, "owner");
         assert_eq!(r.name, "repo");
+    }
+
+    #[test]
+    fn parse_url_rejects_non_github_urls() {
+        assert!(RepoRef::parse_url("https://gitlab.com/owner/repo").is_none());
+        assert!(RepoRef::parse_url("https://bitbucket.org/owner/repo").is_none());
+        assert!(RepoRef::parse_url("https://example.com/owner/repo").is_none());
+    }
+
+    #[test]
+    fn parse_url_rejects_extra_path_segments() {
+        assert!(RepoRef::parse_url("https://github.com/owner/repo/tree/main").is_none());
+        assert!(RepoRef::parse_url("https://github.com/owner/repo/pulls").is_none());
+    }
+
+    #[test]
+    fn parse_url_rejects_owner_only() {
+        assert!(RepoRef::parse_url("https://github.com/owner").is_none());
+        assert!(RepoRef::parse_url("https://github.com/owner/").is_none());
     }
 }
