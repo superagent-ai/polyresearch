@@ -2,7 +2,7 @@ use color_eyre::eyre::Result;
 use serde::Serialize;
 
 use crate::commands::{AppContext, print_value, read_node_id};
-use crate::comments::Observation;
+use crate::comments::{Observation, ReleaseReason};
 use crate::ledger::Ledger;
 use crate::state::{RepositoryState, ThesisPhase};
 
@@ -344,7 +344,7 @@ fn check_contributor_idle_state(
                 && !thesis
                     .releases
                     .iter()
-                    .any(|release| release.node == node_id)
+                    .any(|release| release.node == node_id && release.reason == ReleaseReason::NoImprovement)
         })
         .count();
 

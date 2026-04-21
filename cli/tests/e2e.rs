@@ -1390,14 +1390,14 @@ async fn duties_reports_no_claimable_work_when_all_theses_were_released_by_node(
     let mut thesis_one = make_approved_thesis(1);
     thesis_one.releases.push(ReleaseRecord {
         node: "node-a".to_string(),
-        reason: ReleaseReason::InfraFailure,
+        reason: ReleaseReason::NoImprovement,
         created_at: chrono::Utc::now(),
     });
 
     let mut thesis_two = make_approved_thesis(2);
     thesis_two.releases.push(ReleaseRecord {
         node: "node-a".to_string(),
-        reason: ReleaseReason::Timeout,
+        reason: ReleaseReason::NoImprovement,
         created_at: chrono::Utc::now(),
     });
 
