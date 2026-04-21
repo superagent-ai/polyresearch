@@ -60,23 +60,11 @@ impl RepoRef {
     }
 
     fn parse_remote(remote: &str) -> Result<Self> {
-        let stripped = remote
-            .trim()
-            .trim_end_matches(".git")
-            .trim_start_matches("https://github.com/")
-            .trim_start_matches("http://github.com/")
-            .trim_start_matches("git@github.com:");
-
-        Self::parse(stripped)
+        Self::parse(strip_github_url(remote))
     }
 
     pub fn parse_url(url: &str) -> Option<Self> {
-        let stripped = url
-            .trim()
-            .trim_end_matches(".git")
-            .trim_start_matches("https://github.com/")
-            .trim_start_matches("http://github.com/")
-            .trim_start_matches("git@github.com:");
+        let stripped = strip_github_url(url);
         let (owner, name) = stripped.split_once('/')?;
         if owner.is_empty() || name.is_empty() {
             return None;
@@ -90,6 +78,14 @@ impl RepoRef {
     pub fn slug(&self) -> String {
         format!("{}/{}", self.owner, self.name)
     }
+}
+
+fn strip_github_url(url: &str) -> &str {
+    url.trim()
+        .trim_end_matches(".git")
+        .trim_start_matches("https://github.com/")
+        .trim_start_matches("http://github.com/")
+        .trim_start_matches("git@github.com:")
 }
 
 #[derive(Debug, Clone)]

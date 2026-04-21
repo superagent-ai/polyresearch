@@ -208,7 +208,7 @@ pub struct BootstrapArgs {
     #[arg(long)]
     pub fork: Option<String>,
 
-    #[arg(long)]
+    #[arg(long, conflicts_with = "fork")]
     pub no_fork: bool,
 
     #[arg(long)]
