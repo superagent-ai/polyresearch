@@ -73,7 +73,7 @@ async fn run_iteration(
     Ok(())
 }
 
-fn sync_if_stale(ctx: &AppContext, repo_state: &RepositoryState, default_branch: &str) -> Result<()> {
+pub fn sync_if_stale(ctx: &AppContext, repo_state: &RepositoryState, default_branch: &str) -> Result<()> {
     let ledger = Ledger::load(&ctx.repo_root)?;
     if ledger.is_current(repo_state) {
         return Ok(());
@@ -111,7 +111,7 @@ fn sync_if_stale(ctx: &AppContext, repo_state: &RepositoryState, default_branch:
     Ok(())
 }
 
-fn policy_check_open_prs(ctx: &AppContext, repo_state: &RepositoryState) -> Result<()> {
+pub fn policy_check_open_prs(ctx: &AppContext, repo_state: &RepositoryState) -> Result<()> {
     for thesis in &repo_state.theses {
         for pr_state in &thesis.pull_requests {
             if pr_state.pr.state != "OPEN" || pr_state.policy_pass || pr_state.decision.is_some() {
@@ -172,7 +172,7 @@ fn policy_check_open_prs(ctx: &AppContext, repo_state: &RepositoryState) -> Resu
     Ok(())
 }
 
-fn decide_ready_prs(ctx: &AppContext, config: &ProtocolConfig, repo_state: &RepositoryState) -> Result<()> {
+pub fn decide_ready_prs(ctx: &AppContext, config: &ProtocolConfig, repo_state: &RepositoryState) -> Result<()> {
     let required = config.required_confirmations as usize;
 
     let ledger = if config.required_confirmations == 0 {

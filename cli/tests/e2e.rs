@@ -239,11 +239,31 @@ impl GitHubApi for MockGitHubClient {
     }
 
     fn list_pull_request_comments(&self, pr_number: u64) -> Result<Vec<IssueComment>> {
-        Ok(self
+        let mut comments = self
             .pr_comments
             .get(&pr_number)
             .cloned()
-            .unwrap_or_default())
+            .unwrap_or_default();
+        let latest = comments
+            .iter()
+            .map(|c| c.created_at)
+            .max()
+            .unwrap_or_else(chrono::Utc::now);
+        let posted = self.posted_issue_comments.lock().unwrap();
+        for (idx, (num, body)) in posted.iter().enumerate() {
+            if *num == pr_number {
+                comments.push(IssueComment {
+                    id: 60_000 + idx as u64,
+                    body: body.clone(),
+                    user: CommentUser {
+                        login: self.current_login.clone(),
+                    },
+                    created_at: latest + chrono::Duration::seconds(1 + idx as i64),
+                    updated_at: None,
+                });
+            }
+        }
+        Ok(comments)
     }
 
     fn list_pull_request_files(&self, pr_number: u64) -> Result<Vec<PullRequestFile>> {
@@ -2229,6 +2249,161 @@ async fn contribute_blocks_on_non_submit_duties() {
     }).await;
 
     assert!(result.is_ok() || result.unwrap_err().to_string().contains("blocking"));
+}
+
+#[tokio::test]
+async fn contribute_skips_auto_submit_for_closed_thesis_with_merged_pr() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("contribute-skip-closed");
+    init_git_repo(&repo.path);
+    write_node_config(&repo.path, "test-node");
+    write_program_md(&repo.path);
+    set_node_id_env("test-node");
+
+    let fixture = load_issue_fixture("improved_no_submit_issue.json");
+    let mut closed_issue = fixture.issue.clone();
+    closed_issue.state = "CLOSED".to_string();
+    closed_issue.closed_at = Some(chrono::Utc::now());
+
+    let merged_pr = PullRequest {
+        number: 7,
+        title: format!("Thesis #{}: merged", closed_issue.number),
+        body: Some(format!("References #{}", closed_issue.number)),
+        state: "MERGED".to_string(),
+        head_ref_name: format!("thesis/{}-test-slug", closed_issue.number),
+        head_ref_oid: Some("abc123".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: chrono::Utc::now(),
+        closed_at: Some(chrono::Utc::now()),
+        merged_at: Some(chrono::Utc::now()),
+        author: Some(polyresearch::github::Author {
+            login: "alice".to_string(),
+        }),
+        url: None,
+        mergeable: None,
+    };
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![closed_issue.clone()],
+        HashMap::from([(closed_issue.number, fixture.comments.clone())]),
+        vec![merged_pr],
+        HashMap::new(),
+    ));
+
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        false,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(
+        &ctx,
+        &ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "contribute should succeed without attempting auto-submit on closed thesis, got: {:?}",
+        result.unwrap_err()
+    );
+}
+
+#[tokio::test]
+async fn contribute_runs_inline_lead_duties_for_policy_check() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("contribute-inline-lead");
+    init_git_repo(&repo.path);
+    write_node_config(&repo.path, "test-node");
+    write_program_md(&repo.path);
+    set_node_id_env("test-node");
+
+    let fixture = load_issue_fixture("improved_no_submit_issue.json");
+
+    let open_pr = PullRequest {
+        number: 10,
+        title: format!("Thesis #{}: test", fixture.issue.number),
+        body: Some(format!("References #{}", fixture.issue.number)),
+        state: "OPEN".to_string(),
+        head_ref_name: format!("thesis/{}-test-slug", fixture.issue.number),
+        head_ref_oid: Some("def456".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: chrono::Utc::now(),
+        closed_at: None,
+        merged_at: None,
+        author: Some(polyresearch::github::Author {
+            login: "lead".to_string(),
+        }),
+        url: None,
+        mergeable: None,
+    };
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![open_pr],
+        HashMap::new(),
+    ));
+
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture.lead_github_login,
+        false,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(
+        &ctx,
+        &ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    let posted = mock.posted_issue_comments.lock().unwrap();
+    let policy_pass_posted = posted
+        .iter()
+        .any(|(_, body)| body.contains("polyresearch:policy-pass"));
+    assert!(
+        policy_pass_posted,
+        "inline lead duties should have posted a policy-pass comment, posted: {:?}",
+        *posted
+    );
+
+    if let Err(err) = result {
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("policy-check"),
+            "contribute should not block on policy-check when running as lead, got: {msg}"
+        );
+    }
 }
 
 // --- Config tests ---
