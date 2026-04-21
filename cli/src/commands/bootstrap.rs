@@ -10,6 +10,48 @@ use crate::config::NodeConfig;
 use crate::github::RepoRef;
 
 pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
+    let repo_root = scaffold(ctx, args)?;
+
+    if !args.yes {
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() {
+            eprintln!("\nReview your project before continuing:");
+            eprintln!("  \u{2192} PROGRAM.md");
+            eprintln!("  \u{2192} PREPARE.md");
+            eprintln!("  \u{2192} .polyresearch-node.toml\n");
+
+            let confirmed = dialoguer::Confirm::new()
+                .with_prompt("Spawn bootstrap agent?")
+                .default(true)
+                .interact_opt()
+                .map_err(|e| eyre!("prompt failed: {e}"))?;
+
+            if confirmed != Some(true) {
+                eprintln!("Aborted. To spawn the agent later, re-run:");
+                eprintln!("  polyresearch bootstrap {} --yes", args.url);
+                return Ok(());
+            }
+        } else {
+            return Err(eyre!(
+                "non-interactive terminal; pass --yes to spawn the bootstrap agent"
+            ));
+        }
+    }
+
+    spawn_setup_agent(&repo_root, &args.overrides, ctx.cli.verbose)?;
+
+    // Post-agent cleanup: re-normalize in case the agent mangled required sections,
+    // then commit+push the agent's changes (PROGRAM.md/PREPARE.md with project details).
+    normalize_program_md(&repo_root)?;
+    commit_and_push_setup_files(&repo_root)?;
+
+    eprintln!("Bootstrap complete.");
+    Ok(())
+}
+
+/// Clone/fork, write templates, initialize node config, and normalize PROGRAM.md.
+/// Does not spawn any agents or require interactive input.
+pub fn scaffold(ctx: &AppContext, args: &BootstrapArgs) -> Result<std::path::PathBuf> {
     let upstream = RepoRef::from_user_input(&args.url)?;
     let clone_url = upstream.clone_url();
     eprintln!("Bootstrapping polyresearch project from {}", upstream.slug());
@@ -20,7 +62,6 @@ pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
         ctx.repo_root.join(&upstream.name)
     };
 
-    // Step 1: Clone or fork-then-clone
     if args.no_fork {
         clone_if_needed(&clone_url, &repo_root)?;
     } else if let Some(fork_owner) = &args.fork {
@@ -29,27 +70,11 @@ pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
         auto_clone_or_fork(&upstream, &repo_root)?;
     }
 
-    // Step 2: Write templates
     write_templates(&repo_root, args.goal.as_deref())?;
-
-    // Step 3: Initialize node config (with any CLI overrides)
     initialize_node(&repo_root, &args.overrides)?;
-
-    // Step 4: Spawn agent for project-specific setup
-    if !args.pause_after_bootstrap {
-        spawn_setup_agent(&repo_root, &args.overrides, ctx.cli.verbose)?;
-    } else {
-        eprintln!("Pausing after bootstrap. Edit PROGRAM.md and PREPARE.md manually.");
-    }
-
-    // Step 5: Normalize PROGRAM.md
     normalize_program_md(&repo_root)?;
 
-    // Step 6: Commit and push setup files
-    commit_and_push_setup_files(&repo_root)?;
-
-    eprintln!("Bootstrap complete.");
-    Ok(())
+    Ok(repo_root)
 }
 
 fn auto_clone_or_fork(upstream: &RepoRef, repo_root: &Path) -> Result<()> {

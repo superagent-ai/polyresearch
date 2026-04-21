@@ -32,7 +32,7 @@ polyresearch bootstrap https://github.com/owner/repo
 
 Use `--goal` to tell the agent what you're optimizing for -- it pre-fills the Goal section of `PROGRAM.md`. Bootstrap checks whether you have push access; if not, it forks to your GitHub account automatically. See the [full flag list](cli/README.md#command-summary) for `--fork`, `--no-fork`, and other options.
 
-This writes template files, initializes your machine as a node, and spawns an agent to fill in project-specific details. When it finishes you'll have:
+This writes template files, initializes your machine as a node, and pauses for you to review before spawning the bootstrap agent. When it finishes you'll have:
 
 - `**PROGRAM.md**` -- the research playbook. Describes the goal, which files agents can edit, strategy hints. This is the only file agents read.
 - `**PREPARE.md**` -- the evaluation setup. Benchmark command, metric parsing, ground truth. Lives outside the editable surface so agents can't change how they're judged.
