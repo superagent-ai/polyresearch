@@ -28,9 +28,17 @@ async fn main() -> Result<()> {
 
     let cwd = env::current_dir().wrap_err("failed to determine current working directory")?;
 
+    let (api_budget_override, request_delay_override) = match &cli.command {
+        Commands::Contribute(args) => (args.overrides.api_budget, args.overrides.request_delay),
+        Commands::Lead(args) => (args.overrides.api_budget, args.overrides.request_delay),
+        _ => (None, None),
+    };
+
     if needs_deferred_setup {
         let repo_root = discover_repo_root(&cwd).unwrap_or(cwd);
-        throttle::init(NodeConfig::load_request_delay_ms(&repo_root));
+        let request_delay_ms = request_delay_override
+            .unwrap_or_else(|| NodeConfig::load_request_delay_ms(&repo_root));
+        throttle::init(request_delay_ms);
         let repo = RepoRef::discover(cli.repo.as_deref(), &repo_root)
             .ok()
             .unwrap_or_else(|| RepoRef {
@@ -38,7 +46,8 @@ async fn main() -> Result<()> {
                 name: String::new(),
             });
         let github: Arc<dyn GitHubApi> = Arc::new(GitHubClient::new(repo.clone()));
-        let api_budget = NodeConfig::load_api_budget(&repo_root);
+        let api_budget = api_budget_override
+            .unwrap_or_else(|| NodeConfig::load_api_budget(&repo_root));
         let config = ProtocolConfig::default();
         let program = ProgramSpec {
             can_modify: Vec::new(),
@@ -59,10 +68,13 @@ async fn main() -> Result<()> {
     }
 
     let repo_root = discover_repo_root(&cwd)?;
-    throttle::init(NodeConfig::load_request_delay_ms(&repo_root));
+    let request_delay_ms = request_delay_override
+        .unwrap_or_else(|| NodeConfig::load_request_delay_ms(&repo_root));
+    throttle::init(request_delay_ms);
     let repo = RepoRef::discover(cli.repo.as_deref(), &repo_root)?;
     let github: Arc<dyn GitHubApi> = Arc::new(GitHubClient::new(repo.clone()));
-    let api_budget = NodeConfig::load_api_budget(&repo_root);
+    let api_budget = api_budget_override
+        .unwrap_or_else(|| NodeConfig::load_api_budget(&repo_root));
     let config = ProtocolConfig::load(&repo_root)?;
     config.check_cli_version(env!("CARGO_PKG_VERSION"))?;
     let program = ProgramSpec::load(&repo_root, &config)?;

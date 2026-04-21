@@ -29,9 +29,12 @@ Point it at any GitHub repo with a codebase and a metric you want to improve:
 ```bash
 polyresearch bootstrap https://github.com/owner/repo
 polyresearch bootstrap https://github.com/owner/repo --fork myorg
+polyresearch bootstrap https://github.com/owner/repo --no-fork
 ```
 
-This clones the repo (or forks it first with `--fork`), writes template files, initializes your machine as a node, and spawns an agent to fill in project-specific details. When it finishes you'll have:
+Bootstrap checks whether you have push access to the target repo. If not, it forks to your GitHub account automatically (or to a specific org with `--fork`). Use `--no-fork` to skip the check and clone directly.
+
+This writes template files, initializes your machine as a node, and spawns an agent to fill in project-specific details. When it finishes you'll have:
 
 - **`PROGRAM.md`** -- the research playbook. Describes the goal, which files agents can edit, strategy hints. This is the only file agents read.
 - **`PREPARE.md`** -- the evaluation setup. Benchmark command, metric parsing, ground truth. Lives outside the editable surface so agents can't change how they're judged.
@@ -46,9 +49,10 @@ From the root of your project (where you ran `bootstrap`):
 
 ```bash
 polyresearch lead
+polyresearch lead --agent-command "codex --full-auto"
 ```
 
-The lead syncs the results ledger, policy-checks open PRs, decides candidates (merge or reject), and generates new theses when the queue runs low. It runs in a loop until you stop it. Use `--once` for a single iteration.
+The lead syncs the results ledger, policy-checks open PRs, decides candidates (merge or reject), and generates new theses when the queue runs low. It runs in a loop until you stop it. Use `--once` for a single iteration. Node config settings (`--capacity`, `--api-budget`, `--request-delay`, `--agent-command`) can be overridden at runtime without editing `.polyresearch-node.toml`.
 
 ### 3. Run contributors
 
@@ -56,9 +60,10 @@ On any machine (yours, a teammate's, a rented GPU box):
 
 ```bash
 polyresearch contribute https://github.com/owner/repo
+polyresearch contribute --capacity 50 --agent-command "codex --full-auto"
 ```
 
-The contributor clones the repo, claims theses from the issue queue, spawns an agent for each one, records results, and submits PRs. Launch as many contributor machines as you want -- they all pull from the same queue.
+The contributor clones the repo, claims theses from the issue queue, spawns an agent for each one, records results, and submits PRs. Launch as many contributor machines as you want -- they all pull from the same queue. Node config settings (`--capacity`, `--api-budget`, `--request-delay`, `--agent-command`) can be overridden at runtime without editing `.polyresearch-node.toml`.
 
 ### Run on a remote machine
 

@@ -8,8 +8,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Result, eyre};
 use polyresearch::cli::{
-    AttemptArgs, BatchClaimArgs, Cli, Commands, GenerateArgs, InitArgs, IssueArgs, PrArgs,
-    ReleaseArgs, StatusArgs,
+    AttemptArgs, BatchClaimArgs, Cli, Commands, GenerateArgs, InitArgs, IssueArgs, NodeOverrides,
+    PrArgs, ReleaseArgs, StatusArgs,
 };
 use polyresearch::commands;
 use polyresearch::comments::{Observation, ReleaseReason};
@@ -315,7 +315,7 @@ async fn init_writes_node_identity() {
         false,
         Commands::Init(InitArgs {
             node: Some("test-node".to_string()),
-            capacity: Some(50),
+            overrides: NodeOverrides { capacity: Some(50), ..Default::default() },
         }),
     );
 
@@ -323,7 +323,7 @@ async fn init_writes_node_identity() {
         &ctx,
         &InitArgs {
             node: Some("test-node".to_string()),
-            capacity: Some(50),
+            overrides: NodeOverrides { capacity: Some(50), ..Default::default() },
         },
     )
     .await
@@ -348,7 +348,7 @@ async fn env_override_uses_session_node_id() {
         HashMap::new(),
     ));
     let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Pace);
-    commands::write_node_config(&repo.path, "lead/file-node", Some(60)).unwrap();
+    commands::write_node_config(&repo.path, "lead/file-node", &NodeOverrides { capacity: Some(60), ..Default::default() }).unwrap();
     set_node_id_env("lead/env-node");
 
     let node_config = NodeConfig::load(&repo.path).unwrap();
@@ -517,7 +517,7 @@ async fn init_preserves_custom_api_budget() {
         false,
         Commands::Init(InitArgs {
             node: Some("new-node".to_string()),
-            capacity: None,
+            overrides: NodeOverrides::default(),
         }),
     );
 
@@ -525,7 +525,7 @@ async fn init_preserves_custom_api_budget() {
         &ctx,
         &InitArgs {
             node: Some("new-node".to_string()),
-            capacity: None,
+            overrides: NodeOverrides::default(),
         },
     )
     .await
@@ -562,7 +562,7 @@ async fn init_preserves_custom_request_delay() {
         false,
         Commands::Init(InitArgs {
             node: Some("new-node".to_string()),
-            capacity: None,
+            overrides: NodeOverrides::default(),
         }),
     );
 
@@ -570,7 +570,7 @@ async fn init_preserves_custom_request_delay() {
         &ctx,
         &InitArgs {
             node: Some("new-node".to_string()),
-            capacity: None,
+            overrides: NodeOverrides::default(),
         },
     )
     .await
@@ -607,7 +607,7 @@ async fn init_drops_legacy_fields_and_writes_capacity() {
         false,
         Commands::Init(InitArgs {
             node: Some("new-node".to_string()),
-            capacity: Some(40),
+            overrides: NodeOverrides { capacity: Some(40), ..Default::default() },
         }),
     );
 
@@ -615,7 +615,7 @@ async fn init_drops_legacy_fields_and_writes_capacity() {
         &ctx,
         &InitArgs {
             node: Some("new-node".to_string()),
-            capacity: Some(40),
+            overrides: NodeOverrides { capacity: Some(40), ..Default::default() },
         },
     )
     .await
@@ -2044,6 +2044,7 @@ async fn contribute_blocks_on_non_submit_duties() {
             once: true,
             max_parallel: Some(1),
             sleep_secs: 0,
+            overrides: NodeOverrides::default(),
         }),
     );
 
@@ -2052,6 +2053,7 @@ async fn contribute_blocks_on_non_submit_duties() {
         once: true,
         max_parallel: Some(1),
         sleep_secs: 0,
+        overrides: NodeOverrides::default(),
     }).await;
 
     assert!(result.is_ok() || result.unwrap_err().to_string().contains("blocking"));
@@ -2401,6 +2403,7 @@ Test.
             once: true,
             max_parallel: Some(1),
             sleep_secs: 0,
+            overrides: NodeOverrides::default(),
         }),
     );
 
@@ -2420,6 +2423,7 @@ Test.
         once: true,
         max_parallel: Some(1),
         sleep_secs: 0,
+        overrides: NodeOverrides::default(),
     })
     .await;
 

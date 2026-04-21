@@ -7,6 +7,7 @@ use color_eyre::eyre::{Context, Result, eyre};
 use crate::cli::BootstrapArgs;
 use crate::commands::{self, AppContext};
 use crate::config::NodeConfig;
+use crate::github::RepoRef;
 
 pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
     eprintln!("Bootstrapping polyresearch project from {}", args.url);
@@ -18,22 +19,24 @@ pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
         ctx.repo_root.join(name)
     };
 
-    // Step 1: Clone or reuse
-    if let Some(fork_owner) = &args.fork {
+    // Step 1: Clone or fork-then-clone
+    if args.no_fork {
+        clone_if_needed(&args.url, &repo_root)?;
+    } else if let Some(fork_owner) = &args.fork {
         fork_and_clone(&args.url, fork_owner, &repo_root)?;
     } else {
-        clone_if_needed(&args.url, &repo_root)?;
+        auto_clone_or_fork(&args.url, &repo_root)?;
     }
 
     // Step 2: Write templates
     write_templates(&repo_root, args.goal.as_deref())?;
 
-    // Step 3: Initialize node config
-    initialize_node(&repo_root)?;
+    // Step 3: Initialize node config (with any CLI overrides)
+    initialize_node(&repo_root, &args.overrides)?;
 
     // Step 4: Spawn agent for project-specific setup
     if !args.pause_after_bootstrap {
-        spawn_setup_agent(&repo_root)?;
+        spawn_setup_agent(&repo_root, &args.overrides)?;
     } else {
         eprintln!("Pausing after bootstrap. Edit PROGRAM.md and PREPARE.md manually.");
     }
@@ -52,6 +55,62 @@ pub(crate) fn repo_name_from_url(url: &str) -> String {
         .unwrap_or("repo")
         .trim_end_matches(".git")
         .to_string()
+}
+
+fn auto_clone_or_fork(url: &str, repo_root: &Path) -> Result<()> {
+    if repo_root.join(".git").exists() {
+        eprintln!("Repository already exists at {}", repo_root.display());
+        let _ = commands::run_git(&repo_root.to_path_buf(), &["fetch", "origin"]);
+        return Ok(());
+    }
+
+    let upstream = RepoRef::parse_url(url)
+        .ok_or_else(|| eyre!("could not parse GitHub owner/repo from URL: {url}"))?;
+
+    if has_push_access(&upstream.owner, &upstream.name) {
+        eprintln!("Push access confirmed, cloning directly.");
+        clone_if_needed(url, repo_root)
+    } else {
+        let login = get_current_login()?;
+        eprintln!(
+            "No push access to {}/{}, forking to {login}...",
+            upstream.owner, upstream.name
+        );
+        fork_and_clone(url, &login, repo_root)
+    }
+}
+
+fn has_push_access(owner: &str, name: &str) -> bool {
+    Command::new("gh")
+        .args([
+            "api",
+            &format!("repos/{owner}/{name}"),
+            "--jq",
+            ".permissions.push",
+        ])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim() == "true")
+        .unwrap_or(false)
+}
+
+fn get_current_login() -> Result<String> {
+    let output = Command::new("gh")
+        .args(["api", "user", "--jq", ".login"])
+        .output()
+        .wrap_err("failed to query current GitHub user")?;
+    if !output.status.success() {
+        return Err(eyre!(
+            "gh api user failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let login = String::from_utf8(output.stdout)?.trim().to_string();
+    if login.is_empty() {
+        return Err(eyre!("could not determine GitHub login; run `gh auth login` first"));
+    }
+    Ok(login)
 }
 
 fn fork_and_clone(url: &str, fork_owner: &str, repo_root: &Path) -> Result<()> {
@@ -223,16 +282,32 @@ Describe what the baseline metric represents and how it was measured.
     Ok(())
 }
 
-fn initialize_node(repo_root: &Path) -> Result<()> {
-    commands::ensure_node_config(repo_root)
+fn initialize_node(repo_root: &Path, overrides: &crate::cli::NodeOverrides) -> Result<()> {
+    commands::ensure_node_config(repo_root)?;
+    if overrides.capacity.is_some()
+        || overrides.api_budget.is_some()
+        || overrides.request_delay.is_some()
+        || overrides.agent_command.is_some()
+    {
+        let config = NodeConfig::load(repo_root)?;
+        config.with_overrides(overrides).save(repo_root)?;
+    }
+    Ok(())
 }
 
-fn spawn_setup_agent(repo_root: &Path) -> Result<()> {
-    let node_config = NodeConfig::load(&repo_root.to_path_buf()).ok();
+fn spawn_setup_agent(repo_root: &Path, overrides: &crate::cli::NodeOverrides) -> Result<()> {
+    let node_config = NodeConfig::load(&repo_root.to_path_buf())
+        .ok()
+        .map(|c| c.with_overrides(overrides));
     let agent_command = node_config
         .as_ref()
         .map(|c| c.agent.command.clone())
-        .unwrap_or_else(|| "claude -p --permission-mode bypassPermissions".to_string());
+        .unwrap_or_else(|| {
+            overrides
+                .agent_command
+                .clone()
+                .unwrap_or_else(|| "claude -p --permission-mode bypassPermissions".to_string())
+        });
 
     let prompt = "Read PROGRAM.md and PREPARE.md. Fill in the project-specific details: \
         set lead_github_login and maintainer_github_login to appropriate values, \

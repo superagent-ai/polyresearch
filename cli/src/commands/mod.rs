@@ -116,13 +116,13 @@ pub fn read_node_id(repo_root: &PathBuf) -> Result<String> {
 }
 
 pub fn write_node_id(repo_root: &PathBuf, node: &str) -> Result<()> {
-    write_node_config(repo_root, node, None)
+    write_node_config(repo_root, node, &crate::cli::NodeOverrides::default())
 }
 
 pub fn write_node_config(
     repo_root: &PathBuf,
     node: &str,
-    capacity: Option<u8>,
+    overrides: &crate::cli::NodeOverrides,
 ) -> Result<()> {
     let existing = NodeConfig::load(repo_root).ok();
     let existing_budget = existing
@@ -140,10 +140,16 @@ pub fn write_node_config(
     let existing_agent = existing.as_ref().map(|config| config.agent.clone());
     NodeConfig::new(
         node.to_string(),
-        capacity.unwrap_or(existing_capacity),
-        existing_budget,
-        existing_request_delay_ms,
-        existing_agent,
+        overrides.capacity.unwrap_or(existing_capacity),
+        overrides.api_budget.unwrap_or(existing_budget),
+        overrides.request_delay.unwrap_or(existing_request_delay_ms),
+        overrides
+            .agent_command
+            .as_ref()
+            .map(|cmd| crate::config::AgentConfig {
+                command: cmd.clone(),
+            })
+            .or(existing_agent),
     )
     .save(repo_root)
 }
@@ -168,7 +174,7 @@ pub fn ensure_node_config(repo_root: &Path) -> Result<()> {
             .collect()
     };
     let node_id = format!("{hostname}-{suffix}");
-    write_node_config(&repo_root.to_path_buf(), &node_id, None)?;
+    write_node_config(&repo_root.to_path_buf(), &node_id, &crate::cli::NodeOverrides::default())?;
     eprintln!("Initialized node as `{node_id}`");
     Ok(())
 }

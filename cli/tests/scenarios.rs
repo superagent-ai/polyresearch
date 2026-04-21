@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use polyresearch::cli::{
-    BootstrapArgs, Cli, Commands, ContributeArgs, LeadArgs,
+    BootstrapArgs, Cli, Commands, ContributeArgs, LeadArgs, NodeOverrides,
 };
 use polyresearch::commands::{self, AppContext};
 use polyresearch::comments::ProtocolComment;
@@ -260,8 +260,10 @@ async fn scenario_bootstrap_fresh() {
         Commands::Bootstrap(BootstrapArgs {
             url: "https://github.com/test/repo".to_string(),
             fork: None,
+            no_fork: true,
             goal: Some("Optimize throughput".to_string()),
             pause_after_bootstrap: true,
+            overrides: NodeOverrides::default(),
         }),
     );
 
@@ -270,8 +272,10 @@ async fn scenario_bootstrap_fresh() {
         &BootstrapArgs {
             url: "https://github.com/test/repo".to_string(),
             fork: None,
+            no_fork: true,
             goal: Some("Optimize throughput".to_string()),
             pause_after_bootstrap: true,
+            overrides: NodeOverrides::default(),
         },
     )
     .await
@@ -318,8 +322,10 @@ async fn scenario_bootstrap_idempotent() {
         Commands::Bootstrap(BootstrapArgs {
             url: "https://github.com/test/repo".to_string(),
             fork: None,
+            no_fork: true,
             goal: None,
             pause_after_bootstrap: true,
+            overrides: NodeOverrides::default(),
         }),
     );
 
@@ -328,8 +334,10 @@ async fn scenario_bootstrap_idempotent() {
         &BootstrapArgs {
             url: "https://github.com/test/repo".to_string(),
             fork: None,
+            no_fork: true,
             goal: None,
             pause_after_bootstrap: true,
+            overrides: NodeOverrides::default(),
         },
     )
     .await
@@ -383,6 +391,7 @@ async fn scenario_contribute_improved() {
             once: true,
             max_parallel: Some(1),
             sleep_secs: 0,
+            overrides: NodeOverrides::default(),
         }),
     );
 
@@ -393,6 +402,7 @@ async fn scenario_contribute_improved() {
             once: true,
             max_parallel: Some(1),
             sleep_secs: 0,
+            overrides: NodeOverrides::default(),
         },
     )
     .await;
@@ -429,6 +439,7 @@ async fn scenario_contribute_no_improvement() {
             once: true,
             max_parallel: Some(1),
             sleep_secs: 0,
+            overrides: NodeOverrides::default(),
         }),
     );
 
@@ -439,6 +450,7 @@ async fn scenario_contribute_no_improvement() {
             once: true,
             max_parallel: Some(1),
             sleep_secs: 0,
+            overrides: NodeOverrides::default(),
         },
     )
     .await;
@@ -475,6 +487,7 @@ async fn scenario_contribute_agent_failure() {
             once: true,
             max_parallel: Some(1),
             sleep_secs: 0,
+            overrides: NodeOverrides::default(),
         }),
     );
 
@@ -485,6 +498,7 @@ async fn scenario_contribute_agent_failure() {
             once: true,
             max_parallel: Some(1),
             sleep_secs: 0,
+            overrides: NodeOverrides::default(),
         },
     )
     .await;
@@ -589,6 +603,7 @@ async fn scenario_lead_accept_pr() {
         Commands::Lead(LeadArgs {
             once: true,
             sleep_secs: 0,
+            overrides: NodeOverrides::default(),
         }),
     );
 
@@ -597,6 +612,7 @@ async fn scenario_lead_accept_pr() {
         &LeadArgs {
             once: true,
             sleep_secs: 0,
+            overrides: NodeOverrides::default(),
         },
     )
     .await;
@@ -708,6 +724,7 @@ async fn scenario_lead_reject_non_improvement() {
         Commands::Lead(LeadArgs {
             once: true,
             sleep_secs: 0,
+            overrides: NodeOverrides::default(),
         }),
     );
 
@@ -716,6 +733,7 @@ async fn scenario_lead_reject_non_improvement() {
         &LeadArgs {
             once: true,
             sleep_secs: 0,
+            overrides: NodeOverrides::default(),
         },
     )
     .await;

@@ -17,11 +17,18 @@ pub async fn run(ctx: &AppContext, args: &LeadArgs) -> Result<()> {
     config.check_cli_version(env!("CARGO_PKG_VERSION"))?;
     let program = ProgramSpec::load(&ctx.repo_root, &config)?;
     let default_branch = config.resolve_default_branch(&ctx.repo_root)?;
-    let node_config = NodeConfig::load(&ctx.repo_root).ok();
+    let node_config = NodeConfig::load(&ctx.repo_root)
+        .ok()
+        .map(|c| c.with_overrides(&args.overrides));
     let agent_command = node_config
         .as_ref()
         .map(|c| c.agent.command.clone())
-        .unwrap_or_else(|| "claude -p --permission-mode bypassPermissions".to_string());
+        .unwrap_or_else(|| {
+            args.overrides
+                .agent_command
+                .clone()
+                .unwrap_or_else(|| "claude -p --permission-mode bypassPermissions".to_string())
+        });
 
     eprintln!("Running lead loop as `{login}`");
 
