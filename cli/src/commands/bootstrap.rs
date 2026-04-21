@@ -10,7 +10,7 @@ use crate::config::NodeConfig;
 use crate::github::RepoRef;
 
 pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
-    let repo_root = scaffold(ctx, args)?;
+    let (repo_root, login) = scaffold(ctx, args)?;
 
     if !args.yes {
         use std::io::IsTerminal;
@@ -38,7 +38,7 @@ pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
         }
     }
 
-    spawn_setup_agent(&repo_root, &args.overrides, ctx.cli.verbose)?;
+    spawn_setup_agent(&repo_root, &args.overrides, ctx.cli.verbose, &login)?;
 
     // Post-agent cleanup: re-normalize in case the agent mangled required sections,
     // then commit+push the agent's changes (PROGRAM.md/PREPARE.md with project details).
@@ -51,7 +51,8 @@ pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
 
 /// Clone/fork, write templates, initialize node config, and normalize PROGRAM.md.
 /// Does not spawn any agents or require interactive input.
-pub fn scaffold(ctx: &AppContext, args: &BootstrapArgs) -> Result<std::path::PathBuf> {
+/// Returns `(repo_root, github_login)` so callers can thread the login downstream.
+pub fn scaffold(ctx: &AppContext, args: &BootstrapArgs) -> Result<(std::path::PathBuf, String)> {
     let upstream = RepoRef::from_user_input(&args.url)?;
     let clone_url = upstream.clone_url();
     eprintln!("Bootstrapping polyresearch project from {}", upstream.slug());
@@ -70,11 +71,14 @@ pub fn scaffold(ctx: &AppContext, args: &BootstrapArgs) -> Result<std::path::Pat
         auto_clone_or_fork(&upstream, &repo_root)?;
     }
 
-    write_templates(&repo_root, args.goal.as_deref())?;
+    let login = ctx.github.current_login()?;
+
+    write_templates(&repo_root, args.goal.as_deref(), &login)?;
+    ensure_lead_login(&repo_root, &login)?;
     initialize_node(&repo_root, &args.overrides)?;
     normalize_program_md(&repo_root)?;
 
-    Ok(repo_root)
+    Ok((repo_root, login))
 }
 
 fn auto_clone_or_fork(upstream: &RepoRef, repo_root: &Path) -> Result<()> {
@@ -201,15 +205,24 @@ fn clone_if_needed(url: &str, repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn write_templates(repo_root: &Path, goal: Option<&str>) -> Result<()> {
+pub fn write_templates(repo_root: &Path, goal: Option<&str>, login: &str) -> Result<()> {
     let program_path = repo_root.join("PROGRAM.md");
     if !program_path.exists() {
         let base = include_str!("../../prompts/template-program.md");
         let versioned = base.replace("{{VERSION}}", env!("CARGO_PKG_VERSION"));
+        let with_login = versioned
+            .replace(
+                "lead_github_login: replace-me",
+                &format!("lead_github_login: {login}"),
+            )
+            .replace(
+                "maintainer_github_login: replace-me",
+                &format!("maintainer_github_login: {login}"),
+            );
         let template = if let Some(goal) = goal {
-            replace_goal_section(&versioned, goal)
+            replace_goal_section(&with_login, goal)
         } else {
-            versioned
+            with_login
         };
         fs::write(&program_path, template)
             .wrap_err_with(|| format!("failed to write {}", program_path.display()))?;
@@ -235,6 +248,54 @@ pub fn write_templates(repo_root: &Path, goal: Option<&str>) -> Result<()> {
     if !polyresearch_dir.exists() {
         fs::create_dir_all(&polyresearch_dir)
             .wrap_err_with(|| format!("failed to create {}", polyresearch_dir.display()))?;
+    }
+
+    Ok(())
+}
+
+/// Ensure `lead_github_login` and `maintainer_github_login` in an existing
+/// PROGRAM.md match the current user. Handles repos cloned from an upstream
+/// that already had polyresearch configured with a different lead.
+fn ensure_lead_login(repo_root: &Path, login: &str) -> Result<()> {
+    let path = repo_root.join("PROGRAM.md");
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let contents = fs::read_to_string(&path)
+        .wrap_err_with(|| format!("failed to read {}", path.display()))?;
+
+    let keys = ["lead_github_login", "maintainer_github_login"];
+    let mut changed = false;
+    let modified: String = contents
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            for key in &keys {
+                if let Some(rest) = trimmed.strip_prefix(*key) {
+                    if let Some(value) = rest.strip_prefix(':') {
+                        let value = value.trim();
+                        if !value.is_empty() && value != login {
+                            changed = true;
+                            return format!("{key}: {login}");
+                        }
+                    }
+                }
+            }
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if changed {
+        let modified = if contents.ends_with('\n') && !modified.ends_with('\n') {
+            format!("{modified}\n")
+        } else {
+            modified
+        };
+        fs::write(&path, &modified)
+            .wrap_err_with(|| format!("failed to write {}", path.display()))?;
+        eprintln!("Updated lead/maintainer login in PROGRAM.md to `{login}`");
     }
 
     Ok(())
@@ -266,7 +327,7 @@ fn initialize_node(repo_root: &Path, overrides: &crate::cli::NodeOverrides) -> R
     Ok(())
 }
 
-fn spawn_setup_agent(repo_root: &Path, overrides: &crate::cli::NodeOverrides, verbose: bool) -> Result<()> {
+fn spawn_setup_agent(repo_root: &Path, overrides: &crate::cli::NodeOverrides, verbose: bool, login: &str) -> Result<()> {
     let node_config = NodeConfig::load(&repo_root.to_path_buf())
         .ok()
         .map(|c| c.with_overrides(overrides));
@@ -280,10 +341,14 @@ fn spawn_setup_agent(repo_root: &Path, overrides: &crate::cli::NodeOverrides, ve
                 .unwrap_or_else(|| "claude -p --dangerously-skip-permissions".to_string())
         });
 
-    let prompt = include_str!("../../prompts/bootstrap-setup.md");
+    let base_prompt = include_str!("../../prompts/bootstrap-setup.md");
+    let prompt = format!(
+        "{base_prompt}\n\nThe lead GitHub login is `{login}`. \
+         Use this exact value for lead_github_login and maintainer_github_login in PROGRAM.md."
+    );
 
     eprintln!("Spawning agent for initial setup...");
-    let _ = crate::agent::spawn_experiment(&agent_command, repo_root, prompt, verbose);
+    let _ = crate::agent::spawn_experiment(&agent_command, repo_root, &prompt, verbose);
     Ok(())
 }
 
