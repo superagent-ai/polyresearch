@@ -136,6 +136,14 @@ impl ScenarioGitHub {
             .collect()
     }
 
+    #[allow(dead_code)]
+    pub fn set_pr_mergeable(&self, pr_number: u64, status: &str) {
+        let mut s = self.state.lock().unwrap();
+        if let Some(pr) = s.pull_requests.iter_mut().find(|pr| pr.number == pr_number) {
+            pr.mergeable = Some(status.to_string());
+        }
+    }
+
     pub fn comment_bodies_on(&self, issue_or_pr: u64) -> Vec<String> {
         let s = self.state.lock().unwrap();
         let mut bodies = Vec::new();
@@ -340,6 +348,7 @@ impl GitHubApi for ScenarioGitHub {
                 login: s.login.clone(),
             }),
             url: Some(format!("https://github.com/test/repo/pull/{number}")),
+            mergeable: Some("MERGEABLE".to_string()),
         };
         s.pull_requests.push(pr.clone());
         Ok(pr)
@@ -357,6 +366,11 @@ impl GitHubApi for ScenarioGitHub {
 
     fn merge_pull_request(&self, pr_number: u64) -> Result<serde_json::Value> {
         let mut s = self.state.lock().unwrap();
+        if let Some(pr) = s.pull_requests.iter().find(|pr| pr.number == pr_number) {
+            if pr.mergeable.as_deref() == Some("CONFLICTING") {
+                return Err(eyre!("405 Method Not Allowed: pull request is not mergeable"));
+            }
+        }
         s.merged_prs.push(pr_number);
         if let Some(pr) = s.pull_requests.iter_mut().find(|pr| pr.number == pr_number) {
             pr.state = "MERGED".to_string();

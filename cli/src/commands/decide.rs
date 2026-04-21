@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use color_eyre::eyre::{Context, Result, eyre};
+use color_eyre::eyre::{Result, eyre};
 use serde::Serialize;
 
 use std::sync::Arc;
@@ -217,11 +217,26 @@ pub fn execute_decision(
 ) -> Result<()> {
     match outcome {
         Outcome::Accepted => {
-            github
-                .merge_pull_request(pr_number)
-                .wrap_err("merge failed — decision NOT posted (resolve conflict first)")?;
-            github.post_issue_comment(pr_number, &comment.render())?;
-            github.close_issue(thesis_number)?;
+            match github.merge_pull_request(pr_number) {
+                Ok(_) => {
+                    github.post_issue_comment(pr_number, &comment.render())?;
+                    github.close_issue(thesis_number)?;
+                }
+                Err(merge_err) => {
+                    eprintln!(
+                        "Merge of PR #{pr_number} failed ({merge_err:#}), falling back to stale decision"
+                    );
+                    let candidate_sha = extract_candidate_sha(comment);
+                    let stale_comment = ProtocolComment::Decision {
+                        thesis: thesis_number,
+                        candidate_sha,
+                        outcome: Outcome::Stale,
+                        confirmations: 0,
+                    };
+                    github.post_issue_comment(pr_number, &stale_comment.render())?;
+                    github.close_pull_request(pr_number)?;
+                }
+            }
         }
         Outcome::InfraFailure | Outcome::Stale => {
             github.post_issue_comment(pr_number, &comment.render())?;
@@ -236,6 +251,13 @@ pub fn execute_decision(
         }
     }
     Ok(())
+}
+
+fn extract_candidate_sha(comment: &ProtocolComment) -> String {
+    match comment {
+        ProtocolComment::Decision { candidate_sha, .. } => candidate_sha.clone(),
+        _ => String::new(),
+    }
 }
 
 fn all_observations(reviews: &[ReviewRecord], observation: Observation) -> bool {

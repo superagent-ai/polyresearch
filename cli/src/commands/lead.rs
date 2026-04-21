@@ -192,6 +192,21 @@ fn decide_ready_prs(ctx: &AppContext, config: &ProtocolConfig, repo_state: &Repo
                 continue;
             }
 
+            if pr_state.pr.mergeable.as_deref() == Some("CONFLICTING") {
+                eprintln!("PR #{} has merge conflicts, closing as stale...", pr_state.pr.number);
+                if !ctx.cli.dry_run {
+                    let stale_comment = ProtocolComment::Decision {
+                        thesis: thesis.issue.number,
+                        candidate_sha: pr_state.pr.head_ref_oid.clone().unwrap_or_default(),
+                        outcome: Outcome::Stale,
+                        confirmations: 0,
+                    };
+                    ctx.github.post_issue_comment(pr_state.pr.number, &stale_comment.render())?;
+                    ctx.github.close_pull_request(pr_state.pr.number)?;
+                }
+                continue;
+            }
+
             eprintln!("Deciding PR #{}...", pr_state.pr.number);
 
             if ctx.cli.dry_run {

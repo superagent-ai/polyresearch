@@ -570,6 +570,7 @@ async fn scenario_lead_accept_pr() {
             login: "contributor".to_string(),
         }),
         url: Some("https://github.com/test/repo/pull/50".to_string()),
+        mergeable: Some("MERGEABLE".to_string()),
     };
 
     let policy_pass = ProtocolComment::PolicyPass {
@@ -691,6 +692,7 @@ async fn scenario_lead_reject_non_improvement() {
             login: "contributor".to_string(),
         }),
         url: Some("https://github.com/test/repo/pull/51".to_string()),
+        mergeable: Some("MERGEABLE".to_string()),
     };
 
     let policy_pass = ProtocolComment::PolicyPass {
@@ -775,6 +777,7 @@ fn execute_decision_non_improvement_zero_conf_keeps_thesis_open() {
         merged_at: None,
         author: None,
         url: None,
+        mergeable: None,
     });
 
     let comment = ProtocolComment::Decision {
@@ -820,6 +823,7 @@ fn execute_decision_disagreement_zero_conf_closes_thesis() {
         merged_at: None,
         author: None,
         url: None,
+        mergeable: None,
     });
 
     let comment = ProtocolComment::Decision {
@@ -865,6 +869,7 @@ fn execute_decision_accepted_merges_and_closes() {
         merged_at: None,
         author: None,
         url: None,
+        mergeable: None,
     });
 
     let comment = ProtocolComment::Decision {
@@ -888,6 +893,207 @@ fn execute_decision_accepted_merges_and_closes() {
     assert!(
         github.is_issue_closed(72),
         "thesis should be closed on accepted"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Conflicting PR handling (issue #80)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn scenario_lead_closes_conflicting_pr_as_stale() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("lead-conflict");
+    repo.init_git();
+    repo.write_full_setup("lead", "lead-node", "echo noop");
+    repo.commit_all("setup");
+
+    let now = chrono::Utc::now();
+    let (issue, mut issue_comments) = make_approved_thesis(45, "Optimize hot path", "lead");
+
+    issue_comments.push(IssueComment {
+        id: 4501,
+        body: ProtocolComment::Claim {
+            thesis: 45,
+            node: "worker-c".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(30),
+        updated_at: None,
+    });
+
+    issue_comments.push(IssueComment {
+        id: 4502,
+        body: ProtocolComment::Attempt {
+            thesis: 45,
+            branch: "thesis/45-optimize-hot-path".to_string(),
+            metric: 0.95,
+            baseline_metric: Some(0.90),
+            observation: polyresearch::comments::Observation::Improved,
+            summary: "Hot path optimization".to_string(),
+            annotations: None,
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(20),
+        updated_at: None,
+    });
+
+    let pr = PullRequest {
+        number: 55,
+        title: "Thesis #45: Optimize hot path".to_string(),
+        body: Some("References #45".to_string()),
+        state: "OPEN".to_string(),
+        head_ref_name: "thesis/45-optimize-hot-path".to_string(),
+        head_ref_oid: Some("conflict-sha".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: now - chrono::Duration::minutes(15),
+        closed_at: None,
+        merged_at: None,
+        author: Some(Author {
+            login: "contributor".to_string(),
+        }),
+        url: Some("https://github.com/test/repo/pull/55".to_string()),
+        mergeable: Some("CONFLICTING".to_string()),
+    };
+
+    let pr_comments = vec![IssueComment {
+        id: 5501,
+        body: ProtocolComment::PolicyPass {
+            thesis: 45,
+            candidate_sha: "conflict-sha".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: "lead".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(10),
+        updated_at: None,
+    }];
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(45, issue_comments);
+    github.seed_pull_request(pr);
+    github.seed_pr_comments(55, pr_comments);
+    github.seed_pr_files(55, vec![polyresearch::github::PullRequestFile {
+        filename: "src/hot_path.js".to_string(),
+    }]);
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Lead(LeadArgs {
+            once: true,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::lead::run(
+        &ctx,
+        &LeadArgs {
+            once: true,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(result.is_ok(), "lead should succeed: {result:?}");
+    assert!(
+        !github.is_pr_merged(55),
+        "conflicting PR #55 should NOT be merged"
+    );
+    assert!(
+        github.is_pr_closed(55),
+        "conflicting PR #55 should be closed"
+    );
+    assert!(
+        !github.is_issue_closed(45),
+        "thesis #45 should stay open for retry"
+    );
+
+    let pr_bodies = github.comment_bodies_on(55);
+    let has_stale_decision = pr_bodies
+        .iter()
+        .any(|b| b.contains("polyresearch:decision") && b.contains("stale"));
+    assert!(
+        has_stale_decision,
+        "should have posted stale decision on conflicting PR #55"
+    );
+}
+
+#[test]
+fn execute_decision_falls_back_on_merge_failure() {
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_pull_request(PullRequest {
+        number: 73,
+        title: "Candidate".to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        head_ref_name: "thesis/73-test".to_string(),
+        head_ref_oid: Some("sha-conflict".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: chrono::Utc::now(),
+        closed_at: None,
+        merged_at: None,
+        author: None,
+        url: None,
+        mergeable: Some("CONFLICTING".to_string()),
+    });
+
+    let comment = ProtocolComment::Decision {
+        thesis: 73,
+        candidate_sha: "sha-conflict".to_string(),
+        outcome: polyresearch::comments::Outcome::Accepted,
+        confirmations: 0,
+    };
+
+    let result = commands::decide::execute_decision(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        73,
+        73,
+        polyresearch::comments::Outcome::Accepted,
+        &comment,
+        0,
+    );
+
+    assert!(result.is_ok(), "should not propagate merge error: {result:?}");
+    assert!(
+        !github.is_pr_merged(73),
+        "conflicting PR should NOT be merged"
+    );
+    assert!(
+        github.is_pr_closed(73),
+        "conflicting PR should be closed as stale fallback"
+    );
+    assert!(
+        !github.is_issue_closed(73),
+        "thesis should stay open when merge fails (stale fallback)"
+    );
+
+    let pr_bodies = github.comment_bodies_on(73);
+    let has_stale = pr_bodies
+        .iter()
+        .any(|b| b.contains("polyresearch:decision") && b.contains("stale"));
+    assert!(
+        has_stale,
+        "should have posted stale decision comment as fallback"
+    );
+    let has_accepted = pr_bodies
+        .iter()
+        .any(|b| b.contains("polyresearch:decision") && b.contains("accepted"));
+    assert!(
+        !has_accepted,
+        "should NOT have posted accepted decision on failed merge"
     );
 }
 
