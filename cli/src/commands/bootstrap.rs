@@ -275,32 +275,41 @@ fn spawn_setup_agent(repo_root: &Path, overrides: &crate::cli::NodeOverrides) ->
 pub fn commit_and_push_setup_files(repo_root: &Path) -> Result<()> {
     let repo = repo_root.to_path_buf();
 
-    let setup_files: Vec<&str> = ["PROGRAM.md", "PREPARE.md", "results.tsv", ".polyresearch"]
+    let setup_paths: Vec<&str> = ["PROGRAM.md", "PREPARE.md", "results.tsv", ".polyresearch"]
         .into_iter()
         .filter(|f| repo_root.join(f).exists())
         .collect();
 
-    if setup_files.is_empty() {
+    if setup_paths.is_empty() {
         return Ok(());
     }
 
     let mut add_args: Vec<&str> = vec!["add", "--"];
-    add_args.extend(&setup_files);
+    add_args.extend(&setup_paths);
     commands::run_git(&repo, &add_args)?;
 
-    let has_staged = Command::new("git")
-        .args(["diff", "--cached", "--quiet"])
-        .current_dir(repo_root)
-        .status()
-        .map(|s| !s.success())
-        .unwrap_or(false);
+    // Query which of our paths actually have staged changes. This scopes the
+    // commit to only setup files (preventing leakage from a dirty index) and
+    // avoids "pathspec didn't match" errors on empty directories like .polyresearch/.
+    let mut diff_args: Vec<&str> = vec!["diff", "--cached", "--name-only", "--"];
+    diff_args.extend(&setup_paths);
+    let diff_output = commands::run_git(&repo, &diff_args).unwrap_or_default();
+    let staged_files: Vec<String> = diff_output
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
 
-    if !has_staged {
+    if staged_files.is_empty() {
         eprintln!("Setup files already committed.");
         return Ok(());
     }
 
-    commands::run_git(&repo, &["commit", "-m", "Add polyresearch setup files"])?;
+    let mut commit_args: Vec<&str> = vec!["commit", "-m", "Add polyresearch setup files", "--"];
+    for f in &staged_files {
+        commit_args.push(f.as_str());
+    }
+    commands::run_git(&repo, &commit_args)?;
 
     match commands::run_git(&repo, &["push", "origin", "HEAD"]) {
         Ok(_) => eprintln!("Committed and pushed setup files."),
