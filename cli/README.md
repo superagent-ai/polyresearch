@@ -194,43 +194,335 @@ The maintainer comments `/approve` or `/reject` directly on thesis issues and ca
 - `--json` returns structured JSON for agent consumption.
 - `status --tui` opens the ratatui dashboard for a live human view.
 
-## Command summary
+## Command reference
 
-High-level orchestration:
+### Global flags
 
-- `polyresearch bootstrap <url>` -- auto-fork (or `--fork <org>`, `--no-fork`), write templates, init node, spawn setup agent. Accepts `--capacity`, `--api-budget`, `--request-delay`, `--agent-command` to set initial node config values.
-- `polyresearch lead` -- continuous lead loop: sync, policy-check, decide, generate. Accepts `--capacity`, `--api-budget`, `--request-delay`, `--agent-command` as runtime overrides.
-- `polyresearch contribute [url]` -- continuous contributor loop: claim, experiment, record, submit. Accepts `--capacity`, `--api-budget`, `--request-delay`, `--agent-command` as runtime overrides.
+These flags apply to every command.
 
-Status and inspection:
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--repo <owner/repo>` | string | current repo | Target repository |
+| `--github-debug` | bool | `false` | Log GitHub API requests and responses |
+| `--json` | bool | `false` | Output structured JSON instead of human-readable text |
+| `--dry-run` | bool | `false` | Preview actions without side effects |
 
-- `polyresearch init` -- set node identity and config (`--capacity`, `--api-budget`, `--request-delay`, `--agent-command`), verify GitHub auth, detect repo
-- `polyresearch pace` -- show the hardware budget (machine, your max, live free), GitHub API budget, active claims, and recent node throughput
-- `polyresearch status` -- derive thesis state, queue depth, active nodes, current best metric
-- `polyresearch audit` -- validate raw GitHub activity and report invalid or suspicious protocol events
-- `polyresearch duties` -- list blocking and advisory work items for the current node
+### Node overrides
 
-Contributor:
+Shared by `init`, `bootstrap`, `lead`, and `contribute`. These are runtime overrides and do not modify `.polyresearch-node.toml`.
 
-- `polyresearch claim` -- atomically claim a thesis and create the thesis worktree at `.worktrees/<issue>-<slug>/`
-- `polyresearch batch-claim` -- claim up to the node's free thesis slots and create one worktree per thesis
-- `polyresearch attempt` -- post a structured attempt comment from the current branch
-- `polyresearch release` -- release a claim with a structured reason
-- `polyresearch submit` -- push the branch and open a candidate PR
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--capacity <n>` | int (1-100) | from config | Percentage of the machine this project may use |
+| `--api-budget <n>` | int | from config | GitHub API rate budget (max requests) |
+| `--request-delay <ms>` | int | from config | Milliseconds to wait between API calls |
+| `--agent-command <cmd>` | string | from config | Shell command for the experiment runner |
 
-Review:
+### Enum values
 
-- `polyresearch review-claim` -- claim a PR for review
-- `polyresearch review` -- post a structured review record with env hash
+Several flags accept a fixed set of values.
 
-Lead:
+**Observation** (used by `attempt --observation` and `review --observation`):
 
-- `polyresearch sync` -- reconcile `results.tsv` from the comment trail
-- `polyresearch generate` -- open a thesis issue (auto-approves when `auto_approve` is `true`, otherwise assigns to maintainer)
-- `polyresearch policy-check` -- validate PR files against the editable surface
-- `polyresearch decide` -- post the lead decision and merge/close accordingly (waits for maintainer `/approve` when `auto_approve` is `false`)
-- `polyresearch prune` -- prune git worktree metadata and remove empty stale directories under `.worktrees`
-- `polyresearch admin ...` -- lead-only repair commands for exceptional recovery
+`improved` | `no_improvement` | `crashed` | `infra_failure`
+
+**ReleaseReason** (used by `release --reason` and `admin release-claim --reason`):
+
+`no_improvement` | `timeout` | `infra_failure`
+
+---
+
+### High-level orchestration
+
+#### `bootstrap`
+
+Auto-fork, write templates, init node, and spawn the setup agent.
+
+Usage: `polyresearch bootstrap <url> [flags]`
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--fork <org>` | string | — | Fork to a specific organization |
+| `--no-fork` | bool | `false` | Clone directly without forking (conflicts with `--fork`) |
+| `--goal <text>` | string | — | Initial research goal |
+| `--pause-after-bootstrap` | bool | `false` | Exit after setup instead of starting the loop |
+
+Also accepts [node overrides](#node-overrides).
+
+#### `lead`
+
+Continuous lead loop: sync, policy-check, decide, generate.
+
+Usage: `polyresearch lead [flags]`
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--once` | bool | `false` | Run a single iteration then exit |
+| `--sleep-secs <n>` | int | `60` | Seconds to sleep between loop iterations |
+
+Also accepts [node overrides](#node-overrides).
+
+#### `contribute`
+
+Continuous contributor loop: claim, experiment, record, submit.
+
+Usage: `polyresearch contribute [url] [flags]`
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--once` | bool | `false` | Run a single iteration then exit |
+| `--max-parallel <n>` | int | — | Maximum number of parallel thesis evaluations |
+| `--sleep-secs <n>` | int | `60` | Seconds to sleep between loop iterations |
+
+Also accepts [node overrides](#node-overrides).
+
+---
+
+### Status and inspection
+
+#### `init`
+
+Set node identity and config. Writes `.polyresearch-node.toml` in the repo root.
+
+Usage: `polyresearch init [flags]`
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--node <id>` | string | auto-generated | Explicit node identifier |
+
+Also accepts [node overrides](#node-overrides).
+
+#### `pace`
+
+Show the hardware budget (machine resources, your max, live free), GitHub API quota, active claims, and recent node throughput.
+
+Usage: `polyresearch pace`
+
+No command-specific flags.
+
+#### `status`
+
+Derive thesis state, queue depth, active nodes, and current best metric.
+
+Usage: `polyresearch status [flags]`
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--tui` | bool | `false` | Open the ratatui live dashboard |
+
+#### `audit`
+
+Validate raw GitHub activity and report invalid or suspicious protocol events.
+
+Usage: `polyresearch audit`
+
+No command-specific flags.
+
+#### `duties`
+
+List blocking and advisory work items for the current node.
+
+Usage: `polyresearch duties`
+
+No command-specific flags.
+
+---
+
+### Contributor
+
+#### `claim`
+
+Atomically claim a thesis and create the thesis worktree at `.worktrees/<issue>-<slug>/`.
+
+Usage: `polyresearch claim <issue>`
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `<issue>` | int | GitHub issue number (required) |
+
+#### `batch-claim`
+
+Claim up to the node's free thesis slots and create one worktree per thesis.
+
+Usage: `polyresearch batch-claim [flags]`
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--count <n>` | int | — | Number of theses to claim (defaults to available slots) |
+
+#### `attempt`
+
+Post a structured attempt comment from the current branch.
+
+Usage: `polyresearch attempt <issue> --metric <f> --baseline <f> --observation <obs> --summary <text> [flags]`
+
+| Argument / Flag | Type | Default | Description |
+|-----------------|------|---------|-------------|
+| `<issue>` | int | — | GitHub issue number (required) |
+| `--metric <f>` | float | — | Measured metric value (required) |
+| `--baseline <f>` | float | — | Baseline metric value (required) |
+| `--observation <obs>` | Observation | — | Experiment outcome (required); see [enum values](#enum-values) |
+| `--summary <text>` | string | — | Human-readable summary of the attempt (required) |
+| `--annotations <text>` | string | — | Additional structured annotations |
+
+#### `annotate`
+
+Post an annotation comment on a thesis issue.
+
+Usage: `polyresearch annotate <issue> --text <text>`
+
+| Argument / Flag | Type | Default | Description |
+|-----------------|------|---------|-------------|
+| `<issue>` | int | — | GitHub issue number (required) |
+| `--text <text>` | string | — | Annotation text (required) |
+
+#### `release`
+
+Release a claim with a structured reason.
+
+Usage: `polyresearch release <issue> --reason <reason>`
+
+| Argument / Flag | Type | Default | Description |
+|-----------------|------|---------|-------------|
+| `<issue>` | int | — | GitHub issue number (required) |
+| `--reason <reason>` | ReleaseReason | — | Why the claim is being released (required); see [enum values](#enum-values) |
+
+#### `submit`
+
+Push the branch and open a candidate PR.
+
+Usage: `polyresearch submit <issue>`
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `<issue>` | int | GitHub issue number (required) |
+
+---
+
+### Review
+
+#### `review-claim`
+
+Claim a PR for review.
+
+Usage: `polyresearch review-claim <pr>`
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `<pr>` | int | GitHub pull request number (required) |
+
+#### `review`
+
+Post a structured review record with environment hash.
+
+Usage: `polyresearch review <pr> --metric <f> --baseline <f> --observation <obs>`
+
+| Argument / Flag | Type | Default | Description |
+|-----------------|------|---------|-------------|
+| `<pr>` | int | — | GitHub pull request number (required) |
+| `--metric <f>` | float | — | Measured metric value (required) |
+| `--baseline <f>` | float | — | Baseline metric value (required) |
+| `--observation <obs>` | Observation | — | Review outcome (required); see [enum values](#enum-values) |
+
+---
+
+### Lead
+
+#### `sync`
+
+Reconcile `results.tsv` from the comment trail.
+
+Usage: `polyresearch sync`
+
+No command-specific flags.
+
+#### `generate`
+
+Open a thesis issue. Auto-approves when `auto_approve` is `true` in `PROGRAM.md`, otherwise assigns to the maintainer.
+
+Usage: `polyresearch generate --title <text> --body <text>`
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--title <text>` | string | — | Thesis title (required) |
+| `--body <text>` | string | — | Hypothesis and rationale (required) |
+
+#### `policy-check`
+
+Validate PR files against the editable surface.
+
+Usage: `polyresearch policy-check <pr>`
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `<pr>` | int | GitHub pull request number (required) |
+
+#### `decide`
+
+Post the lead decision and merge or close accordingly. Waits for maintainer `/approve` when `auto_approve` is `false`.
+
+Usage: `polyresearch decide <pr>`
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `<pr>` | int | GitHub pull request number (required) |
+
+#### `prune`
+
+Prune git worktree metadata and remove empty stale directories under `.worktrees`.
+
+Usage: `polyresearch prune`
+
+No command-specific flags.
+
+---
+
+### Admin
+
+Lead-only repair commands for exceptional recovery. All nested under `polyresearch admin`.
+
+#### `admin release-claim`
+
+Force-release a stale or invalid claim.
+
+Usage: `polyresearch admin release-claim <issue> --node <id> --reason <reason> [flags]`
+
+| Argument / Flag | Type | Default | Description |
+|-----------------|------|---------|-------------|
+| `<issue>` | int | — | GitHub issue number (required) |
+| `--node <id>` | string | — | Node that holds the claim (required) |
+| `--reason <reason>` | ReleaseReason | — | Why the claim is being released (required); see [enum values](#enum-values) |
+| `--note <text>` | string | `"Lead repair released the stale or invalid claim."` | Explanatory note posted with the release |
+
+#### `admin acknowledge-invalid`
+
+Acknowledge and dismiss an invalid protocol comment.
+
+Usage: `polyresearch admin acknowledge-invalid <comment-id> --note <text>`
+
+| Argument / Flag | Type | Default | Description |
+|-----------------|------|---------|-------------|
+| `<comment-id>` | int | — | GitHub comment ID (required) |
+| `--note <text>` | string | — | Reason for acknowledging (required) |
+
+#### `admin reopen-thesis`
+
+Reopen a previously closed thesis issue.
+
+Usage: `polyresearch admin reopen-thesis <issue> [flags]`
+
+| Argument / Flag | Type | Default | Description |
+|-----------------|------|---------|-------------|
+| `<issue>` | int | — | GitHub issue number (required) |
+| `--note <text>` | string | `"Lead repair reopened the thesis."` | Explanatory note posted with the reopen |
+
+#### `admin reconcile-ledger`
+
+Rebuild `results.tsv` from canonical protocol history.
+
+Usage: `polyresearch admin reconcile-ledger`
+
+No command-specific flags.
 
 ## Notes
 
