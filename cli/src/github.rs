@@ -942,7 +942,7 @@ fn classify_error_hint(stderr: &str) -> Option<&'static str> {
         return Some("Run: gh auth login");
     }
 
-    if lowered.contains("not found (http 404)") || lowered.contains("could not resolve") {
+    if lowered.contains("http 404") || lowered.contains("could not resolve") {
         return Some("Check that the repository exists and you have access: gh repo view OWNER/REPO");
     }
 
