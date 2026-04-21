@@ -8,6 +8,16 @@ use serde::{Deserialize, Serialize};
 
 const STDOUT_TAIL_LIMIT: usize = 2000;
 
+/// Truncate a string to at most `max_bytes` from the end, cutting at a valid
+/// UTF-8 char boundary so we never panic on multi-byte characters.
+fn tail_str(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let cut = s.len() - max_bytes;
+    &s[s.ceil_char_boundary(cut)..]
+}
+
 fn log_subprocess_failure(label: &str, output: &Output, verbose: bool, command_line: Option<&str>, work_dir: Option<&Path>) {
     let code = output.status.code()
         .map(|c| c.to_string())
@@ -31,12 +41,7 @@ fn log_subprocess_failure(label: &str, output: &Output, verbose: bool, command_l
     }
     if !stdout.trim().is_empty() {
         let trimmed = stdout.trim();
-        let display = if trimmed.len() > STDOUT_TAIL_LIMIT {
-            &trimmed[trimmed.len() - STDOUT_TAIL_LIMIT..]
-        } else {
-            trimmed
-        };
-        eprintln!("  stdout (last): {display}");
+        eprintln!("  stdout (last): {}", tail_str(trimmed, STDOUT_TAIL_LIMIT));
     }
     if stderr.trim().is_empty() && stdout.trim().is_empty() {
         eprintln!("  (no output captured from subprocess)");
@@ -165,13 +170,14 @@ pub fn recover_from_logs(worktree_path: &Path) -> Option<RecoveredMetric> {
 pub fn run_harness_directly(
     worktree_path: &Path,
     baseline_path: &Path,
+    verbose: bool,
 ) -> Result<Option<RecoveredMetric>> {
     let Some(harness) = find_harness(worktree_path) else {
         return Ok(None);
     };
 
-    let candidate_metric = run_harness_in(&harness, worktree_path)?;
-    let baseline_metric = run_harness_in(&harness, baseline_path)?;
+    let candidate_metric = run_harness_in(&harness, worktree_path, verbose)?;
+    let baseline_metric = run_harness_in(&harness, baseline_path, verbose)?;
 
     match (candidate_metric, baseline_metric) {
         (Some(candidate), Some(baseline)) => Ok(Some(RecoveredMetric {
@@ -269,7 +275,7 @@ fn find_harness(worktree_path: &Path) -> Option<HarnessSpec> {
     None
 }
 
-fn run_harness_in(harness: &HarnessSpec, work_dir: &Path) -> Result<Option<f64>> {
+fn run_harness_in(harness: &HarnessSpec, work_dir: &Path, verbose: bool) -> Result<Option<f64>> {
     let script_path = work_dir.join(harness.relative_path);
     let output = Command::new(harness.runner)
         .arg(&script_path)
@@ -279,7 +285,7 @@ fn run_harness_in(harness: &HarnessSpec, work_dir: &Path) -> Result<Option<f64>>
 
     if !output.status.success() {
         let cmd_line = format!("{} {}", harness.runner, script_path.display());
-        log_subprocess_failure("Evaluation harness", &output, false, Some(&cmd_line), Some(work_dir));
+        log_subprocess_failure("Evaluation harness", &output, verbose, Some(&cmd_line), Some(work_dir));
         return Ok(None);
     }
 

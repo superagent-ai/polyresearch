@@ -138,7 +138,7 @@ impl ThesisWorker {
 
         let baseline_path = self.create_baseline_worktree()?;
         let harness_result =
-            agent::run_harness_directly(&self.worktree_path, &baseline_path);
+            agent::run_harness_directly(&self.worktree_path, &baseline_path, self.ctx.verbose);
         self.remove_baseline_worktree(&baseline_path);
 
         match harness_result {
