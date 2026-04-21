@@ -5,6 +5,7 @@ use crate::cli::BatchClaimArgs;
 use crate::commands::claim::{ClaimOutput, claim_selected_thesis};
 use crate::commands::duties;
 use crate::commands::{AppContext, node_active_claims, print_value, read_node_id};
+use crate::comments::ReleaseReason;
 use crate::state::{RepositoryState, ThesisPhase, ThesisState};
 
 #[derive(Debug, Serialize)]
@@ -131,7 +132,12 @@ fn select_claimable_theses<'a>(
         .filter(|thesis| thesis.approved)
         .filter(|thesis| matches!(thesis.phase, ThesisPhase::Approved))
         .filter(|thesis| thesis.active_claims.is_empty())
-        .filter(|thesis| !thesis.releases.iter().any(|release| release.node == node))
+        .filter(|thesis| {
+            !thesis
+                .releases
+                .iter()
+                .any(|release| release.node == node && release.reason == ReleaseReason::NoImprovement)
+        })
         .collect::<Vec<_>>();
     theses.sort_by_key(|thesis| thesis.issue.number);
     theses.truncate(count);
