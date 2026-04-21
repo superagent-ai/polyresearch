@@ -3978,7 +3978,7 @@ async fn contribute_once_errors_on_unresolvable_submit_duty() {
     let repo = TestRepo::new("contrib-once-submit-block");
     init_git_repo(&repo.path);
     write_program_md(&repo.path);
-    write_node_config(&repo.path, "test-node-block");
+    write_node_config(&repo.path, "test-node");
     fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
     run_git(&repo.path, &["add", "-A"]);
     run_git(&repo.path, &["commit", "-m", "setup"]);
