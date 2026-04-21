@@ -787,7 +787,7 @@ fn execute_decision_non_improvement_zero_conf_keeps_thesis_open() {
         confirmations: 0,
     };
 
-    commands::decide::execute_decision(
+    let actual = commands::decide::execute_decision(
         &(Arc::clone(&github) as Arc<dyn GitHubApi>),
         70,
         70,
@@ -797,6 +797,7 @@ fn execute_decision_non_improvement_zero_conf_keeps_thesis_open() {
     )
     .unwrap();
 
+    assert_eq!(actual, polyresearch::comments::Outcome::NonImprovement);
     assert!(
         github.is_pr_closed(70),
         "PR should be closed on non_improvement"
@@ -833,7 +834,7 @@ fn execute_decision_disagreement_zero_conf_closes_thesis() {
         confirmations: 0,
     };
 
-    commands::decide::execute_decision(
+    let actual = commands::decide::execute_decision(
         &(Arc::clone(&github) as Arc<dyn GitHubApi>),
         71,
         71,
@@ -843,6 +844,7 @@ fn execute_decision_disagreement_zero_conf_closes_thesis() {
     )
     .unwrap();
 
+    assert_eq!(actual, polyresearch::comments::Outcome::Disagreement);
     assert!(
         github.is_pr_closed(71),
         "PR should be closed on disagreement"
@@ -879,7 +881,7 @@ fn execute_decision_accepted_merges_and_closes() {
         confirmations: 0,
     };
 
-    commands::decide::execute_decision(
+    let actual = commands::decide::execute_decision(
         &(Arc::clone(&github) as Arc<dyn GitHubApi>),
         72,
         72,
@@ -889,6 +891,7 @@ fn execute_decision_accepted_merges_and_closes() {
     )
     .unwrap();
 
+    assert_eq!(actual, polyresearch::comments::Outcome::Accepted);
     assert!(github.is_pr_merged(72), "PR should be merged on accepted");
     assert!(
         github.is_issue_closed(72),
@@ -1057,7 +1060,7 @@ fn execute_decision_falls_back_on_merge_failure() {
         confirmations: 0,
     };
 
-    let result = commands::decide::execute_decision(
+    let actual = commands::decide::execute_decision(
         &(Arc::clone(&github) as Arc<dyn GitHubApi>),
         73,
         73,
@@ -1066,7 +1069,12 @@ fn execute_decision_falls_back_on_merge_failure() {
         0,
     );
 
-    assert!(result.is_ok(), "should not propagate merge error: {result:?}");
+    assert!(actual.is_ok(), "should not propagate merge error: {actual:?}");
+    assert_eq!(
+        actual.unwrap(),
+        polyresearch::comments::Outcome::Stale,
+        "returned outcome should be Stale, not Accepted"
+    );
     assert!(
         !github.is_pr_merged(73),
         "conflicting PR should NOT be merged"

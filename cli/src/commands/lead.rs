@@ -230,7 +230,7 @@ fn decide_ready_prs(ctx: &AppContext, config: &ProtocolConfig, repo_state: &Repo
                 confirmations,
             };
 
-            decide::execute_decision(
+            let actual_outcome = decide::execute_decision(
                 &ctx.github,
                 pr_state.pr.number,
                 thesis.issue.number,
@@ -239,7 +239,7 @@ fn decide_ready_prs(ctx: &AppContext, config: &ProtocolConfig, repo_state: &Repo
                 config.required_confirmations,
             )?;
 
-            eprintln!("PR #{} decided as {outcome}", pr_state.pr.number);
+            eprintln!("PR #{} decided as {actual_outcome}", pr_state.pr.number);
         }
     }
     Ok(())

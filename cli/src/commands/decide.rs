@@ -65,7 +65,7 @@ pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
         outcome,
         confirmations,
     };
-    if !ctx.cli.dry_run {
+    let actual_outcome = if !ctx.cli.dry_run {
         execute_decision(
             &ctx.github,
             args.pr,
@@ -73,13 +73,15 @@ pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
             outcome,
             &comment,
             ctx.config.required_confirmations,
-        )?;
-    }
+        )?
+    } else {
+        outcome
+    };
 
     let output = DecideOutput {
         pr: args.pr,
         thesis: thesis.issue.number,
-        outcome,
+        outcome: actual_outcome,
         confirmations,
     };
 
@@ -214,13 +216,14 @@ pub fn execute_decision(
     outcome: Outcome,
     comment: &ProtocolComment,
     required_confirmations: u64,
-) -> Result<()> {
-    match outcome {
+) -> Result<Outcome> {
+    let actual = match outcome {
         Outcome::Accepted => {
             match github.merge_pull_request(pr_number) {
                 Ok(_) => {
                     github.post_issue_comment(pr_number, &comment.render())?;
                     github.close_issue(thesis_number)?;
+                    Outcome::Accepted
                 }
                 Err(merge_err) => {
                     eprintln!(
@@ -235,12 +238,14 @@ pub fn execute_decision(
                     };
                     github.post_issue_comment(pr_number, &stale_comment.render())?;
                     github.close_pull_request(pr_number)?;
+                    Outcome::Stale
                 }
             }
         }
         Outcome::InfraFailure | Outcome::Stale => {
             github.post_issue_comment(pr_number, &comment.render())?;
             github.close_pull_request(pr_number)?;
+            outcome
         }
         Outcome::NonImprovement | Outcome::Disagreement | Outcome::PolicyRejection => {
             github.post_issue_comment(pr_number, &comment.render())?;
@@ -248,9 +253,10 @@ pub fn execute_decision(
             if required_confirmations > 0 || !matches!(outcome, Outcome::NonImprovement) {
                 github.close_issue(thesis_number)?;
             }
+            outcome
         }
-    }
-    Ok(())
+    };
+    Ok(actual)
 }
 
 fn extract_candidate_sha(comment: &ProtocolComment) -> String {
