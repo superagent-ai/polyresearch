@@ -364,15 +364,16 @@ fn metric_floor_info(ctx: &AppContext, repo_state: &RepositoryState) -> Option<(
 
     let tolerance = ctx.config.metric_tolerance?;
     let best = repo_state.current_best_accepted_metric?;
+    let bound = ctx.config.resolved_metric_bound();
 
-    let exhausted = match ctx.config.metric_direction {
-        // Floor at zero: no room to improve downward by another tolerance step.
-        MetricDirection::LowerIsBetter => best < tolerance,
-        // Ceiling at 1.0: no room to improve upward by another tolerance step.
-        MetricDirection::HigherIsBetter => (1.0 - best) < tolerance,
+    let headroom = match ctx.config.metric_direction {
+        MetricDirection::LowerIsBetter => best - bound,
+        MetricDirection::HigherIsBetter => bound - best,
     };
 
-    exhausted.then_some((best, tolerance))
+    // headroom < 0 means the metric already exceeded the bound (e.g. unbounded
+    // ops/sec with the default ceiling of 1.0) — the advisory does not apply.
+    (headroom >= 0.0 && headroom < tolerance).then_some((best, tolerance))
 }
 
 fn render_report(value: &DutyReport) -> String {

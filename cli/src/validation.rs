@@ -954,6 +954,7 @@ mod tests {
             required_confirmations: 0,
             metric_tolerance: Some(0.01),
             metric_direction: MetricDirection::HigherIsBetter,
+            metric_bound: None,
             lead_github_login: Some(lead_github_login.to_string()),
             maintainer_github_login: maintainer_github_login.map(ToString::to_string),
             auto_approve: true,

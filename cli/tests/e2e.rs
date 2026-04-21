@@ -1375,6 +1375,39 @@ async fn duties_reports_no_claimable_work_for_contributor_at_metric_floor() {
 }
 
 #[tokio::test]
+async fn duties_metric_floor_skips_unbounded_higher_is_better() {
+    let repo = TestRepo::new("duties-metric-floor-unbounded-hib");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let mut ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    ctx.config.metric_direction = MetricDirection::HigherIsBetter;
+    ctx.config.metric_tolerance = Some(100.0);
+    ctx.config.min_queue_depth = 3;
+
+    let repo_state = make_repo_state(
+        vec![
+            make_approved_thesis(1),
+            make_approved_thesis(2),
+            make_approved_thesis(3),
+        ],
+        0,
+        3,
+        Some(50000.0),
+    );
+    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+
+    assert!(
+        !report.advisory.iter().any(|d| d.category == "metric-floor"),
+        "should NOT report metric-floor when the metric exceeds the default bound (unbounded metric)"
+    );
+}
+
+#[tokio::test]
 async fn duties_reports_no_claimable_work_when_all_theses_were_released_by_node() {
     let repo = TestRepo::new("duties-no-claimable-released");
     let mock = Arc::new(MockGitHubClient::new(
@@ -1516,6 +1549,7 @@ fn make_ctx(
             required_confirmations: 0,
             metric_tolerance: Some(0.01),
             metric_direction: MetricDirection::HigherIsBetter,
+            metric_bound: None,
             lead_github_login: Some(lead_github_login.to_string()),
             maintainer_github_login: Some("maintainer".to_string()),
             auto_approve: true,
