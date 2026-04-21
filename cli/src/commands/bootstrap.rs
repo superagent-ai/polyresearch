@@ -186,46 +186,15 @@ fn clone_if_needed(url: &str, repo_root: &Path) -> Result<()> {
 pub fn write_templates(repo_root: &Path, goal: Option<&str>) -> Result<()> {
     let program_path = repo_root.join("PROGRAM.md");
     if !program_path.exists() {
-        let goal_text = goal.unwrap_or("Improve the target metric through systematic experimentation.");
-        let template = format!(
-r#"# Research Program
-
-cli_version: 0.5.0
-lead_github_login: replace-me
-maintainer_github_login: replace-me
-metric_tolerance: 0.01
-metric_direction: higher_is_better
-required_confirmations: 0
-auto_approve: true
-min_queue_depth: 5
-assignment_timeout: 24h
-
-## Goal
-
-{goal_text}
-
-## What you CAN modify
-
-- `src/` — source code
-
-## What you CANNOT modify
-
-- `PROGRAM.md` — research program specification
-- `PREPARE.md` — evaluation setup
-- `.polyresearch/` — runtime directory
-
-## Constraints
-
-- All changes must pass the evaluation harness defined in PREPARE.md
-- Each experiment should be atomic and independently verifiable
-- Document your approach in the attempt summary
-
-## Strategy hints
-
-- Start with the lowest-hanging fruit
-- Measure before and after every change
-- If an approach doesn't show improvement after reasonable effort, release and move on
-"#);
+        let base = include_str!("../../prompts/template-program.md");
+        let template = if let Some(goal) = goal {
+            base.replace(
+                "Improve the target metric through systematic experimentation.",
+                goal,
+            )
+        } else {
+            base.to_string()
+        };
         fs::write(&program_path, template)
             .wrap_err_with(|| format!("failed to write {}", program_path.display()))?;
         eprintln!("Created {}", program_path.display());
@@ -233,34 +202,7 @@ assignment_timeout: 24h
 
     let prepare_path = repo_root.join("PREPARE.md");
     if !prepare_path.exists() {
-        let template = r#"# Evaluation Setup
-
-eval_cores: 1
-eval_memory_gb: 1.0
-
-## Setup
-
-Install dependencies and prepare the evaluation environment.
-
-## Run command
-
-```bash
-# Replace with actual benchmark command
-echo "METRIC=0.0"
-```
-
-## Output format
-
-The benchmark must print `METRIC=<number>` to stdout.
-
-## Metric parsing
-
-The CLI looks for `METRIC=<number>` or `ops_per_sec=<number>` in the output.
-
-## Ground truth
-
-Describe what the baseline metric represents and how it was measured.
-"#;
+        let template = include_str!("../../prompts/template-prepare.md");
         fs::write(&prepare_path, template)
             .wrap_err_with(|| format!("failed to write {}", prepare_path.display()))?;
         eprintln!("Created {}", prepare_path.display());
@@ -309,11 +251,7 @@ fn spawn_setup_agent(repo_root: &Path, overrides: &crate::cli::NodeOverrides) ->
                 .unwrap_or_else(|| "claude -p --permission-mode bypassPermissions".to_string())
         });
 
-    let prompt = "Read PROGRAM.md and PREPARE.md. Fill in the project-specific details: \
-        set lead_github_login and maintainer_github_login to appropriate values, \
-        update the editable surface globs to match this project's source code layout, \
-        update PREPARE.md with the actual benchmark command and setup steps. \
-        Do NOT create or modify any source code files.";
+    let prompt = include_str!("../../prompts/bootstrap-setup.md");
 
     eprintln!("Spawning agent for initial setup...");
     let _ = crate::agent::spawn_experiment(&agent_command, repo_root, prompt);
