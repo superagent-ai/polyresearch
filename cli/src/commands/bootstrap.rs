@@ -188,10 +188,7 @@ pub fn write_templates(repo_root: &Path, goal: Option<&str>) -> Result<()> {
     if !program_path.exists() {
         let base = include_str!("../../prompts/template-program.md");
         let template = if let Some(goal) = goal {
-            base.replace(
-                "Improve the target metric through systematic experimentation.",
-                goal,
-            )
+            replace_goal_section(base, goal)
         } else {
             base.to_string()
         };
@@ -222,6 +219,19 @@ pub fn write_templates(repo_root: &Path, goal: Option<&str>) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn replace_goal_section(template: &str, goal: &str) -> String {
+    const HEADER: &str = "## Goal\n";
+    let Some(start) = template.find(HEADER) else {
+        return template.to_string();
+    };
+    let body_start = start + HEADER.len();
+    let body_end = template[body_start..]
+        .find("\n## ")
+        .map(|i| body_start + i)
+        .unwrap_or(template.len());
+    format!("{}\n{}\n{}", &template[..body_start], goal, &template[body_end..])
 }
 
 fn initialize_node(repo_root: &Path, overrides: &crate::cli::NodeOverrides) -> Result<()> {
