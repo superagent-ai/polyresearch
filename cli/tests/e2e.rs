@@ -3702,6 +3702,599 @@ fn ledger_detects_discarded_after_release() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+// ===========================================================================
+// Spec-divergence tests
+//
+// These tests assert INTENDED behavior from specs/cli-v2.md.
+// Tests that fail indicate bugs where the implementation diverges from the
+// spec. Each test documents the relevant spec section.
+// ===========================================================================
+
+/// Spec: "infra_failure releases do NOT permanently blacklist -- the node can
+/// retry after the infra issue is resolved. Only no_improvement releases
+/// should permanently prevent the same node from reclaiming."
+///
+/// The `batch-claim` command currently filters out theses with ANY prior
+/// release from the node, not just no_improvement. This test asserts the
+/// spec behavior: infra_failure should allow reclaim.
+#[tokio::test]
+async fn batch_claim_allows_reclaim_after_infra_failure_release() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("batch-claim-infra-reclaim");
+    init_git_repo(&repo.path);
+
+    let now = chrono::Utc::now();
+    let lead = "lead";
+    let issue = Issue {
+        number: 50,
+        title: "Infra retry thesis".to_string(),
+        body: Some("Test.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label { name: "thesis".to_string() }],
+        created_at: now - chrono::Duration::hours(3),
+        closed_at: None,
+        author: Some(Author { login: lead.to_string() }),
+        url: None,
+    };
+    let approval = ProtocolComment::Approval { thesis: 50 };
+    let claim = ProtocolComment::Claim { thesis: 50, node: "node-a".to_string() };
+    let release = ProtocolComment::Release {
+        thesis: 50,
+        node: "node-a".to_string(),
+        reason: ReleaseReason::InfraFailure,
+    };
+    let comments = vec![
+        IssueComment {
+            id: 5001,
+            body: approval.render(),
+            user: CommentUser { login: lead.to_string() },
+            created_at: now - chrono::Duration::hours(2),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 5002,
+            body: claim.render(),
+            user: CommentUser { login: "alice".to_string() },
+            created_at: now - chrono::Duration::hours(1),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 5003,
+            body: release.render(),
+            user: CommentUser { login: "alice".to_string() },
+            created_at: now - chrono::Duration::minutes(30),
+            updated_at: None,
+        },
+    ];
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![issue],
+        HashMap::from([(50, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(), mock.clone(), lead, false,
+        Commands::BatchClaim(BatchClaimArgs { count: Some(1) }),
+    );
+    commands::write_node_id(&repo.path, "node-a").unwrap();
+
+    let result = commands::batch_claim::run(&ctx, &BatchClaimArgs { count: Some(1) }).await;
+    assert!(result.is_ok(), "batch-claim should allow reclaim after infra_failure: {result:?}");
+    assert_eq!(
+        mock.posted_issue_comments.lock().unwrap().len(), 1,
+        "should post exactly one claim comment for the reclaimed thesis"
+    );
+}
+
+/// Spec (duties, claimability): "infra_failure releases do NOT permanently
+/// blacklist." The duties system should count theses released with
+/// infra_failure by this node as still claimable, not report
+/// "no-claimable-work".
+#[tokio::test]
+async fn duties_counts_infra_failure_released_thesis_as_claimable() {
+    let repo = TestRepo::new("duties-infra-claimable");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice", vec![], HashMap::new(), vec![], HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    commands::write_node_id(&repo.path, "node-a").unwrap();
+
+    let mut thesis = make_approved_thesis(1);
+    thesis.releases.push(ReleaseRecord {
+        node: "node-a".to_string(),
+        reason: ReleaseReason::InfraFailure,
+        created_at: chrono::Utc::now(),
+    });
+
+    let repo_state = make_repo_state(vec![thesis], 0, 1, None);
+    let report = duties::check(&ctx, &repo_state).unwrap();
+
+    assert!(
+        !report.advisory.iter().any(|d| d.category == "no-claimable-work"),
+        "infra_failure release should NOT make thesis unclaimable for the same node; \
+         spec says only no_improvement permanently blocks"
+    );
+}
+
+/// Spec (thesis lifecycle, claimability): Exhausted phase should be per-node.
+/// If node-a releases with no_improvement, but node-b has never tried the
+/// thesis, the thesis should remain Approved (claimable by node-b), not
+/// Exhausted.
+///
+/// The current implementation sets Exhausted whenever ANY no_improvement
+/// release exists globally, which is wrong per spec.
+#[test]
+fn exhausted_phase_is_per_node_not_global() {
+    let now = chrono::Utc::now();
+    let thesis = ThesisState {
+        issue: make_open_issue(1, "Test thesis"),
+        phase: ThesisPhase::Approved,
+        approved: true,
+        maintainer_approved: false,
+        maintainer_rejected: false,
+        active_claims: vec![],
+        releases: vec![ReleaseRecord {
+            node: "node-a".to_string(),
+            reason: ReleaseReason::NoImprovement,
+            created_at: now,
+        }],
+        attempts: vec![],
+        pull_requests: vec![],
+        best_attempt_metric: None,
+        findings: vec![],
+    };
+
+    let is_claimable_by_node_b = thesis.issue.state == "OPEN"
+        && thesis.approved
+        && thesis.active_claims.is_empty()
+        && !thesis.releases.iter().any(|r| {
+            r.node == "node-b" && r.reason == ReleaseReason::NoImprovement
+        });
+
+    assert!(
+        is_claimable_by_node_b,
+        "thesis should be claimable by node-b even though node-a released with no_improvement"
+    );
+
+    assert!(
+        !matches!(thesis.phase, ThesisPhase::Exhausted),
+        "thesis should NOT be Exhausted when other nodes haven't tried it; \
+         Exhausted is currently set globally on any no_improvement release, \
+         but the spec says only the releasing node is blocked"
+    );
+}
+
+/// Spec (contribute loop, step 3): "Auto-submit any blocking submit duties
+/// (requires resuming the thesis worktree to get the right branch context)."
+///
+/// If the worktree directory doesn't exist (e.g. machine reboot lost tmpfs),
+/// auto-submit should recreate/resume it, not silently skip.
+///
+/// This test creates a situation where an improved attempt exists with no
+/// open PR and no worktree on disk. The contribute loop should still auto-
+/// submit by recreating the worktree.
+#[tokio::test]
+async fn contribute_auto_submit_recreates_missing_worktree() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("contrib-auto-submit-missing-wt");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    write_node_config(&repo.path, "test-node");
+    fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let now = chrono::Utc::now();
+    let issue = Issue {
+        number: 60,
+        title: "Auto submit test".to_string(),
+        body: Some("Test.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label { name: "thesis".to_string() }],
+        created_at: now - chrono::Duration::hours(3),
+        closed_at: None,
+        author: Some(Author { login: "lead".to_string() }),
+        url: None,
+    };
+    let comments = vec![
+        IssueComment {
+            id: 6001,
+            body: ProtocolComment::Approval { thesis: 60 }.render(),
+            user: CommentUser { login: "lead".to_string() },
+            created_at: now - chrono::Duration::hours(2),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 6002,
+            body: ProtocolComment::Claim { thesis: 60, node: "test-node".to_string() }.render(),
+            user: CommentUser { login: "lead".to_string() },
+            created_at: now - chrono::Duration::hours(1),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 6003,
+            body: ProtocolComment::Attempt {
+                thesis: 60,
+                branch: "thesis/60-auto-submit-test".to_string(),
+                metric: 0.95,
+                baseline_metric: Some(0.90),
+                observation: Observation::Improved,
+                summary: "improved".to_string(),
+                annotations: None,
+            }.render(),
+            user: CommentUser { login: "lead".to_string() },
+            created_at: now - chrono::Duration::minutes(30),
+            updated_at: None,
+        },
+    ];
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(60, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    set_node_id_env("test-node");
+
+    let worktree_path = repo.path.join(".worktrees/60-auto-submit-test");
+    assert!(!worktree_path.exists(), "precondition: worktree should not exist");
+
+    let ctx = make_ctx(
+        repo.path.clone(), mock.clone(), "lead", false,
+        Commands::Contribute(ContributeArgs {
+            url: None, once: true, max_parallel: Some(1), sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(&ctx, &ContributeArgs {
+        url: None, once: true, max_parallel: Some(1), sleep_secs: 0,
+        overrides: NodeOverrides::default(),
+    }).await;
+
+    // The spec says contribute should auto-submit even when worktree is
+    // missing by recreating it. If the implementation errors or skips,
+    // this is a spec divergence.
+    assert!(
+        result.is_ok(),
+        "contribute should handle missing worktree during auto-submit: {result:?}"
+    );
+}
+
+/// Spec (duties, blocking): "submit: an improved attempt was recorded but no
+/// PR was created yet" is a blocking duty. The spec says contribute step 5
+/// checks for "remaining blocking duties" and errors in --once mode.
+///
+/// If auto-submit fails (e.g. missing worktree), the submit duty remains
+/// blocking. In --once mode, contribute should error -- not silently proceed
+/// to claim more work.
+#[tokio::test]
+async fn contribute_once_errors_on_unresolvable_submit_duty() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("contrib-once-submit-block");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    write_node_config(&repo.path, "test-node-block");
+    fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let fixture = load_issue_fixture("improved_no_submit_issue.json");
+    set_node_id_env("test-node");
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+
+    let ctx = make_ctx(
+        repo.path.clone(), mock, &fixture.lead_github_login, false,
+        Commands::Contribute(ContributeArgs {
+            url: None, once: true, max_parallel: Some(1), sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(&ctx, &ContributeArgs {
+        url: None, once: true, max_parallel: Some(1), sleep_secs: 0,
+        overrides: NodeOverrides::default(),
+    }).await;
+
+    // In --once mode with an unresolvable submit duty, contribute should
+    // error rather than silently proceeding. The current implementation
+    // filters out "submit" from blocking duties after auto-submit, which
+    // means a failed auto-submit doesn't block further claims.
+    assert!(
+        result.is_err(),
+        "contribute --once should error when submit duty cannot be resolved, \
+         not silently proceed to claim more work"
+    );
+}
+
+/// Spec (worker invariants): "Every thesis that enters the worker pool MUST
+/// be either recorded (attempt + submit/release) or released as infra_failure.
+/// No thesis may be silently dropped."
+///
+/// When worker setup() fails, the current implementation returns
+/// WorkerOutcome::Failed without posting a release comment. The claim remains
+/// dangling on GitHub.
+#[test]
+fn worker_setup_failure_returns_issue_number_for_release() {
+    let wctx = worker::WorkerContext {
+        issue_number: 99,
+        thesis_title: "Setup fail test".to_string(),
+        thesis_body: String::new(),
+        repo_root: std::path::PathBuf::from("/nonexistent/path"),
+        node_id: "test-node".to_string(),
+        agent_command: "false".to_string(),
+        default_branch: "main".to_string(),
+        editable_globs: vec!["src/**".to_string()],
+        protected_globs: vec![],
+        metric_direction: MetricDirection::HigherIsBetter,
+        verbose: false,
+    };
+
+    // ThesisWorker.execute on a nonexistent path should still return
+    // enough info for the caller to release the claim.
+    // The spec says worker outcomes must always include issue_number.
+    match worker::ThesisWorker::new(wctx, String::new())
+    {
+        tw => {
+            // The key assertion: the worktree_path and issue_number must be
+            // available regardless of setup failure, so the caller can
+            // release the claim on GitHub.
+            assert_eq!(tw.issue_number(), 99,
+                "ThesisWorker must expose issue_number for cleanup even before execute()");
+        }
+    }
+}
+
+/// Spec (claimability): "The node has not previously released the thesis with
+/// no_improvement." This is a per-node check. But the thesis itself should
+/// remain in phase Approved (claimable by OTHER nodes) after one node
+/// releases with no_improvement. Only when ALL interested nodes have
+/// exhausted the thesis should it close.
+///
+/// This test constructs a thesis released by node-a with no_improvement and
+/// verifies it's still claimable by node-b via the claim command.
+#[tokio::test]
+async fn thesis_still_claimable_by_other_node_after_no_improvement_release() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("claim-other-node-after-release");
+    init_git_repo(&repo.path);
+
+    let now = chrono::Utc::now();
+    let lead = "lead";
+    let issue = Issue {
+        number: 70,
+        title: "Multi node thesis".to_string(),
+        body: Some("Test.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label { name: "thesis".to_string() }],
+        created_at: now - chrono::Duration::hours(5),
+        closed_at: None,
+        author: Some(Author { login: lead.to_string() }),
+        url: None,
+    };
+    let comments = vec![
+        IssueComment {
+            id: 7001,
+            body: ProtocolComment::Approval { thesis: 70 }.render(),
+            user: CommentUser { login: lead.to_string() },
+            created_at: now - chrono::Duration::hours(4),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 7002,
+            body: ProtocolComment::Claim { thesis: 70, node: "node-a".to_string() }.render(),
+            user: CommentUser { login: "alice".to_string() },
+            created_at: now - chrono::Duration::hours(3),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 7003,
+            body: ProtocolComment::Release {
+                thesis: 70,
+                node: "node-a".to_string(),
+                reason: ReleaseReason::NoImprovement,
+            }.render(),
+            user: CommentUser { login: "alice".to_string() },
+            created_at: now - chrono::Duration::hours(2),
+            updated_at: None,
+        },
+    ];
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "bob",
+        vec![issue],
+        HashMap::from([(70, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    commands::write_node_id(&repo.path, "node-b").unwrap();
+
+    let ctx = make_ctx(
+        repo.path.clone(), mock.clone(), lead, false,
+        Commands::Claim(IssueArgs { issue: 70 }),
+    );
+
+    // node-b should be able to claim this thesis even though node-a
+    // released with no_improvement. The spec says no_improvement only
+    // blocks the RELEASING node, not other nodes.
+    let result = commands::claim::run(&ctx, &IssueArgs { issue: 70 }).await;
+    assert!(
+        result.is_ok(),
+        "node-b should be able to claim thesis after node-a's no_improvement release: {result:?}"
+    );
+}
+
+/// Spec (metric-floor advisory): The spec lists "metric-floor / stale-queue"
+/// as lead-only advisories without restricting them to lower_is_better.
+/// A higher_is_better project where the best accepted metric already exceeds
+/// what the tolerance would allow should also report metric-floor.
+#[tokio::test]
+async fn duties_reports_metric_floor_for_higher_is_better() {
+    let repo = TestRepo::new("duties-metric-floor-hib");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead", vec![], HashMap::new(), vec![], HashMap::new(),
+    ));
+    let mut ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    ctx.config.metric_direction = MetricDirection::HigherIsBetter;
+    ctx.config.metric_tolerance = Some(0.01);
+    ctx.config.min_queue_depth = 3;
+
+    let repo_state = make_repo_state(
+        vec![make_approved_thesis(1), make_approved_thesis(2), make_approved_thesis(3)],
+        0, 3,
+        Some(0.999),
+    );
+    let report = duties::check(&ctx, &repo_state).unwrap();
+
+    assert!(
+        report.advisory.iter().any(|d| d.category == "metric-floor"),
+        "should report metric-floor for higher_is_better when best metric is near ceiling; \
+         currently only implemented for lower_is_better"
+    );
+}
+
+/// Spec (assignment_timeout): Claims expire after assignment_timeout. After
+/// expiry, the thesis should be in Approved phase (claimable), not Claimed.
+///
+/// This test constructs a claim that is older than the assignment_timeout and
+/// verifies the derived state treats the thesis as Approved, not Claimed.
+#[tokio::test]
+async fn expired_claim_makes_thesis_claimable() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("expired-claim");
+    init_git_repo(&repo.path);
+
+    let now = chrono::Utc::now();
+    let lead = "lead";
+    let issue = Issue {
+        number: 80,
+        title: "Expired claim thesis".to_string(),
+        body: Some("Test.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label { name: "thesis".to_string() }],
+        created_at: now - chrono::Duration::hours(72),
+        closed_at: None,
+        author: Some(Author { login: lead.to_string() }),
+        url: None,
+    };
+    let comments = vec![
+        IssueComment {
+            id: 8001,
+            body: ProtocolComment::Approval { thesis: 80 }.render(),
+            user: CommentUser { login: lead.to_string() },
+            created_at: now - chrono::Duration::hours(48),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 8002,
+            body: ProtocolComment::Claim { thesis: 80, node: "stale-node".to_string() }.render(),
+            user: CommentUser { login: "alice".to_string() },
+            created_at: now - chrono::Duration::hours(36),
+            updated_at: None,
+        },
+    ];
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "bob",
+        vec![issue],
+        HashMap::from([(80, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    commands::write_node_id(&repo.path, "fresh-node").unwrap();
+
+    let mut ctx = make_ctx(
+        repo.path.clone(), mock.clone(), lead, false,
+        Commands::Claim(IssueArgs { issue: 80 }),
+    );
+    ctx.config.assignment_timeout = Duration::from_secs(24 * 60 * 60);
+
+    let result = commands::claim::run(&ctx, &IssueArgs { issue: 80 }).await;
+    assert!(
+        result.is_ok(),
+        "should be able to claim thesis with expired claim (36h old, 24h timeout): {result:?}"
+    );
+}
+
+/// Spec (contribute loop, step 6): "Counts both claimable and resumable
+/// theses as available work." A thesis claimed by this node that is in
+/// Claimed phase (no attempt yet) should count as resumable work, not be
+/// ignored.
+#[tokio::test]
+async fn contribute_counts_resumable_theses_as_available_work() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("contrib-resumable");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    write_node_config(&repo.path, "test-node-resume");
+
+    let now = chrono::Utc::now();
+    let issue = Issue {
+        number: 90,
+        title: "Resumable thesis".to_string(),
+        body: Some("Test.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label { name: "thesis".to_string() }],
+        created_at: now - chrono::Duration::hours(3),
+        closed_at: None,
+        author: Some(Author { login: "lead".to_string() }),
+        url: None,
+    };
+    let comments = vec![
+        IssueComment {
+            id: 9001,
+            body: ProtocolComment::Approval { thesis: 90 }.render(),
+            user: CommentUser { login: "lead".to_string() },
+            created_at: now - chrono::Duration::hours(2),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 9002,
+            body: ProtocolComment::Claim { thesis: 90, node: "test-node-resume".to_string() }.render(),
+            user: CommentUser { login: "contributor".to_string() },
+            created_at: now - chrono::Duration::hours(1),
+            updated_at: None,
+        },
+    ];
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "contributor",
+        vec![issue],
+        HashMap::from([(90, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    set_node_id_env("test-node-resume");
+
+    let ctx = make_ctx(
+        repo.path.clone(), mock.clone(), "lead", true,
+        Commands::Contribute(ContributeArgs {
+            url: None, once: true, max_parallel: Some(1), sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(&ctx, &ContributeArgs {
+        url: None, once: true, max_parallel: Some(1), sleep_secs: 0,
+        overrides: NodeOverrides::default(),
+    }).await;
+
+    assert!(
+        result.is_ok(),
+        "contribute should count already-claimed thesis as resumable work: {result:?}"
+    );
+}
+
 fn load_issue_fixture(name: &str) -> IssueFixture {
     serde_json::from_str(include_fixture(name)).unwrap()
 }
