@@ -1241,3 +1241,649 @@ fn parallelism_returns_zero_for_zero_work() {
         "should return 0 when no work is available"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Peer review scenarios (required_confirmations > 0)
+// ---------------------------------------------------------------------------
+
+fn make_peer_review_setup(
+    thesis_num: u64,
+    pr_num: u64,
+    lead: &str,
+    reviews: Vec<polyresearch::github::IssueComment>,
+) -> (
+    polyresearch::github::Issue,
+    Vec<polyresearch::github::IssueComment>,
+    polyresearch::github::PullRequest,
+    Vec<polyresearch::github::IssueComment>,
+) {
+    let now = chrono::Utc::now();
+    let branch = format!("thesis/{thesis_num}-peer-test");
+
+    let (issue, mut issue_comments) = make_approved_thesis(thesis_num, "Peer review test", lead);
+    issue_comments.push(IssueComment {
+        id: thesis_num * 100 + 10,
+        body: ProtocolComment::Claim {
+            thesis: thesis_num,
+            node: "worker-a".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(50),
+        updated_at: None,
+    });
+    issue_comments.push(IssueComment {
+        id: thesis_num * 100 + 11,
+        body: ProtocolComment::Attempt {
+            thesis: thesis_num,
+            branch: branch.clone(),
+            metric: 0.95,
+            baseline_metric: Some(0.90),
+            observation: polyresearch::comments::Observation::Improved,
+            summary: "Peer review candidate".to_string(),
+            annotations: None,
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(40),
+        updated_at: None,
+    });
+
+    let pr = PullRequest {
+        number: pr_num,
+        title: format!("Thesis #{thesis_num}: Peer review test"),
+        body: Some(format!("References #{thesis_num}")),
+        state: "OPEN".to_string(),
+        head_ref_name: branch,
+        head_ref_oid: Some("peer-sha".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: now - chrono::Duration::minutes(35),
+        closed_at: None,
+        merged_at: None,
+        author: Some(Author {
+            login: "contributor".to_string(),
+        }),
+        url: Some(format!("https://github.com/test/repo/pull/{pr_num}")),
+        mergeable: None,
+    };
+
+    let mut pr_comments = vec![IssueComment {
+        id: pr_num * 100,
+        body: ProtocolComment::PolicyPass {
+            thesis: thesis_num,
+            candidate_sha: "peer-sha".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: lead.to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(30),
+        updated_at: None,
+    }];
+    pr_comments.extend(reviews);
+
+    (issue, issue_comments, pr, pr_comments)
+}
+
+fn make_review_comment(
+    id: u64,
+    thesis: u64,
+    node: &str,
+    reviewer: &str,
+    metric: f64,
+    baseline: f64,
+    observation: polyresearch::comments::Observation,
+    base_sha: &str,
+    env_sha: Option<&str>,
+    minutes_ago: i64,
+) -> IssueComment {
+    let now = chrono::Utc::now();
+    IssueComment {
+        id,
+        body: ProtocolComment::Review {
+            thesis,
+            candidate_sha: "peer-sha".to_string(),
+            base_sha: base_sha.to_string(),
+            node: node.to_string(),
+            metric,
+            baseline_metric: baseline,
+            observation,
+            env_sha: env_sha.map(|s| s.to_string()),
+            timestamp: now - chrono::Duration::minutes(minutes_ago),
+        }
+        .render(),
+        user: CommentUser {
+            login: reviewer.to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(minutes_ago),
+        updated_at: None,
+    }
+}
+
+fn make_review_claim_comment(
+    id: u64,
+    thesis: u64,
+    node: &str,
+    reviewer: &str,
+    minutes_ago: i64,
+) -> IssueComment {
+    let now = chrono::Utc::now();
+    IssueComment {
+        id,
+        body: ProtocolComment::ReviewClaim {
+            thesis,
+            node: node.to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: reviewer.to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(minutes_ago),
+        updated_at: None,
+    }
+}
+
+fn make_peer_review_ctx(
+    repo: &ScenarioRepo,
+    github: Arc<dyn GitHubApi>,
+    lead: &str,
+    pr_num: u64,
+    required_confirmations: u64,
+) -> AppContext {
+    let mut ctx = make_scenario_ctx(
+        repo.path.clone(),
+        github,
+        lead,
+        false,
+        Commands::Decide(polyresearch::cli::PrArgs { pr: pr_num }),
+    );
+    ctx.config.required_confirmations = required_confirmations;
+    ctx
+}
+
+#[tokio::test]
+async fn scenario_decide_peer_review_accepted() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("peer-accepted");
+    repo.init_git();
+    repo.write_full_setup("lead", "lead-node", "echo noop");
+    repo.commit_all("setup");
+
+    let main_sha = {
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "main"])
+            .current_dir(&repo.path)
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+
+    let reviews = vec![
+        make_review_claim_comment(8001, 80, "reviewer-a", "reviewer-a", 25),
+        make_review_claim_comment(8002, 80, "reviewer-b", "reviewer-b", 24),
+        make_review_comment(8003, 80, "reviewer-a", "reviewer-a", 0.95, 0.90, polyresearch::comments::Observation::Improved, &main_sha, Some("env1"), 20),
+        make_review_comment(8004, 80, "reviewer-b", "reviewer-b", 0.955, 0.90, polyresearch::comments::Observation::Improved, &main_sha, Some("env1"), 19),
+    ];
+
+    let (issue, issue_comments, pr, pr_comments) =
+        make_peer_review_setup(80, 180, "lead", reviews);
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(80, issue_comments);
+    github.seed_pull_request(pr);
+    github.seed_pr_comments(180, pr_comments);
+    github.seed_pr_files(180, vec![polyresearch::github::PullRequestFile {
+        filename: "src/test.js".to_string(),
+    }]);
+
+    let ctx = make_peer_review_ctx(&repo, Arc::clone(&github) as Arc<dyn GitHubApi>, "lead", 180, 2);
+    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 180 }).await.unwrap();
+
+    assert!(github.is_pr_merged(180), "PR should be merged for accepted peer review");
+    assert!(github.is_issue_closed(80), "thesis should be closed");
+}
+
+#[tokio::test]
+async fn scenario_decide_peer_review_non_improvement() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("peer-non-improv");
+    repo.init_git();
+    repo.write_full_setup("lead", "lead-node", "echo noop");
+    repo.commit_all("setup");
+
+    let main_sha = {
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "main"])
+            .current_dir(&repo.path)
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+
+    let reviews = vec![
+        make_review_claim_comment(8101, 81, "reviewer-a", "reviewer-a", 25),
+        make_review_claim_comment(8102, 81, "reviewer-b", "reviewer-b", 24),
+        make_review_comment(8103, 81, "reviewer-a", "reviewer-a", 0.89, 0.90, polyresearch::comments::Observation::NoImprovement, &main_sha, Some("env1"), 20),
+        make_review_comment(8104, 81, "reviewer-b", "reviewer-b", 0.885, 0.90, polyresearch::comments::Observation::NoImprovement, &main_sha, Some("env1"), 19),
+    ];
+
+    let (issue, issue_comments, pr, pr_comments) =
+        make_peer_review_setup(81, 181, "lead", reviews);
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(81, issue_comments);
+    github.seed_pull_request(pr);
+    github.seed_pr_comments(181, pr_comments);
+
+    let ctx = make_peer_review_ctx(&repo, Arc::clone(&github) as Arc<dyn GitHubApi>, "lead", 181, 2);
+    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 181 }).await.unwrap();
+
+    assert!(github.is_pr_closed(181), "PR should be closed");
+    assert!(github.is_issue_closed(81), "thesis should be closed with peer review non_improvement");
+}
+
+#[tokio::test]
+async fn scenario_decide_peer_review_disagreement_mixed_obs() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("peer-disagree-mixed");
+    repo.init_git();
+    repo.write_full_setup("lead", "lead-node", "echo noop");
+    repo.commit_all("setup");
+
+    let main_sha = {
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "main"])
+            .current_dir(&repo.path)
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+
+    let reviews = vec![
+        make_review_claim_comment(8201, 82, "reviewer-a", "reviewer-a", 25),
+        make_review_claim_comment(8202, 82, "reviewer-b", "reviewer-b", 24),
+        make_review_comment(8203, 82, "reviewer-a", "reviewer-a", 0.95, 0.90, polyresearch::comments::Observation::Improved, &main_sha, Some("env1"), 20),
+        make_review_comment(8204, 82, "reviewer-b", "reviewer-b", 0.89, 0.90, polyresearch::comments::Observation::NoImprovement, &main_sha, Some("env1"), 19),
+    ];
+
+    let (issue, issue_comments, pr, pr_comments) =
+        make_peer_review_setup(82, 182, "lead", reviews);
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(82, issue_comments);
+    github.seed_pull_request(pr);
+    github.seed_pr_comments(182, pr_comments);
+
+    let ctx = make_peer_review_ctx(&repo, Arc::clone(&github) as Arc<dyn GitHubApi>, "lead", 182, 2);
+    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 182 }).await.unwrap();
+
+    assert!(github.is_pr_closed(182), "PR should be closed on disagreement");
+    assert!(github.is_issue_closed(82), "thesis should be closed on disagreement with peer review");
+
+    let bodies = github.comment_bodies_on(182);
+    assert!(bodies.iter().any(|b| b.contains("disagreement")), "should post disagreement decision");
+}
+
+#[tokio::test]
+async fn scenario_decide_peer_review_stale_base() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("peer-stale");
+    repo.init_git();
+    repo.write_full_setup("lead", "lead-node", "echo noop");
+    repo.commit_all("setup");
+
+    let reviews = vec![
+        make_review_claim_comment(8301, 83, "reviewer-a", "reviewer-a", 25),
+        make_review_claim_comment(8302, 83, "reviewer-b", "reviewer-b", 24),
+        make_review_comment(8303, 83, "reviewer-a", "reviewer-a", 0.95, 0.90, polyresearch::comments::Observation::Improved, "stale-old-sha", Some("env1"), 20),
+        make_review_comment(8304, 83, "reviewer-b", "reviewer-b", 0.95, 0.90, polyresearch::comments::Observation::Improved, "stale-old-sha", Some("env1"), 19),
+    ];
+
+    let (issue, issue_comments, pr, pr_comments) =
+        make_peer_review_setup(83, 183, "lead", reviews);
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(83, issue_comments);
+    github.seed_pull_request(pr);
+    github.seed_pr_comments(183, pr_comments);
+
+    let ctx = make_peer_review_ctx(&repo, Arc::clone(&github) as Arc<dyn GitHubApi>, "lead", 183, 2);
+    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 183 }).await.unwrap();
+
+    assert!(github.is_pr_closed(183), "PR should be closed on stale");
+    assert!(!github.is_issue_closed(83), "thesis should stay open on stale decision");
+
+    let bodies = github.comment_bodies_on(183);
+    assert!(bodies.iter().any(|b| b.contains("stale")), "should post stale decision");
+}
+
+#[tokio::test]
+async fn scenario_decide_peer_review_env_disagreement() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("peer-env-disagree");
+    repo.init_git();
+    repo.write_full_setup("lead", "lead-node", "echo noop");
+    repo.commit_all("setup");
+
+    let main_sha = {
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "main"])
+            .current_dir(&repo.path)
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+
+    let reviews = vec![
+        make_review_claim_comment(8401, 84, "reviewer-a", "reviewer-a", 25),
+        make_review_claim_comment(8402, 84, "reviewer-b", "reviewer-b", 24),
+        make_review_comment(8403, 84, "reviewer-a", "reviewer-a", 0.95, 0.90, polyresearch::comments::Observation::Improved, &main_sha, Some("env-aaa"), 20),
+        make_review_comment(8404, 84, "reviewer-b", "reviewer-b", 0.95, 0.90, polyresearch::comments::Observation::Improved, &main_sha, Some("env-bbb"), 19),
+    ];
+
+    let (issue, issue_comments, pr, pr_comments) =
+        make_peer_review_setup(84, 184, "lead", reviews);
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(84, issue_comments);
+    github.seed_pull_request(pr);
+    github.seed_pr_comments(184, pr_comments);
+
+    let ctx = make_peer_review_ctx(&repo, Arc::clone(&github) as Arc<dyn GitHubApi>, "lead", 184, 2);
+    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 184 }).await.unwrap();
+
+    assert!(github.is_pr_closed(184), "PR should be closed on env disagreement");
+    let bodies = github.comment_bodies_on(184);
+    assert!(bodies.iter().any(|b| b.contains("disagreement")), "should post disagreement decision");
+}
+
+#[tokio::test]
+async fn scenario_decide_peer_review_infra_majority() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("peer-infra-majority");
+    repo.init_git();
+    repo.write_full_setup("lead", "lead-node", "echo noop");
+    repo.commit_all("setup");
+
+    let main_sha = {
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "main"])
+            .current_dir(&repo.path)
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+
+    let reviews = vec![
+        make_review_claim_comment(8501, 85, "reviewer-a", "reviewer-a", 25),
+        make_review_claim_comment(8502, 85, "reviewer-b", "reviewer-b", 24),
+        make_review_claim_comment(8503, 85, "reviewer-c", "reviewer-c", 23),
+        make_review_comment(8504, 85, "reviewer-a", "reviewer-a", 0.95, 0.90, polyresearch::comments::Observation::Improved, &main_sha, Some("env1"), 20),
+        make_review_comment(8505, 85, "reviewer-b", "reviewer-b", 0.0, 0.90, polyresearch::comments::Observation::Crashed, &main_sha, Some("env1"), 19),
+        make_review_comment(8506, 85, "reviewer-c", "reviewer-c", 0.0, 0.90, polyresearch::comments::Observation::InfraFailure, &main_sha, Some("env1"), 18),
+    ];
+
+    let (issue, issue_comments, pr, pr_comments) =
+        make_peer_review_setup(85, 185, "lead", reviews);
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(85, issue_comments);
+    github.seed_pull_request(pr);
+    github.seed_pr_comments(185, pr_comments);
+
+    let ctx = make_peer_review_ctx(&repo, Arc::clone(&github) as Arc<dyn GitHubApi>, "lead", 185, 3);
+    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 185 }).await.unwrap();
+
+    assert!(github.is_pr_closed(185), "PR should be closed on infra_failure");
+    assert!(!github.is_issue_closed(85), "thesis should stay open on infra_failure");
+
+    let bodies = github.comment_bodies_on(185);
+    assert!(bodies.iter().any(|b| b.contains("infra_failure")), "should post infra_failure decision");
+}
+
+#[tokio::test]
+async fn scenario_decide_peer_review_insufficient_reviews() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("peer-insufficient");
+    repo.init_git();
+    repo.write_full_setup("lead", "lead-node", "echo noop");
+    repo.commit_all("setup");
+
+    let main_sha = {
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "main"])
+            .current_dir(&repo.path)
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+
+    let reviews = vec![
+        make_review_claim_comment(8601, 86, "reviewer-a", "reviewer-a", 25),
+        make_review_comment(8602, 86, "reviewer-a", "reviewer-a", 0.95, 0.90, polyresearch::comments::Observation::Improved, &main_sha, Some("env1"), 20),
+    ];
+
+    let (issue, issue_comments, pr, pr_comments) =
+        make_peer_review_setup(86, 186, "lead", reviews);
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(86, issue_comments);
+    github.seed_pull_request(pr);
+    github.seed_pr_comments(186, pr_comments);
+
+    let ctx = make_peer_review_ctx(&repo, Arc::clone(&github) as Arc<dyn GitHubApi>, "lead", 186, 2);
+    let err = commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 186 }).await.unwrap_err();
+    assert!(err.to_string().contains("only has 1 review"), "should error on insufficient reviews, got: {err}");
+}
+
+// ---------------------------------------------------------------------------
+// Worker cleanup scenarios
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn scenario_contribute_agent_crash_releases_claim() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("contrib-crash");
+    repo.init_git();
+
+    let agent_cmd = mock_agent_command("crashed");
+    repo.write_full_setup("lead", "test-node-crash", &agent_cmd);
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    let (issue, comments) = make_approved_thesis(90, "Crash experiment", "lead");
+    let github = Arc::new(ScenarioGitHub::new("contributor"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(90, comments);
+
+    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-crash"); }
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        true,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(
+        &ctx,
+        &ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(result.is_ok(), "contribute should handle agent crash gracefully: {result:?}");
+}
+
+#[tokio::test]
+async fn scenario_contribute_no_improvement_releases() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("contrib-no-improv-release");
+    repo.init_git();
+
+    let agent_cmd = mock_agent_command("no_improvement");
+    repo.write_full_setup("lead", "test-node-ni2", &agent_cmd);
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    let (issue, comments) = make_approved_thesis(91, "No improvement test", "lead");
+    let github = Arc::new(ScenarioGitHub::new("contributor"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(91, comments);
+
+    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-ni2"); }
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        true,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(
+        &ctx,
+        &ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(result.is_ok(), "contribute should succeed with no_improvement: {result:?}");
+}
+
+#[tokio::test]
+async fn scenario_contribute_agent_failure_recovers() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("contrib-fail-recover");
+    repo.init_git();
+
+    let agent_cmd = mock_agent_command("fail");
+    repo.write_full_setup("lead", "test-node-fr", &agent_cmd);
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    let (issue, comments) = make_approved_thesis(92, "Failure recovery test", "lead");
+    let github = Arc::new(ScenarioGitHub::new("contributor"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(92, comments);
+
+    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-fr"); }
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        true,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(
+        &ctx,
+        &ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(result.is_ok(), "contribute should handle agent failure gracefully: {result:?}");
+}
+
+// ---------------------------------------------------------------------------
+// Config variation scenarios
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn scenario_contribute_lower_is_better() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("contrib-lib");
+    repo.init_git();
+
+    let agent_cmd = mock_agent_command("improved");
+    repo.write_full_setup("lead", "test-node-lib", &agent_cmd);
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    let (issue, comments) = make_approved_thesis(93, "Lower is better test", "lead");
+    let github = Arc::new(ScenarioGitHub::new("contributor"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(93, comments);
+
+    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-lib"); }
+
+    let mut ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        true,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+    ctx.config.metric_direction = polyresearch::config::MetricDirection::LowerIsBetter;
+
+    let result = commands::contribute::run(
+        &ctx,
+        &ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(result.is_ok(), "contribute should succeed with lower_is_better: {result:?}");
+}
