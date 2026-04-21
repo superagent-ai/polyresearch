@@ -203,21 +203,12 @@ pub fn write_thesis_context(
 }
 
 pub fn experiment_prompt() -> &'static str {
-    "Read PROGRAM.md for the experiment loop and constraints. \
-     Read PREPARE.md for evaluation setup. \
-     Read .polyresearch/thesis.md for the thesis context and prior attempt history. \
-     Run the experiment, then write your result to .polyresearch/result.json with fields: \
-     metric (f64), baseline (f64), observation (improved|no_improvement|crashed|infra_failure), \
-     summary (string)."
+    include_str!("../prompts/experiment.md")
 }
 
 pub fn thesis_generation_prompt(count: usize) -> String {
-    format!(
-        "Read PROGRAM.md and results.tsv to understand the current research state. \
-         Generate exactly {count} thesis proposals as a JSON array of objects with \
-         \"title\" and \"body\" fields. Write the array to .polyresearch/thesis-proposals.json. \
-         Each thesis should be specific, actionable, and explore a different direction."
-    )
+    let base = include_str!("../prompts/thesis-generation.md");
+    format!("{base}\n\nGenerate exactly {count} thesis proposals.")
 }
 
 struct HarnessSpec {
