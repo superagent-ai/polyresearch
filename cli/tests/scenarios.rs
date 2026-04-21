@@ -366,7 +366,7 @@ async fn scenario_bootstrap_fixes_upstream_login() {
     let upstream_program = "\
 # Research Program
 
-cli_version: 0.5.2
+cli_version: 0.5.3
 lead_github_login: upstream-owner
 maintainer_github_login: upstream-owner
 metric_tolerance: 0.01
@@ -438,7 +438,7 @@ async fn scenario_bootstrap_login_fix_does_not_clobber_prose() {
     let program_with_prose = "\
 # Research Program
 
-cli_version: 0.5.2
+cli_version: 0.5.3
 lead_github_login: upstream-owner
 maintainer_github_login: upstream-owner
 metric_tolerance: 0.01
