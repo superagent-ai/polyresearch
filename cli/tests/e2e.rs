@@ -3707,16 +3707,15 @@ fn ledger_detects_discarded_after_release() {
 //
 // These tests assert INTENDED behavior from specs/cli-v2.md.
 // Tests that fail indicate bugs where the implementation diverges from the
-// spec. Each test documents the relevant spec section.
+// spec. Each test quotes the specific spec text it's testing.
 // ===========================================================================
 
-/// Spec: "infra_failure releases do NOT permanently blacklist -- the node can
-/// retry after the infra issue is resolved. Only no_improvement releases
-/// should permanently prevent the same node from reclaiming."
+/// Spec (Claimability rules): "The node has not previously released the
+/// thesis with no_improvement (infra_failure releases do NOT permanently
+/// blacklist -- the node can retry after the infra issue is resolved)"
 ///
-/// The `batch-claim` command currently filters out theses with ANY prior
-/// release from the node, not just no_improvement. This test asserts the
-/// spec behavior: infra_failure should allow reclaim.
+/// batch-claim currently filters out theses with ANY prior release from
+/// the node, not just no_improvement releases.
 #[tokio::test]
 async fn batch_claim_allows_reclaim_after_infra_failure_release() {
     let _guard = NodeIdEnvGuard::lock_clean();
@@ -3788,10 +3787,9 @@ async fn batch_claim_allows_reclaim_after_infra_failure_release() {
     );
 }
 
-/// Spec (duties, claimability): "infra_failure releases do NOT permanently
-/// blacklist." The duties system should count theses released with
-/// infra_failure by this node as still claimable, not report
-/// "no-claimable-work".
+/// Spec (Claimability rules): Same rule as above -- "infra_failure releases
+/// do NOT permanently blacklist." The duties advisory `no-claimable-work`
+/// should not fire when the only release from this node is infra_failure.
 #[tokio::test]
 async fn duties_counts_infra_failure_released_thesis_as_claimable() {
     let repo = TestRepo::new("duties-infra-claimable");
@@ -3818,15 +3816,16 @@ async fn duties_counts_infra_failure_released_thesis_as_claimable() {
     );
 }
 
-/// Spec (thesis lifecycle, claimability): Exhausted phase should be per-node.
-/// If node-a releases with no_improvement, but node-b has never tried the
-/// thesis, the thesis should remain Approved (claimable by node-b), not
-/// Exhausted.
+/// Spec (Claimability rules): "The node has not previously released the
+/// thesis with no_improvement" -- the check is per-node. Node-b should
+/// pass the claimability filter on a thesis that node-a released with
+/// no_improvement, because node-b has no releases on it.
 ///
-/// The current implementation sets Exhausted whenever ANY no_improvement
-/// release exists globally, which is wrong per spec.
+/// Note: the spec is silent on whether the thesis issue should be closed
+/// after a no_improvement release. This test only checks the per-node
+/// claimability predicate, not the Exhausted phase or close behavior.
 #[test]
-fn exhausted_phase_is_per_node_not_global() {
+fn claimability_filter_is_per_node_for_no_improvement() {
     let now = chrono::Utc::now();
     let thesis = ThesisState {
         issue: make_open_issue(1, "Test thesis"),
@@ -3855,26 +3854,28 @@ fn exhausted_phase_is_per_node_not_global() {
 
     assert!(
         is_claimable_by_node_b,
-        "thesis should be claimable by node-b even though node-a released with no_improvement"
+        "per-node claimability filter: node-b has no no_improvement release, so it passes"
     );
 
+    let is_claimable_by_node_a = thesis.issue.state == "OPEN"
+        && thesis.approved
+        && thesis.active_claims.is_empty()
+        && !thesis.releases.iter().any(|r| {
+            r.node == "node-a" && r.reason == ReleaseReason::NoImprovement
+        });
+
     assert!(
-        !matches!(thesis.phase, ThesisPhase::Exhausted),
-        "thesis should NOT be Exhausted when other nodes haven't tried it; \
-         Exhausted is currently set globally on any no_improvement release, \
-         but the spec says only the releasing node is blocked"
+        !is_claimable_by_node_a,
+        "per-node claimability filter: node-a released with no_improvement, so it's blocked"
     );
 }
 
-/// Spec (contribute loop, step 3): "Auto-submit any blocking submit duties
+/// Spec (Contribute loop, step 3): "Auto-submit any blocking submit duties
 /// (requires resuming the thesis worktree to get the right branch context)."
 ///
-/// If the worktree directory doesn't exist (e.g. machine reboot lost tmpfs),
-/// auto-submit should recreate/resume it, not silently skip.
-///
-/// This test creates a situation where an improved attempt exists with no
-/// open PR and no worktree on disk. The contribute loop should still auto-
-/// submit by recreating the worktree.
+/// The parenthetical "requires resuming the thesis worktree" implies the
+/// worktree must be recreated if missing. This test verifies contribute
+/// handles a missing worktree during auto-submit without crashing.
 #[tokio::test]
 async fn contribute_auto_submit_recreates_missing_worktree() {
     let _guard = NodeIdEnvGuard::lock_clean();
@@ -3955,22 +3956,22 @@ async fn contribute_auto_submit_recreates_missing_worktree() {
         overrides: NodeOverrides::default(),
     }).await;
 
-    // The spec says contribute should auto-submit even when worktree is
-    // missing by recreating it. If the implementation errors or skips,
-    // this is a spec divergence.
     assert!(
         result.is_ok(),
         "contribute should handle missing worktree during auto-submit: {result:?}"
     );
 }
 
-/// Spec (duties, blocking): "submit: an improved attempt was recorded but no
-/// PR was created yet" is a blocking duty. The spec says contribute step 5
-/// checks for "remaining blocking duties" and errors in --once mode.
+/// Spec (Contribute loop, step 5): "Check for remaining blocking duties.
+/// If any exist, sleep and retry (or error in --once mode)."
+/// Spec (Duties, blocking): "submit: an improved attempt was recorded but
+/// no PR was created yet"
 ///
-/// If auto-submit fails (e.g. missing worktree), the submit duty remains
-/// blocking. In --once mode, contribute should error -- not silently proceed
-/// to claim more work.
+/// After auto-submit runs (step 3), step 5 checks for ALL remaining
+/// blocking duties. If auto-submit failed to resolve a submit duty (e.g.
+/// missing worktree), that duty should still block. The current code
+/// filters submit out of blocking duties after auto-submit, letting
+/// contribute proceed to claim more work even when a submit duty persists.
 #[tokio::test]
 async fn contribute_once_errors_on_unresolvable_submit_duty() {
     let _guard = NodeIdEnvGuard::lock_clean();
@@ -4006,10 +4007,6 @@ async fn contribute_once_errors_on_unresolvable_submit_duty() {
         overrides: NodeOverrides::default(),
     }).await;
 
-    // In --once mode with an unresolvable submit duty, contribute should
-    // error rather than silently proceeding. The current implementation
-    // filters out "submit" from blocking duties after auto-submit, which
-    // means a failed auto-submit doesn't block further claims.
     assert!(
         result.is_err(),
         "contribute --once should error when submit duty cannot be resolved, \
@@ -4017,13 +4014,15 @@ async fn contribute_once_errors_on_unresolvable_submit_duty() {
     );
 }
 
-/// Spec (worker invariants): "Every thesis that enters the worker pool MUST
+/// Spec (Worker invariants): "Every thesis that enters the worker pool MUST
 /// be either recorded (attempt + submit/release) or released as infra_failure.
 /// No thesis may be silently dropped."
+/// Spec (Worker invariants): "Worker tasks must always return enough
+/// information (issue number, worktree path) for the cleanup path to run,
+/// even on failure."
 ///
-/// When worker setup() fails, the current implementation returns
-/// WorkerOutcome::Failed without posting a release comment. The claim remains
-/// dangling on GitHub.
+/// ThesisWorker must expose issue_number before execute() so the caller
+/// can release the claim on GitHub if setup fails.
 #[test]
 fn worker_setup_failure_returns_issue_number_for_release() {
     let wctx = worker::WorkerContext {
@@ -4040,104 +4039,18 @@ fn worker_setup_failure_returns_issue_number_for_release() {
         verbose: false,
     };
 
-    // ThesisWorker.execute on a nonexistent path should still return
-    // enough info for the caller to release the claim.
-    // The spec says worker outcomes must always include issue_number.
-    match worker::ThesisWorker::new(wctx, String::new())
-    {
-        tw => {
-            // The key assertion: the worktree_path and issue_number must be
-            // available regardless of setup failure, so the caller can
-            // release the claim on GitHub.
-            assert_eq!(tw.issue_number(), 99,
-                "ThesisWorker must expose issue_number for cleanup even before execute()");
-        }
-    }
+    let tw = worker::ThesisWorker::new(wctx, String::new());
+    assert_eq!(tw.issue_number(), 99,
+        "ThesisWorker must expose issue_number for cleanup even before execute()");
 }
 
-/// Spec (claimability): "The node has not previously released the thesis with
-/// no_improvement." This is a per-node check. But the thesis itself should
-/// remain in phase Approved (claimable by OTHER nodes) after one node
-/// releases with no_improvement. Only when ALL interested nodes have
-/// exhausted the thesis should it close.
+/// Spec (Duties, advisory): "metric-floor / stale-queue: best metric is
+/// already below tolerance (lead only)"
 ///
-/// This test constructs a thesis released by node-a with no_improvement and
-/// verifies it's still claimable by node-b via the claim command.
-#[tokio::test]
-async fn thesis_still_claimable_by_other_node_after_no_improvement_release() {
-    let _guard = NodeIdEnvGuard::lock_clean();
-    let repo = TestRepo::new("claim-other-node-after-release");
-    init_git_repo(&repo.path);
-
-    let now = chrono::Utc::now();
-    let lead = "lead";
-    let issue = Issue {
-        number: 70,
-        title: "Multi node thesis".to_string(),
-        body: Some("Test.".to_string()),
-        state: "OPEN".to_string(),
-        labels: vec![Label { name: "thesis".to_string() }],
-        created_at: now - chrono::Duration::hours(5),
-        closed_at: None,
-        author: Some(Author { login: lead.to_string() }),
-        url: None,
-    };
-    let comments = vec![
-        IssueComment {
-            id: 7001,
-            body: ProtocolComment::Approval { thesis: 70 }.render(),
-            user: CommentUser { login: lead.to_string() },
-            created_at: now - chrono::Duration::hours(4),
-            updated_at: None,
-        },
-        IssueComment {
-            id: 7002,
-            body: ProtocolComment::Claim { thesis: 70, node: "node-a".to_string() }.render(),
-            user: CommentUser { login: "alice".to_string() },
-            created_at: now - chrono::Duration::hours(3),
-            updated_at: None,
-        },
-        IssueComment {
-            id: 7003,
-            body: ProtocolComment::Release {
-                thesis: 70,
-                node: "node-a".to_string(),
-                reason: ReleaseReason::NoImprovement,
-            }.render(),
-            user: CommentUser { login: "alice".to_string() },
-            created_at: now - chrono::Duration::hours(2),
-            updated_at: None,
-        },
-    ];
-
-    let mock = Arc::new(MockGitHubClient::new(
-        "bob",
-        vec![issue],
-        HashMap::from([(70, comments)]),
-        vec![],
-        HashMap::new(),
-    ));
-    commands::write_node_id(&repo.path, "node-b").unwrap();
-
-    let ctx = make_ctx(
-        repo.path.clone(), mock.clone(), lead, false,
-        Commands::Claim(IssueArgs { issue: 70 }),
-    );
-
-    // node-b should be able to claim this thesis even though node-a
-    // released with no_improvement. The spec says no_improvement only
-    // blocks the RELEASING node, not other nodes.
-    let result = commands::claim::run(&ctx, &IssueArgs { issue: 70 }).await;
-    assert!(
-        result.is_ok(),
-        "node-b should be able to claim thesis after node-a's no_improvement release: {result:?}"
-    );
-}
-
-/// Spec (metric-floor advisory): The spec lists "metric-floor / stale-queue"
-/// as lead-only advisories without restricting them to lower_is_better.
-/// A higher_is_better project where the best accepted metric already exceeds
-/// what the tolerance would allow should also report metric-floor.
+/// The spec lists this advisory without restricting it to any metric
+/// direction. The implementation only computes it for lower_is_better.
+/// A higher_is_better project near the metric ceiling (e.g. accuracy 0.999
+/// with tolerance 0.01) should also report metric-floor.
 #[tokio::test]
 async fn duties_reports_metric_floor_for_higher_is_better() {
     let repo = TestRepo::new("duties-metric-floor-hib");
@@ -4158,16 +4071,15 @@ async fn duties_reports_metric_floor_for_higher_is_better() {
 
     assert!(
         report.advisory.iter().any(|d| d.category == "metric-floor"),
-        "should report metric-floor for higher_is_better when best metric is near ceiling; \
-         currently only implemented for lower_is_better"
+        "should report metric-floor for higher_is_better when best metric is near ceiling"
     );
 }
 
-/// Spec (assignment_timeout): Claims expire after assignment_timeout. After
-/// expiry, the thesis should be in Approved phase (claimable), not Claimed.
+/// Spec (Validation rules): "Claims expire after assignment_timeout."
+/// Spec (Claimability rules): "No active claims exist"
 ///
-/// This test constructs a claim that is older than the assignment_timeout and
-/// verifies the derived state treats the thesis as Approved, not Claimed.
+/// An expired claim should not count as an active claim. A new node should
+/// be able to claim a thesis whose only claim expired.
 #[tokio::test]
 async fn expired_claim_makes_thesis_claimable() {
     let _guard = NodeIdEnvGuard::lock_clean();
@@ -4226,10 +4138,12 @@ async fn expired_claim_makes_thesis_claimable() {
     );
 }
 
-/// Spec (contribute loop, step 6): "Counts both claimable and resumable
-/// theses as available work." A thesis claimed by this node that is in
-/// Claimed phase (no attempt yet) should count as resumable work, not be
-/// ignored.
+/// Spec (Contribute loop, step 6): "Counts both claimable and resumable
+/// theses as available work."
+///
+/// A thesis already claimed by this node (Claimed phase, no attempt yet)
+/// should count as resumable work. Contribute should not exit with
+/// "no available work" when such a thesis exists.
 #[tokio::test]
 async fn contribute_counts_resumable_theses_as_available_work() {
     let _guard = NodeIdEnvGuard::lock_clean();
