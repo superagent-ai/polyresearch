@@ -56,7 +56,7 @@ impl ScenarioRepo {
             format!(
                 r#"# Research Program
 
-cli_version: 0.5.0
+cli_version: {version}
 lead_github_login: {lead}
 maintainer_github_login: {lead}
 metric_tolerance: 0.01
@@ -78,7 +78,8 @@ Test scenario goal.
 
 - `PREPARE.md`
 - `docs/`
-"#
+"#,
+                version = env!("CARGO_PKG_VERSION")
             ),
         )
         .unwrap();

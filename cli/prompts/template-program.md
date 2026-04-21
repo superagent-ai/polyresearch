@@ -1,6 +1,6 @@
 # Research Program
 
-cli_version: 0.5.1
+cli_version: {{VERSION}}
 lead_github_login: replace-me
 maintainer_github_login: replace-me
 metric_tolerance: 0.01

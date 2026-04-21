@@ -409,8 +409,8 @@ mod tests {
     #[test]
     fn shell_words_splits_simple_command() {
         assert_eq!(
-            shell_words("claude -p --permission-mode bypassPermissions"),
-            vec!["claude", "-p", "--permission-mode", "bypassPermissions"]
+            shell_words("claude -p --dangerously-skip-permissions"),
+            vec!["claude", "-p", "--dangerously-skip-permissions"]
         );
     }
 

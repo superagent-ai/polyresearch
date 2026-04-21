@@ -187,10 +187,11 @@ pub fn write_templates(repo_root: &Path, goal: Option<&str>) -> Result<()> {
     let program_path = repo_root.join("PROGRAM.md");
     if !program_path.exists() {
         let base = include_str!("../../prompts/template-program.md");
+        let versioned = base.replace("{{VERSION}}", env!("CARGO_PKG_VERSION"));
         let template = if let Some(goal) = goal {
-            replace_goal_section(base, goal)
+            replace_goal_section(&versioned, goal)
         } else {
-            base.to_string()
+            versioned
         };
         fs::write(&program_path, template)
             .wrap_err_with(|| format!("failed to write {}", program_path.display()))?;
@@ -258,7 +259,7 @@ fn spawn_setup_agent(repo_root: &Path, overrides: &crate::cli::NodeOverrides) ->
             overrides
                 .agent_command
                 .clone()
-                .unwrap_or_else(|| "claude -p --permission-mode bypassPermissions".to_string())
+                .unwrap_or_else(|| "claude -p --dangerously-skip-permissions".to_string())
         });
 
     let prompt = include_str!("../../prompts/bootstrap-setup.md");
