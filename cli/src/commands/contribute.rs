@@ -113,10 +113,8 @@ async fn run_iteration(
         if thesis.issue.state != "OPEN" {
             continue;
         }
-        let already_resolved = thesis.pull_requests.iter().any(|pr| {
-            pr.pr.state == "MERGED" || pr.decision.is_some()
-        });
-        if already_resolved {
+        let has_merged_pr = thesis.pull_requests.iter().any(|pr| pr.pr.state == "MERGED");
+        if has_merged_pr {
             continue;
         }
         let has_improved = thesis.attempts.iter().any(|a| {
