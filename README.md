@@ -28,18 +28,16 @@ Point it at any GitHub repo with a codebase and a metric you want to improve:
 
 ```bash
 polyresearch bootstrap https://github.com/owner/repo
-polyresearch bootstrap https://github.com/owner/repo --fork myorg
-polyresearch bootstrap https://github.com/owner/repo --no-fork
 ```
 
-Bootstrap checks whether you have push access to the target repo. If not, it forks to your GitHub account automatically (or to a specific org with `--fork`). Use `--no-fork` to skip the check and clone directly.
+Use `--goal` to tell the agent what you're optimizing for -- it pre-fills the Goal section of `PROGRAM.md`. Bootstrap checks whether you have push access; if not, it forks to your GitHub account automatically. See the [full flag list](cli/README.md#command-summary) for `--fork`, `--no-fork`, and other options.
 
 This writes template files, initializes your machine as a node, and spawns an agent to fill in project-specific details. When it finishes you'll have:
 
-- **`PROGRAM.md`** -- the research playbook. Describes the goal, which files agents can edit, strategy hints. This is the only file agents read.
-- **`PREPARE.md`** -- the evaluation setup. Benchmark command, metric parsing, ground truth. Lives outside the editable surface so agents can't change how they're judged.
-- **`results.tsv`** -- the experiment ledger. Every attempt ever recorded.
-- **`.polyresearch-node.toml`** -- your machine's identity and capacity setting. Gitignored.
+- `**PROGRAM.md**` -- the research playbook. Describes the goal, which files agents can edit, strategy hints. This is the only file agents read.
+- `**PREPARE.md**` -- the evaluation setup. Benchmark command, metric parsing, ground truth. Lives outside the editable surface so agents can't change how they're judged.
+- `**results.tsv**` -- the experiment ledger. Every attempt ever recorded.
+- `**.polyresearch-node.toml**` -- your machine's identity and capacity setting. Gitignored.
 
 Review `PROGRAM.md` and `PREPARE.md`, tweak them for your project, commit, and push.
 
@@ -49,10 +47,9 @@ From the root of your project (where you ran `bootstrap`):
 
 ```bash
 polyresearch lead
-polyresearch lead --agent-command "codex --full-auto"
 ```
 
-The lead syncs the results ledger, policy-checks open PRs, decides candidates (merge or reject), and generates new theses when the queue runs low. It runs in a loop until you stop it. Use `--once` for a single iteration. Node config settings (`--capacity`, `--api-budget`, `--request-delay`, `--agent-command`) can be overridden at runtime without editing `.polyresearch-node.toml`.
+The lead syncs the results ledger, policy-checks open PRs, decides candidates (merge or reject), and generates new theses when the queue runs low. It runs in a loop until you stop it. By default, agents run with `claude -p --dangerously-skip-permissions`. Override with `--agent-command` to use a different model or flags, e.g. `--agent-command "claude -p --dangerously-skip-permissions --model sonnet"`. Use `--once` for a single iteration. See the [full flag list](cli/README.md#command-summary) for all options.
 
 ### 3. Run contributors
 
@@ -60,10 +57,9 @@ On any machine (yours, a teammate's, a rented GPU box):
 
 ```bash
 polyresearch contribute https://github.com/owner/repo
-polyresearch contribute --capacity 50 --agent-command "codex --full-auto"
 ```
 
-The contributor clones the repo, claims theses from the issue queue, spawns an agent for each one, records results, and submits PRs. Launch as many contributor machines as you want -- they all pull from the same queue. Node config settings (`--capacity`, `--api-budget`, `--request-delay`, `--agent-command`) can be overridden at runtime without editing `.polyresearch-node.toml`.
+The contributor clones the repo, claims theses from the issue queue, spawns an agent for each one, records results, and submits PRs. Launch as many contributor machines as you want -- they all pull from the same queue. Use `--capacity` to limit how much of the machine polyresearch can use, or `--agent-command` to override the default agent. See the [full flag list](cli/README.md#command-summary) for all options.
 
 ### Run on a remote machine
 
@@ -99,11 +95,11 @@ Full command reference in [cli/README.md](cli/README.md).
 ## Examples
 
 
-| Example                                      | What it does                                                                                                 |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| [corewar](examples/corewar/)                 | Evolve a Redcode warrior against a frozen gauntlet. Free to evaluate, fast iteration, deterministic results. 218% score improvement over 27 experiments. |
-| [eslint](examples/eslint/)                   | Optimize ESLint's core linting performance on a dual-workload benchmark. Real-world codebase, V8-level depth. Single-file linting 24% faster over 75 experiments. |
-| [postcss](examples/postcss/)                 | Optimize PostCSS's CSS processing on a dual-workload benchmark. Plugin pipeline 16% faster over 50 experiments. |
+| Example                      | What it does                                                                                                                                                      |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [corewar](examples/corewar/) | Evolve a Redcode warrior against a frozen gauntlet. Free to evaluate, fast iteration, deterministic results. 218% score improvement over 27 experiments.          |
+| [eslint](examples/eslint/)   | Optimize ESLint's core linting performance on a dual-workload benchmark. Real-world codebase, V8-level depth. Single-file linting 24% faster over 75 experiments. |
+| [postcss](examples/postcss/) | Optimize PostCSS's CSS processing on a dual-workload benchmark. Plugin pipeline 16% faster over 50 experiments.                                                   |
 
 
 ## License
