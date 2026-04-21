@@ -162,15 +162,10 @@ async fn run_iteration(
         repo_state = RepositoryState::derive(&ctx.github, config).await?;
     }
 
-    // Check for non-submit blocking duties.
     let duty_report = crate::commands::duties::check(ctx, &repo_state)?;
-    let non_submit_blocking: Vec<_> = duty_report
-        .blocking
-        .iter()
-        .filter(|d| d.category != "submit")
-        .collect();
-    if !non_submit_blocking.is_empty() {
-        let items: Vec<String> = non_submit_blocking
+    if !duty_report.blocking.is_empty() {
+        let items: Vec<String> = duty_report
+            .blocking
             .iter()
             .map(|d| format!("  [{}] {}", d.category, d.message))
             .collect();
