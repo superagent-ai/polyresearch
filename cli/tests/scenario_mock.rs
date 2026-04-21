@@ -20,6 +20,7 @@ struct ScenarioState {
     closed_issues: Vec<u64>,
     closed_prs: Vec<u64>,
     merged_prs: Vec<u64>,
+    assigned_issues: Vec<(u64, Vec<String>)>,
 }
 
 #[allow(dead_code)]
@@ -43,6 +44,7 @@ impl ScenarioGitHub {
                 closed_issues: Vec::new(),
                 closed_prs: Vec::new(),
                 merged_prs: Vec::new(),
+                assigned_issues: Vec::new(),
             }),
         }
     }
@@ -257,7 +259,12 @@ impl GitHubApi for ScenarioGitHub {
         Ok(comment)
     }
 
-    fn add_assignees(&self, _issue_number: u64, _assignees: &[&str]) -> Result<()> {
+    fn add_assignees(&self, issue_number: u64, assignees: &[&str]) -> Result<()> {
+        let mut s = self.state.lock().unwrap();
+        s.assigned_issues.push((
+            issue_number,
+            assignees.iter().map(|a| a.to_string()).collect(),
+        ));
         Ok(())
     }
 

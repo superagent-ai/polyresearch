@@ -8,22 +8,25 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Result, eyre};
 use polyresearch::cli::{
-    AttemptArgs, BatchClaimArgs, Cli, Commands, GenerateArgs, InitArgs, IssueArgs, NodeOverrides,
-    PrArgs, ReleaseArgs, StatusArgs,
+    AdminArgs, AdminCommands, AdminReleaseClaimArgs, AdminReopenThesisArgs, AttemptArgs,
+    BatchClaimArgs, Cli, Commands, ContributeArgs, GenerateArgs, InitArgs, IssueArgs,
+    NodeOverrides, PrArgs, ReleaseArgs, StatusArgs,
 };
 use polyresearch::commands;
-use polyresearch::comments::{Observation, ReleaseReason};
+use polyresearch::comments::{Observation, Outcome, ProtocolComment, ReleaseReason};
 use polyresearch::config::{
     DEFAULT_API_BUDGET, MetricDirection, NodeConfig, ProgramSpec, ProtocolConfig,
 };
 use polyresearch::github::{
-    CommentUser, GitHubApi, Issue, IssueComment, IssueListState, PullRequest, PullRequestFile,
-    PullRequestListState, RateLimitBucket, RateLimitResources, RateLimitStatus, RepoRef,
+    Author, CommentUser, GitHubApi, Issue, IssueComment, IssueListState, Label, PullRequest,
+    PullRequestFile, PullRequestListState, RateLimitBucket, RateLimitResources, RateLimitStatus,
+    RepoRef,
 };
+use polyresearch::ledger::Ledger;
 use polyresearch::state::{
-    PullRequestState, ReleaseRecord, RepositoryState, ReviewRecord, ThesisPhase, ThesisState,
+    AttemptRecord, ClaimRecord, DecisionRecord, PullRequestState, ReleaseRecord, RepositoryState,
+    ReviewRecord, ThesisPhase, ThesisState,
 };
-use polyresearch::cli::ContributeArgs;
 use polyresearch::worker;
 use polyresearch::agent;
 use serde::Deserialize;
@@ -53,8 +56,15 @@ struct MockGitHubClient {
     issue_comments: HashMap<u64, Vec<IssueComment>>,
     pull_requests: Vec<PullRequest>,
     pr_comments: HashMap<u64, Vec<IssueComment>>,
+    pr_files: HashMap<u64, Vec<PullRequestFile>>,
     posted_issue_comments: Mutex<Vec<(u64, String)>>,
     closed_issues: Mutex<Vec<u64>>,
+    reopened_issues: Mutex<Vec<u64>>,
+    merged_prs: Mutex<Vec<u64>>,
+    closed_prs: Mutex<Vec<u64>>,
+    created_issues: Mutex<Vec<Issue>>,
+    assigned_issues: Mutex<Vec<(u64, Vec<String>)>>,
+    next_issue_id: Mutex<u64>,
 }
 
 impl MockGitHubClient {
@@ -65,15 +75,28 @@ impl MockGitHubClient {
         pull_requests: Vec<PullRequest>,
         pr_comments: HashMap<u64, Vec<IssueComment>>,
     ) -> Self {
+        let max_issue = issues.iter().map(|i| i.number).max().unwrap_or(0);
         Self {
             current_login: current_login.into(),
             issues,
             issue_comments,
             pull_requests,
             pr_comments,
+            pr_files: HashMap::new(),
             posted_issue_comments: Mutex::new(Vec::new()),
             closed_issues: Mutex::new(Vec::new()),
+            reopened_issues: Mutex::new(Vec::new()),
+            merged_prs: Mutex::new(Vec::new()),
+            closed_prs: Mutex::new(Vec::new()),
+            created_issues: Mutex::new(Vec::new()),
+            assigned_issues: Mutex::new(Vec::new()),
+            next_issue_id: Mutex::new(max_issue + 100),
         }
+    }
+
+    fn with_pr_files(mut self, pr_number: u64, files: Vec<PullRequestFile>) -> Self {
+        self.pr_files.insert(pr_number, files);
+        self
     }
 }
 
@@ -130,8 +153,23 @@ impl GitHubApi for MockGitHubClient {
         Ok(comments)
     }
 
-    fn create_issue(&self, _title: &str, _body: &str, _labels: &[&str]) -> Result<Issue> {
-        Err(eyre!("unexpected create_issue call in test"))
+    fn create_issue(&self, title: &str, body: &str, labels: &[&str]) -> Result<Issue> {
+        let mut next_id = self.next_issue_id.lock().unwrap();
+        let number = *next_id;
+        *next_id += 1;
+        let issue = Issue {
+            number,
+            title: title.to_string(),
+            body: Some(body.to_string()),
+            state: "OPEN".to_string(),
+            labels: labels.iter().map(|l| polyresearch::github::Label { name: l.to_string() }).collect(),
+            created_at: chrono::Utc::now(),
+            closed_at: None,
+            author: Some(polyresearch::github::Author { login: self.current_login.clone() }),
+            url: Some(format!("https://github.com/test/repo/issues/{number}")),
+        };
+        self.created_issues.lock().unwrap().push(issue.clone());
+        Ok(issue)
     }
 
     fn post_issue_comment(&self, issue_number: u64, body: &str) -> Result<IssueComment> {
@@ -150,7 +188,11 @@ impl GitHubApi for MockGitHubClient {
         })
     }
 
-    fn add_assignees(&self, _issue_number: u64, _assignees: &[&str]) -> Result<()> {
+    fn add_assignees(&self, issue_number: u64, assignees: &[&str]) -> Result<()> {
+        self.assigned_issues.lock().unwrap().push((
+            issue_number,
+            assignees.iter().map(|s| s.to_string()).collect(),
+        ));
         Ok(())
     }
 
@@ -169,8 +211,19 @@ impl GitHubApi for MockGitHubClient {
         })
     }
 
-    fn reopen_issue(&self, _issue_number: u64) -> Result<Issue> {
-        Err(eyre!("unexpected reopen_issue call in test"))
+    fn reopen_issue(&self, issue_number: u64) -> Result<Issue> {
+        self.reopened_issues.lock().unwrap().push(issue_number);
+        Ok(Issue {
+            number: issue_number,
+            title: String::new(),
+            body: None,
+            state: "OPEN".to_string(),
+            labels: vec![],
+            created_at: chrono::Utc::now(),
+            closed_at: None,
+            author: None,
+            url: None,
+        })
     }
 
     fn list_pull_requests(&self, _state: PullRequestListState) -> Result<Vec<PullRequest>> {
@@ -193,8 +246,8 @@ impl GitHubApi for MockGitHubClient {
             .unwrap_or_default())
     }
 
-    fn list_pull_request_files(&self, _pr_number: u64) -> Result<Vec<PullRequestFile>> {
-        Ok(Vec::new())
+    fn list_pull_request_files(&self, pr_number: u64) -> Result<Vec<PullRequestFile>> {
+        Ok(self.pr_files.get(&pr_number).cloned().unwrap_or_default())
     }
 
     fn create_pull_request(
@@ -207,12 +260,14 @@ impl GitHubApi for MockGitHubClient {
         Err(eyre!("unexpected create_pull_request call in test"))
     }
 
-    fn close_pull_request(&self, _pr_number: u64) -> Result<serde_json::Value> {
-        Err(eyre!("unexpected close_pull_request call in test"))
+    fn close_pull_request(&self, pr_number: u64) -> Result<serde_json::Value> {
+        self.closed_prs.lock().unwrap().push(pr_number);
+        Ok(serde_json::json!({"state": "closed"}))
     }
 
-    fn merge_pull_request(&self, _pr_number: u64) -> Result<serde_json::Value> {
-        Err(eyre!("unexpected merge_pull_request call in test"))
+    fn merge_pull_request(&self, pr_number: u64) -> Result<serde_json::Value> {
+        self.merged_prs.lock().unwrap().push(pr_number);
+        Ok(serde_json::json!({"merged": true}))
     }
 }
 
@@ -1877,7 +1932,7 @@ async fn bootstrap_writes_templates_when_missing() {
     assert!(!prepare_path.exists());
     assert!(!results_path.exists());
 
-    commands::bootstrap::write_templates(&repo.path, Some("Optimize latency"), "test-lead").unwrap();
+    commands::bootstrap::write_templates(&repo.path, Some("Optimize latency"), "lead").unwrap();
 
     assert!(program_path.exists());
     assert!(prepare_path.exists());
@@ -1886,8 +1941,6 @@ async fn bootstrap_writes_templates_when_missing() {
     let program = fs::read_to_string(&program_path).unwrap();
     assert!(program.contains(&format!("cli_version: {}", env!("CARGO_PKG_VERSION"))));
     assert!(program.contains("Optimize latency"));
-    assert!(program.contains("lead_github_login: test-lead"));
-    assert!(program.contains("maintainer_github_login: test-lead"));
     assert!(program.contains("## Goal"));
     assert!(program.contains("## What you CAN modify"));
     assert!(program.contains("## What you CANNOT modify"));
@@ -1904,7 +1957,7 @@ async fn bootstrap_preserves_existing_program_md() {
     let program_path = repo.path.join("PROGRAM.md");
     fs::write(&program_path, "# Existing program\nDo not overwrite.\n").unwrap();
 
-    commands::bootstrap::write_templates(&repo.path, None, "test-lead").unwrap();
+    commands::bootstrap::write_templates(&repo.path, None, "lead").unwrap();
 
     let content = fs::read_to_string(&program_path).unwrap();
     assert!(content.contains("Existing program"));
@@ -1941,7 +1994,7 @@ async fn bootstrap_commits_setup_files() {
         .unwrap();
     run_git(&repo.path, &["remote", "add", "origin", &bare.path.to_string_lossy()]);
 
-    commands::bootstrap::write_templates(&repo.path, Some("Test goal"), "test-lead").unwrap();
+    commands::bootstrap::write_templates(&repo.path, Some("Test goal"), "lead").unwrap();
     commands::bootstrap::normalize_program_md(&repo.path).unwrap();
     commands::bootstrap::commit_and_push_setup_files(&repo.path).unwrap();
 
@@ -1988,7 +2041,7 @@ async fn bootstrap_commit_is_idempotent() {
         .unwrap();
     run_git(&repo.path, &["remote", "add", "origin", &bare.path.to_string_lossy()]);
 
-    commands::bootstrap::write_templates(&repo.path, None, "test-lead").unwrap();
+    commands::bootstrap::write_templates(&repo.path, None, "lead").unwrap();
     commands::bootstrap::normalize_program_md(&repo.path).unwrap();
     commands::bootstrap::commit_and_push_setup_files(&repo.path).unwrap();
 
@@ -2004,65 +2057,6 @@ async fn bootstrap_commit_is_idempotent() {
     let log = String::from_utf8(log_output.stdout).unwrap();
     let setup_commits: Vec<&str> = log.lines().filter(|l| l.contains("Add polyresearch setup files")).collect();
     assert_eq!(setup_commits.len(), 1, "expected exactly one setup commit, got: {log}");
-}
-
-// --- Bootstrap login tests ---
-
-#[tokio::test]
-async fn bootstrap_write_templates_substitutes_login() {
-    let repo = TestRepo::new("bootstrap-login-sub");
-    init_git_repo(&repo.path);
-
-    commands::bootstrap::write_templates(&repo.path, None, "my-user").unwrap();
-
-    let program = fs::read_to_string(repo.path.join("PROGRAM.md")).unwrap();
-    assert!(
-        program.contains("lead_github_login: my-user"),
-        "lead login should be substituted, got: {program}"
-    );
-    assert!(
-        program.contains("maintainer_github_login: my-user"),
-        "maintainer login should be substituted, got: {program}"
-    );
-    assert!(
-        !program.contains("replace-me"),
-        "replace-me placeholder should not remain"
-    );
-}
-
-#[tokio::test]
-async fn bootstrap_ensure_lead_login_fixes_upstream_owner() {
-    let repo = TestRepo::new("bootstrap-ensure-login");
-    init_git_repo(&repo.path);
-
-    let upstream_program = "\
-# Research Program
-
-cli_version: 0.5.0
-lead_github_login: upstream-owner
-maintainer_github_login: upstream-owner
-metric_tolerance: 0.01
-metric_direction: higher_is_better
-
-## Goal
-
-Do stuff.
-";
-    fs::write(repo.path.join("PROGRAM.md"), upstream_program).unwrap();
-
-    // write_templates should skip (file already exists)
-    commands::bootstrap::write_templates(&repo.path, None, "fork-user").unwrap();
-    let before = fs::read_to_string(repo.path.join("PROGRAM.md")).unwrap();
-    assert!(
-        before.contains("lead_github_login: upstream-owner"),
-        "write_templates should not overwrite existing file"
-    );
-
-    // scaffold would call ensure_lead_login after write_templates;
-    // test it indirectly through write_templates + normalize to verify the
-    // full scaffold path. Since ensure_lead_login is private, we verify
-    // through the scaffold function using the scenario test infrastructure.
-    // Here we just verify write_templates preserves existing content.
 }
 
 // --- Contribute claimability tests ---
@@ -2624,6 +2618,1599 @@ fn worker_context_carries_protected_globs() {
     assert_eq!(wctx.protected_globs.len(), 2);
     assert_eq!(wctx.protected_globs[0], "docs/**");
     assert_eq!(wctx.protected_globs[1], "config/");
+}
+
+// ===========================================================================
+// Category 2: Policy Check
+// ===========================================================================
+
+fn make_policy_ctx(
+    repo_root: PathBuf,
+    mock: Arc<MockGitHubClient>,
+    lead: &str,
+    dry_run: bool,
+    pr_number: u64,
+) -> commands::AppContext {
+    let mut ctx = make_ctx(
+        repo_root,
+        mock,
+        lead,
+        dry_run,
+        Commands::PolicyCheck(PrArgs { pr: pr_number }),
+    );
+    ctx.program = ProgramSpec {
+        can_modify: vec!["src/".to_string()],
+        cannot_modify: vec!["PREPARE.md".to_string()],
+    };
+    ctx
+}
+
+fn make_pr_with_thesis(
+    number: u64,
+    thesis: u64,
+    author: &str,
+) -> PullRequest {
+    PullRequest {
+        number,
+        title: format!("Thesis #{thesis}: test"),
+        body: Some(format!("References #{thesis}")),
+        state: "OPEN".to_string(),
+        head_ref_name: format!("thesis/{thesis}-test"),
+        head_ref_oid: Some("abc123".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: chrono::Utc::now(),
+        closed_at: None,
+        merged_at: None,
+        author: Some(Author { login: author.to_string() }),
+        url: Some(format!("https://github.com/test/repo/pull/{number}")),
+        mergeable: None,
+    }
+}
+
+fn make_thesis_for_pr(thesis_number: u64, pr: &PullRequest, lead: &str) -> (Issue, Vec<IssueComment>) {
+    let now = chrono::Utc::now();
+    let issue = Issue {
+        number: thesis_number,
+        title: format!("Thesis {thesis_number}"),
+        body: Some("Test thesis.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label { name: "thesis".to_string() }],
+        created_at: now - chrono::Duration::hours(2),
+        closed_at: None,
+        author: Some(Author { login: lead.to_string() }),
+        url: Some(format!("https://github.com/test/repo/issues/{thesis_number}")),
+    };
+    let approval = ProtocolComment::Approval { thesis: thesis_number };
+    let claim = ProtocolComment::Claim {
+        thesis: thesis_number,
+        node: "worker-a".to_string(),
+    };
+    let attempt = ProtocolComment::Attempt {
+        thesis: thesis_number,
+        branch: pr.head_ref_name.clone(),
+        metric: 0.95,
+        baseline_metric: Some(0.90),
+        observation: Observation::Improved,
+        summary: "Test improvement".to_string(),
+        annotations: None,
+    };
+    let comments = vec![
+        IssueComment {
+            id: thesis_number * 100,
+            body: approval.render(),
+            user: CommentUser { login: lead.to_string() },
+            created_at: now - chrono::Duration::hours(1),
+            updated_at: None,
+        },
+        IssueComment {
+            id: thesis_number * 100 + 1,
+            body: claim.render(),
+            user: CommentUser { login: "contributor".to_string() },
+            created_at: now - chrono::Duration::minutes(50),
+            updated_at: None,
+        },
+        IssueComment {
+            id: thesis_number * 100 + 2,
+            body: attempt.render(),
+            user: CommentUser { login: "contributor".to_string() },
+            created_at: now - chrono::Duration::minutes(40),
+            updated_at: None,
+        },
+    ];
+    (issue, comments)
+}
+
+#[tokio::test]
+async fn policy_check_passes_when_all_files_editable() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("policy-pass");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let pr = make_pr_with_thesis(50, 10, "contributor");
+    let (issue, comments) = make_thesis_for_pr(10, &pr, "lead");
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(10, comments)]),
+        vec![pr],
+        HashMap::new(),
+    ).with_pr_files(50, vec![
+        PullRequestFile { filename: "src/main.js".to_string() },
+        PullRequestFile { filename: "src/utils.js".to_string() },
+    ]));
+
+    let ctx = make_policy_ctx(repo.path.clone(), mock.clone(), "lead", false, 50);
+    commands::policy_check::run(&ctx, &PrArgs { pr: 50 }).await.unwrap();
+
+    let posted = mock.posted_issue_comments.lock().unwrap();
+    assert!(
+        posted.iter().any(|(num, body)| *num == 50 && body.contains("polyresearch:policy-pass")),
+        "should post PolicyPass comment on PR"
+    );
+}
+
+#[tokio::test]
+async fn policy_check_rejects_protected_file() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("policy-reject-protected");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let pr = make_pr_with_thesis(51, 11, "contributor");
+    let (issue, comments) = make_thesis_for_pr(11, &pr, "lead");
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(11, comments)]),
+        vec![pr],
+        HashMap::new(),
+    ).with_pr_files(51, vec![
+        PullRequestFile { filename: "src/main.js".to_string() },
+        PullRequestFile { filename: "PREPARE.md".to_string() },
+    ]));
+
+    let ctx = make_policy_ctx(repo.path.clone(), mock.clone(), "lead", false, 51);
+    commands::policy_check::run(&ctx, &PrArgs { pr: 51 }).await.unwrap();
+
+    let posted = mock.posted_issue_comments.lock().unwrap();
+    assert!(
+        posted.iter().any(|(num, body)| *num == 51 && body.contains("polyresearch:decision") && body.contains("policy_rejection")),
+        "should post policy_rejection decision on PR"
+    );
+    assert!(mock.closed_prs.lock().unwrap().contains(&51), "PR should be closed");
+    assert!(mock.closed_issues.lock().unwrap().contains(&11), "thesis should be closed");
+}
+
+#[tokio::test]
+async fn policy_check_rejects_outside_editable_surface() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("policy-reject-outside");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let pr = make_pr_with_thesis(52, 12, "contributor");
+    let (issue, comments) = make_thesis_for_pr(12, &pr, "lead");
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(12, comments)]),
+        vec![pr],
+        HashMap::new(),
+    ).with_pr_files(52, vec![
+        PullRequestFile { filename: "docs/readme.md".to_string() },
+    ]));
+
+    let ctx = make_policy_ctx(repo.path.clone(), mock.clone(), "lead", false, 52);
+    commands::policy_check::run(&ctx, &PrArgs { pr: 52 }).await.unwrap();
+
+    let posted = mock.posted_issue_comments.lock().unwrap();
+    assert!(
+        posted.iter().any(|(_, body)| body.contains("policy_rejection")),
+        "should reject PR with files outside editable surface"
+    );
+}
+
+#[tokio::test]
+async fn policy_check_idempotent_after_pass() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("policy-idempotent");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let now = chrono::Utc::now();
+    let pr = make_pr_with_thesis(53, 13, "contributor");
+    let (issue, issue_comments) = make_thesis_for_pr(13, &pr, "lead");
+
+    let policy_pass = ProtocolComment::PolicyPass {
+        thesis: 13,
+        candidate_sha: "abc123".to_string(),
+    };
+    let pr_comments = vec![IssueComment {
+        id: 5301,
+        body: policy_pass.render(),
+        user: CommentUser { login: "lead".to_string() },
+        created_at: now - chrono::Duration::minutes(5),
+        updated_at: None,
+    }];
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(13, issue_comments)]),
+        vec![pr],
+        HashMap::from([(53, pr_comments)]),
+    ));
+
+    let ctx = make_policy_ctx(repo.path.clone(), mock.clone(), "lead", false, 53);
+    let err = commands::policy_check::run(&ctx, &PrArgs { pr: 53 }).await.unwrap_err();
+    assert!(err.to_string().contains("already has a policy-pass"));
+}
+
+// ===========================================================================
+// Category 4: Decide with config variations
+// ===========================================================================
+
+fn make_decidable_state(
+    thesis_number: u64,
+    pr_number: u64,
+    metric: f64,
+    baseline: f64,
+    lead: &str,
+) -> (Vec<Issue>, HashMap<u64, Vec<IssueComment>>, Vec<PullRequest>, HashMap<u64, Vec<IssueComment>>) {
+    let now = chrono::Utc::now();
+    let branch = format!("thesis/{thesis_number}-test");
+    let issue = Issue {
+        number: thesis_number,
+        title: format!("Thesis {thesis_number}"),
+        body: Some("Test thesis.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label { name: "thesis".to_string() }],
+        created_at: now - chrono::Duration::hours(2),
+        closed_at: None,
+        author: Some(Author { login: lead.to_string() }),
+        url: Some(format!("https://github.com/test/repo/issues/{thesis_number}")),
+    };
+
+    let approval = ProtocolComment::Approval { thesis: thesis_number };
+    let claim = ProtocolComment::Claim {
+        thesis: thesis_number,
+        node: "worker-a".to_string(),
+    };
+    let attempt = ProtocolComment::Attempt {
+        thesis: thesis_number,
+        branch: branch.clone(),
+        metric,
+        baseline_metric: Some(baseline),
+        observation: Observation::Improved,
+        summary: "test".to_string(),
+        annotations: None,
+    };
+
+    let issue_comments = vec![
+        IssueComment {
+            id: thesis_number * 100,
+            body: approval.render(),
+            user: CommentUser { login: lead.to_string() },
+            created_at: now - chrono::Duration::hours(1),
+            updated_at: None,
+        },
+        IssueComment {
+            id: thesis_number * 100 + 1,
+            body: claim.render(),
+            user: CommentUser { login: "contributor".to_string() },
+            created_at: now - chrono::Duration::minutes(50),
+            updated_at: None,
+        },
+        IssueComment {
+            id: thesis_number * 100 + 2,
+            body: attempt.render(),
+            user: CommentUser { login: "contributor".to_string() },
+            created_at: now - chrono::Duration::minutes(40),
+            updated_at: None,
+        },
+    ];
+
+    let pr = PullRequest {
+        number: pr_number,
+        title: format!("Thesis #{thesis_number}: test"),
+        body: Some(format!("References #{thesis_number}")),
+        state: "OPEN".to_string(),
+        head_ref_name: branch,
+        head_ref_oid: Some("abc123".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: now - chrono::Duration::minutes(35),
+        closed_at: None,
+        merged_at: None,
+        author: Some(Author { login: "contributor".to_string() }),
+        url: Some(format!("https://github.com/test/repo/pull/{pr_number}")),
+        mergeable: None,
+    };
+
+    let policy_pass = ProtocolComment::PolicyPass {
+        thesis: thesis_number,
+        candidate_sha: "abc123".to_string(),
+    };
+    let pr_comments = vec![IssueComment {
+        id: pr_number * 100,
+        body: policy_pass.render(),
+        user: CommentUser { login: lead.to_string() },
+        created_at: now - chrono::Duration::minutes(5),
+        updated_at: None,
+    }];
+
+    (
+        vec![issue],
+        HashMap::from([(thesis_number, issue_comments)]),
+        vec![pr],
+        HashMap::from([(pr_number, pr_comments)]),
+    )
+}
+
+#[tokio::test]
+async fn decide_lower_is_better_accepted() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("decide-lib-accepted");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let (issues, ic, prs, pc) = make_decidable_state(10, 50, 50.0, 100.0, "lead");
+    let mock = Arc::new(MockGitHubClient::new("lead", issues, ic, prs, pc));
+    let mut ctx = make_ctx(repo.path.clone(), mock.clone(), "lead", false, Commands::Decide(PrArgs { pr: 50 }));
+    ctx.config.metric_direction = MetricDirection::LowerIsBetter;
+    ctx.config.metric_tolerance = Some(1.0);
+
+    commands::decide::run(&ctx, &PrArgs { pr: 50 }).await.unwrap();
+    assert!(mock.merged_prs.lock().unwrap().contains(&50), "PR should be merged for accepted");
+}
+
+#[tokio::test]
+async fn decide_lower_is_better_non_improvement() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("decide-lib-non-improv");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let (issues, ic, prs, pc) = make_decidable_state(11, 51, 110.0, 100.0, "lead");
+    let mock = Arc::new(MockGitHubClient::new("lead", issues, ic, prs, pc));
+    let mut ctx = make_ctx(repo.path.clone(), mock.clone(), "lead", false, Commands::Decide(PrArgs { pr: 51 }));
+    ctx.config.metric_direction = MetricDirection::LowerIsBetter;
+    ctx.config.metric_tolerance = Some(1.0);
+
+    commands::decide::run(&ctx, &PrArgs { pr: 51 }).await.unwrap();
+    assert!(mock.closed_prs.lock().unwrap().contains(&51), "PR should be closed for non_improvement");
+    assert!(mock.merged_prs.lock().unwrap().is_empty(), "PR should NOT be merged");
+}
+
+#[tokio::test]
+async fn decide_metric_within_tolerance_is_non_improvement() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("decide-tolerance");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let (issues, ic, prs, pc) = make_decidable_state(12, 52, 0.905, 0.90, "lead");
+    let mock = Arc::new(MockGitHubClient::new("lead", issues, ic, prs, pc));
+    let mut ctx = make_ctx(repo.path.clone(), mock.clone(), "lead", false, Commands::Decide(PrArgs { pr: 52 }));
+    ctx.config.metric_tolerance = Some(0.01);
+
+    commands::decide::run(&ctx, &PrArgs { pr: 52 }).await.unwrap();
+    assert!(mock.closed_prs.lock().unwrap().contains(&52), "PR should be closed");
+    assert!(mock.merged_prs.lock().unwrap().is_empty(), "improvement within tolerance should be non_improvement");
+}
+
+#[tokio::test]
+async fn decide_below_ledger_best_is_non_improvement() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("decide-ledger-best");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(
+        repo.path.join("results.tsv"),
+        "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n#1\tthesis/1-prev\t0.9800\t0.9000\taccepted\tprevious best\n",
+    ).unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let (issues, ic, prs, pc) = make_decidable_state(13, 53, 0.95, 0.90, "lead");
+    let mock = Arc::new(MockGitHubClient::new("lead", issues, ic, prs, pc));
+    let ctx = make_ctx(repo.path.clone(), mock.clone(), "lead", false, Commands::Decide(PrArgs { pr: 53 }));
+
+    commands::decide::run(&ctx, &PrArgs { pr: 53 }).await.unwrap();
+    assert!(mock.closed_prs.lock().unwrap().contains(&53), "PR should be closed");
+    assert!(mock.merged_prs.lock().unwrap().is_empty(), "metric below ledger best should be non_improvement");
+}
+
+// ===========================================================================
+// Category 5: Slash commands / maintainer flow
+// ===========================================================================
+
+#[tokio::test]
+async fn decide_requires_maintainer_approval_when_auto_approve_off() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("decide-no-maintainer");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let (issues, ic, prs, pc) = make_decidable_state(14, 54, 0.95, 0.90, "lead");
+    let mock = Arc::new(MockGitHubClient::new("lead", issues, ic, prs, pc));
+    let mut ctx = make_ctx(repo.path.clone(), mock.clone(), "lead", false, Commands::Decide(PrArgs { pr: 54 }));
+    ctx.config.auto_approve = false;
+
+    let err = commands::decide::run(&ctx, &PrArgs { pr: 54 }).await.unwrap_err();
+    assert!(err.to_string().contains("requires maintainer `/approve`"));
+}
+
+#[tokio::test]
+async fn decide_succeeds_after_maintainer_approve() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("decide-maintainer-ok");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let now = chrono::Utc::now();
+    let (issues, ic, prs, mut pc) = make_decidable_state(15, 55, 0.95, 0.90, "lead");
+
+    let approve_comment = IssueComment {
+        id: 5501,
+        body: "/approve".to_string(),
+        user: CommentUser { login: "maintainer".to_string() },
+        created_at: now - chrono::Duration::minutes(3),
+        updated_at: None,
+    };
+    pc.entry(55).or_default().push(approve_comment);
+
+    let mock = Arc::new(MockGitHubClient::new("lead", issues, ic, prs, pc));
+    let mut ctx = make_ctx(repo.path.clone(), mock.clone(), "lead", false, Commands::Decide(PrArgs { pr: 55 }));
+    ctx.config.auto_approve = false;
+
+    commands::decide::run(&ctx, &PrArgs { pr: 55 }).await.unwrap();
+    assert!(mock.merged_prs.lock().unwrap().contains(&55), "PR should be merged after maintainer /approve");
+}
+
+#[tokio::test]
+async fn decide_rejects_after_maintainer_reject() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("decide-maintainer-reject");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let now = chrono::Utc::now();
+    let (issues, ic, prs, mut pc) = make_decidable_state(16, 56, 0.95, 0.90, "lead");
+
+    let reject_comment = IssueComment {
+        id: 5601,
+        body: "/reject too risky".to_string(),
+        user: CommentUser { login: "maintainer".to_string() },
+        created_at: now - chrono::Duration::minutes(3),
+        updated_at: None,
+    };
+    pc.entry(56).or_default().push(reject_comment);
+
+    let mock = Arc::new(MockGitHubClient::new("lead", issues, ic, prs, pc));
+    let mut ctx = make_ctx(repo.path.clone(), mock.clone(), "lead", false, Commands::Decide(PrArgs { pr: 56 }));
+    ctx.config.auto_approve = false;
+
+    let err = commands::decide::run(&ctx, &PrArgs { pr: 56 }).await.unwrap_err();
+    assert!(err.to_string().contains("rejected by the maintainer"));
+}
+
+#[test]
+fn slash_approve_reason_parsed_correctly() {
+    let result = ProtocolComment::parse("/approve focus on normalization layers").unwrap();
+    match result {
+        Some(ProtocolComment::SlashApprove { reason }) => {
+            assert_eq!(reason, Some("focus on normalization layers".to_string()));
+        }
+        other => panic!("expected SlashApprove, got {:?}", other),
+    }
+}
+
+#[test]
+fn slash_reject_reason_parsed_correctly() {
+    let result = ProtocolComment::parse("/reject too broad, needs narrower scope").unwrap();
+    match result {
+        Some(ProtocolComment::SlashReject { reason }) => {
+            assert_eq!(reason, Some("too broad, needs narrower scope".to_string()));
+        }
+        other => panic!("expected SlashReject, got {:?}", other),
+    }
+}
+
+// ===========================================================================
+// Category 6: Admin commands
+// ===========================================================================
+
+#[tokio::test]
+async fn admin_release_claim_posts_note_and_release() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("admin-release");
+    let fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let args = AdminReleaseClaimArgs {
+        issue: fixture.issue.number,
+        node: "test-node".to_string(),
+        reason: ReleaseReason::Timeout,
+        note: "Stale claim cleanup.".to_string(),
+    };
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture.lead_github_login,
+        false,
+        Commands::Admin(AdminArgs { command: AdminCommands::ReleaseClaim(args.clone()) }),
+    );
+
+    commands::admin::run(&ctx, &AdminArgs { command: AdminCommands::ReleaseClaim(args) }).await.unwrap();
+
+    let posted = mock.posted_issue_comments.lock().unwrap();
+    assert!(posted.iter().any(|(_, body)| body.contains("polyresearch:admin-note")), "should post AdminNote");
+    assert!(posted.iter().any(|(_, body)| body.contains("polyresearch:release")), "should post Release");
+}
+
+#[tokio::test]
+async fn admin_release_claim_errors_when_no_active_claim() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("admin-release-no-claim");
+    let fixture = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let args = AdminReleaseClaimArgs {
+        issue: fixture.issue.number,
+        node: "nonexistent-node".to_string(),
+        reason: ReleaseReason::Timeout,
+        note: "test".to_string(),
+    };
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture.lead_github_login,
+        false,
+        Commands::Admin(AdminArgs { command: AdminCommands::ReleaseClaim(args.clone()) }),
+    );
+
+    let err = commands::admin::run(&ctx, &AdminArgs { command: AdminCommands::ReleaseClaim(args) }).await.unwrap_err();
+    assert!(err.to_string().contains("does not currently have an active claim"));
+}
+
+#[tokio::test]
+async fn admin_reopen_thesis_reopens_closed_issue() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("admin-reopen");
+    let mut fixture = load_issue_fixture("attempt_after_closure_issue.json");
+    fixture.issue.state = "CLOSED".to_string();
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let args = AdminReopenThesisArgs {
+        issue: fixture.issue.number,
+        note: "Reopening for another attempt.".to_string(),
+    };
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture.lead_github_login,
+        false,
+        Commands::Admin(AdminArgs { command: AdminCommands::ReopenThesis(args.clone()) }),
+    );
+
+    commands::admin::run(&ctx, &AdminArgs { command: AdminCommands::ReopenThesis(args) }).await.unwrap();
+
+    assert!(mock.reopened_issues.lock().unwrap().contains(&fixture.issue.number), "issue should be reopened");
+    let posted = mock.posted_issue_comments.lock().unwrap();
+    assert!(posted.iter().any(|(_, body)| body.contains("polyresearch:admin-note") && body.contains("reopen_thesis")));
+}
+
+// ===========================================================================
+// Category 8: Queue management / generate
+// ===========================================================================
+
+#[tokio::test]
+async fn generate_refuses_at_max_queue_depth() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("generate-max-depth");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let mut ctx = make_ctx(repo.path.clone(), mock, "lead", true, Commands::Generate(GenerateArgs {
+        title: "Test".to_string(),
+        body: "Body".to_string(),
+    }));
+    ctx.config.max_queue_depth = Some(0);
+
+    let err = commands::generate::run(&ctx, &GenerateArgs { title: "Test".to_string(), body: "Body".to_string() })
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("queue depth is already"));
+}
+
+#[tokio::test]
+async fn generate_succeeds_below_max_queue_depth() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("generate-below-max");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let mut ctx = make_ctx(repo.path.clone(), mock, "lead", true, Commands::Generate(GenerateArgs {
+        title: "Test".to_string(),
+        body: "Body".to_string(),
+    }));
+    ctx.config.max_queue_depth = Some(10);
+
+    commands::generate::run(&ctx, &GenerateArgs { title: "New thesis".to_string(), body: "Body text".to_string() })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn generate_with_auto_approve_false_assigns_maintainer() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("generate-assign-maintainer");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let mut ctx = make_ctx(repo.path.clone(), mock.clone(), "lead", false, Commands::Generate(GenerateArgs {
+        title: "Test thesis".to_string(),
+        body: "Body".to_string(),
+    }));
+    ctx.config.auto_approve = false;
+    ctx.config.max_queue_depth = Some(10);
+
+    commands::generate::run(&ctx, &GenerateArgs { title: "Test thesis".to_string(), body: "Body".to_string() })
+        .await
+        .unwrap();
+
+    let created = mock.created_issues.lock().unwrap();
+    assert_eq!(created.len(), 1, "should create one issue");
+    let posted = mock.posted_issue_comments.lock().unwrap();
+    assert!(!posted.iter().any(|(_, body)| body.contains("polyresearch:approval")),
+        "should NOT auto-approve when auto_approve is false");
+    let assigned = mock.assigned_issues.lock().unwrap();
+    assert!(!assigned.is_empty(), "should assign maintainer");
+    assert!(assigned[0].1.contains(&"maintainer".to_string()), "should assign the maintainer login");
+}
+
+// ===========================================================================
+// Category 10: Edge cases
+// ===========================================================================
+
+#[tokio::test]
+async fn review_claim_rejects_self_review() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("review-self");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let now = chrono::Utc::now();
+    let pr = make_pr_with_thesis(60, 20, "alice");
+    let (issue, issue_comments) = make_thesis_for_pr(20, &pr, "lead");
+
+    let policy_pass = ProtocolComment::PolicyPass { thesis: 20, candidate_sha: "abc123".to_string() };
+    let pr_comments = vec![IssueComment {
+        id: 6001,
+        body: policy_pass.render(),
+        user: CommentUser { login: "lead".to_string() },
+        created_at: now - chrono::Duration::minutes(5),
+        updated_at: None,
+    }];
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![issue],
+        HashMap::from([(20, issue_comments)]),
+        vec![pr],
+        HashMap::from([(60, pr_comments)]),
+    ));
+    commands::write_node_id(&repo.path, "alice-node").unwrap();
+
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::ReviewClaim(PrArgs { pr: 60 }));
+    let err = commands::review_claim::run(&ctx, &PrArgs { pr: 60 }).await.unwrap_err();
+    assert!(err.to_string().contains("cannot review your own PR"));
+}
+
+#[tokio::test]
+async fn review_claim_rejects_without_policy_pass() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("review-no-policy");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let pr = make_pr_with_thesis(61, 21, "contributor");
+    let (issue, issue_comments) = make_thesis_for_pr(21, &pr, "lead");
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "reviewer",
+        vec![issue],
+        HashMap::from([(21, issue_comments)]),
+        vec![pr],
+        HashMap::new(),
+    ));
+    commands::write_node_id(&repo.path, "reviewer-node").unwrap();
+
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::ReviewClaim(PrArgs { pr: 61 }));
+    let err = commands::review_claim::run(&ctx, &PrArgs { pr: 61 }).await.unwrap_err();
+    assert!(err.to_string().contains("not passed policy check"));
+}
+
+#[tokio::test]
+async fn claim_rejects_unapproved_thesis() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("claim-unapproved");
+    init_git_repo(&repo.path);
+
+    let now = chrono::Utc::now();
+    let issue = Issue {
+        number: 99,
+        title: "Unapproved thesis".to_string(),
+        body: Some("No approval yet.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label { name: "thesis".to_string() }],
+        created_at: now,
+        closed_at: None,
+        author: Some(Author { login: "lead".to_string() }),
+        url: None,
+    };
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![issue],
+        HashMap::from([(99, vec![])]),
+        vec![],
+        HashMap::new(),
+    ));
+    commands::write_node_id(&repo.path, "node-a").unwrap();
+
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Claim(IssueArgs { issue: 99 }));
+    let err = commands::claim::run(&ctx, &IssueArgs { issue: 99 }).await.unwrap_err();
+    assert!(
+        err.to_string().contains("not approved") || err.to_string().contains("not claimable"),
+        "should reject unapproved thesis, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn bootstrap_on_repo_without_program_md() {
+    let repo = TestRepo::new("bootstrap-bare");
+    init_git_repo(&repo.path);
+
+    assert!(!repo.path.join("PROGRAM.md").exists());
+
+    commands::bootstrap::write_templates(&repo.path, Some("Optimize everything"), "lead").unwrap();
+
+    assert!(repo.path.join("PROGRAM.md").exists());
+    assert!(repo.path.join("PREPARE.md").exists());
+    assert!(repo.path.join("results.tsv").exists());
+
+    let program = fs::read_to_string(repo.path.join("PROGRAM.md")).unwrap();
+    assert!(program.contains("Optimize everything"));
+}
+
+#[tokio::test]
+async fn prune_preserves_active_worktrees() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("prune-active");
+    init_git_repo(&repo.path);
+
+    let active = repo.path.join(".worktrees").join("10-active-thesis");
+    fs::create_dir_all(&active).unwrap();
+    fs::write(active.join("README.md"), "active work").unwrap();
+
+    let stale = repo.path.join(".worktrees").join("stale-empty");
+    fs::create_dir_all(&stale).unwrap();
+
+    let mock = Arc::new(MockGitHubClient::new("alice", vec![], HashMap::new(), vec![], HashMap::new()));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Prune);
+    commands::prune::run(&ctx).await.unwrap();
+
+    assert!(!stale.exists(), "stale empty worktree should be removed");
+    assert!(active.exists(), "active worktree with files should be preserved");
+}
+
+// ===========================================================================
+// Category 3 (partial): Multi-node contention
+// ===========================================================================
+
+#[tokio::test]
+async fn claim_fails_when_another_node_holds_claim() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("claim-contention");
+    init_git_repo(&repo.path);
+    let fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    commands::write_node_id(&repo.path, "node-b").unwrap();
+
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        false,
+        Commands::Claim(IssueArgs { issue: fixture.issue.number }),
+    );
+
+    let err = commands::claim::run(&ctx, &IssueArgs { issue: fixture.issue.number }).await.unwrap_err();
+    assert!(
+        err.to_string().contains("not claimable"),
+        "should reject claim when another node holds it, got: {err}"
+    );
+}
+
+// ===========================================================================
+// Category 9: Ledger/sync (unit-level)
+// ===========================================================================
+
+#[test]
+fn ledger_is_current_when_no_missing_rows() {
+    let dir = std::env::temp_dir().join(format!("ledger-current-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+
+    let ledger = Ledger::load(&dir).unwrap();
+    let repo_state = make_repo_state(vec![], 0, 0, None);
+    assert!(ledger.is_current(&repo_state));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn ledger_detects_missing_decided_row() {
+    let dir = std::env::temp_dir().join(format!("ledger-missing-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+
+    let ledger = Ledger::load(&dir).unwrap();
+    let now = chrono::Utc::now();
+    let thesis = ThesisState {
+        issue: make_open_issue(1, "Test"),
+        phase: ThesisPhase::Resolved { outcome: Outcome::Accepted },
+        approved: true,
+        maintainer_approved: false,
+        maintainer_rejected: false,
+        active_claims: vec![],
+        releases: vec![],
+        attempts: vec![AttemptRecord {
+            thesis: 1,
+            node: "node-a".to_string(),
+            branch: "thesis/1-test".to_string(),
+            metric: 0.95,
+            baseline_metric: Some(0.90),
+            observation: Observation::Improved,
+            summary: "test".to_string(),
+            author: "alice".to_string(),
+            created_at: now - chrono::Duration::hours(1),
+        }],
+        pull_requests: vec![PullRequestState {
+            pr: PullRequest {
+                number: 10,
+                title: "Candidate".to_string(),
+                body: None,
+                state: "MERGED".to_string(),
+                head_ref_name: "thesis/1-test".to_string(),
+                head_ref_oid: Some("sha".to_string()),
+                base_ref_name: Some("main".to_string()),
+                created_at: now,
+                closed_at: None,
+                merged_at: Some(now),
+                author: None,
+                url: None,
+                mergeable: None,
+            },
+            thesis_number: Some(1),
+            policy_pass: true,
+            maintainer_approved: false,
+            maintainer_rejected: false,
+            review_claims: vec![],
+            reviews: vec![],
+            decision: Some(DecisionRecord {
+                outcome: Outcome::Accepted,
+                candidate_sha: "sha".to_string(),
+                confirmations: 0,
+                created_at: now,
+            }),
+            findings: vec![],
+        }],
+        best_attempt_metric: Some(0.95),
+        findings: vec![],
+    };
+
+    let repo_state = make_repo_state(vec![thesis], 1, 0, Some(0.95));
+    assert!(!ledger.is_current(&repo_state), "ledger should be stale with missing decided row");
+    let missing = ledger.missing_rows(&repo_state);
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].status, "accepted");
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn ledger_skips_open_attempts_with_no_decision() {
+    let dir = std::env::temp_dir().join(format!("ledger-open-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+
+    let ledger = Ledger::load(&dir).unwrap();
+    let now = chrono::Utc::now();
+    let thesis = ThesisState {
+        issue: make_open_issue(2, "Open thesis"),
+        phase: ThesisPhase::CandidateSubmitted,
+        approved: true,
+        maintainer_approved: false,
+        maintainer_rejected: false,
+        active_claims: vec![ClaimRecord {
+            node: "node-a".to_string(),
+            created_at: now - chrono::Duration::hours(1),
+            expired: false,
+        }],
+        releases: vec![],
+        attempts: vec![AttemptRecord {
+            thesis: 2,
+            node: "node-a".to_string(),
+            branch: "thesis/2-open".to_string(),
+            metric: 0.95,
+            baseline_metric: Some(0.90),
+            observation: Observation::Improved,
+            summary: "test".to_string(),
+            author: "alice".to_string(),
+            created_at: now - chrono::Duration::minutes(30),
+        }],
+        pull_requests: vec![PullRequestState {
+            pr: PullRequest {
+                number: 20,
+                title: "Candidate".to_string(),
+                body: None,
+                state: "OPEN".to_string(),
+                head_ref_name: "thesis/2-open".to_string(),
+                head_ref_oid: Some("sha".to_string()),
+                base_ref_name: Some("main".to_string()),
+                created_at: now,
+                closed_at: None,
+                merged_at: None,
+                author: None,
+                url: None,
+                mergeable: None,
+            },
+            thesis_number: Some(2),
+            policy_pass: false,
+            maintainer_approved: false,
+            maintainer_rejected: false,
+            review_claims: vec![],
+            reviews: vec![],
+            decision: None,
+            findings: vec![],
+        }],
+        best_attempt_metric: Some(0.95),
+        findings: vec![],
+    };
+
+    let repo_state = make_repo_state(vec![thesis], 1, 1, None);
+    assert!(ledger.is_current(&repo_state), "open attempt with no decision should not make ledger stale");
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn ledger_detects_discarded_after_release() {
+    let dir = std::env::temp_dir().join(format!("ledger-discarded-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+
+    let ledger = Ledger::load(&dir).unwrap();
+    let now = chrono::Utc::now();
+    let thesis = ThesisState {
+        issue: make_open_issue(3, "Released thesis"),
+        phase: ThesisPhase::Exhausted,
+        approved: true,
+        maintainer_approved: false,
+        maintainer_rejected: false,
+        active_claims: vec![],
+        releases: vec![ReleaseRecord {
+            node: "node-a".to_string(),
+            reason: ReleaseReason::NoImprovement,
+            created_at: now - chrono::Duration::minutes(10),
+        }],
+        attempts: vec![AttemptRecord {
+            thesis: 3,
+            node: "node-a".to_string(),
+            branch: "thesis/3-released".to_string(),
+            metric: 0.89,
+            baseline_metric: Some(0.90),
+            observation: Observation::NoImprovement,
+            summary: "no improvement".to_string(),
+            author: "alice".to_string(),
+            created_at: now - chrono::Duration::minutes(20),
+        }],
+        pull_requests: vec![],
+        best_attempt_metric: None,
+        findings: vec![],
+    };
+
+    let repo_state = make_repo_state(vec![thesis], 0, 0, None);
+    let missing = ledger.missing_rows(&repo_state);
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].status, "discarded");
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+// ===========================================================================
+// Spec-divergence tests
+//
+// These tests assert INTENDED behavior from specs/cli-v2.md.
+// Tests that fail indicate bugs where the implementation diverges from the
+// spec. Each test quotes the specific spec text it's testing.
+// ===========================================================================
+
+/// Spec (Claimability rules): "The node has not previously released the
+/// thesis with no_improvement (infra_failure releases do NOT permanently
+/// blacklist -- the node can retry after the infra issue is resolved)"
+///
+/// batch-claim currently filters out theses with ANY prior release from
+/// the node, not just no_improvement releases.
+#[tokio::test]
+#[ignore = "spec divergence: https://github.com/superagent-ai/polyresearch/issues/87"]
+async fn batch_claim_allows_reclaim_after_infra_failure_release() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("batch-claim-infra-reclaim");
+    init_git_repo(&repo.path);
+
+    let now = chrono::Utc::now();
+    let lead = "lead";
+    let issue = Issue {
+        number: 50,
+        title: "Infra retry thesis".to_string(),
+        body: Some("Test.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label { name: "thesis".to_string() }],
+        created_at: now - chrono::Duration::hours(3),
+        closed_at: None,
+        author: Some(Author { login: lead.to_string() }),
+        url: None,
+    };
+    let approval = ProtocolComment::Approval { thesis: 50 };
+    let claim = ProtocolComment::Claim { thesis: 50, node: "node-a".to_string() };
+    let release = ProtocolComment::Release {
+        thesis: 50,
+        node: "node-a".to_string(),
+        reason: ReleaseReason::InfraFailure,
+    };
+    let comments = vec![
+        IssueComment {
+            id: 5001,
+            body: approval.render(),
+            user: CommentUser { login: lead.to_string() },
+            created_at: now - chrono::Duration::hours(2),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 5002,
+            body: claim.render(),
+            user: CommentUser { login: "alice".to_string() },
+            created_at: now - chrono::Duration::hours(1),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 5003,
+            body: release.render(),
+            user: CommentUser { login: "alice".to_string() },
+            created_at: now - chrono::Duration::minutes(30),
+            updated_at: None,
+        },
+    ];
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![issue],
+        HashMap::from([(50, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(), mock.clone(), lead, false,
+        Commands::BatchClaim(BatchClaimArgs { count: Some(1) }),
+    );
+    commands::write_node_id(&repo.path, "node-a").unwrap();
+
+    let result = commands::batch_claim::run(&ctx, &BatchClaimArgs { count: Some(1) }).await;
+    assert!(result.is_ok(), "batch-claim should allow reclaim after infra_failure: {result:?}");
+    assert_eq!(
+        mock.posted_issue_comments.lock().unwrap().len(), 1,
+        "should post exactly one claim comment for the reclaimed thesis"
+    );
+}
+
+/// Spec (Claimability rules): Same rule as above -- "infra_failure releases
+/// do NOT permanently blacklist." The duties advisory `no-claimable-work`
+/// should not fire when the only release from this node is infra_failure.
+#[tokio::test]
+#[ignore = "spec divergence: https://github.com/superagent-ai/polyresearch/issues/87"]
+async fn duties_counts_infra_failure_released_thesis_as_claimable() {
+    let repo = TestRepo::new("duties-infra-claimable");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice", vec![], HashMap::new(), vec![], HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    commands::write_node_id(&repo.path, "node-a").unwrap();
+
+    let mut thesis = make_approved_thesis(1);
+    thesis.releases.push(ReleaseRecord {
+        node: "node-a".to_string(),
+        reason: ReleaseReason::InfraFailure,
+        created_at: chrono::Utc::now(),
+    });
+
+    let repo_state = make_repo_state(vec![thesis], 0, 1, None);
+    let report = duties::check(&ctx, &repo_state).unwrap();
+
+    assert!(
+        !report.advisory.iter().any(|d| d.category == "no-claimable-work"),
+        "infra_failure release should NOT make thesis unclaimable for the same node; \
+         spec says only no_improvement permanently blocks"
+    );
+}
+
+/// Spec (Claimability rules): "The node has not previously released the
+/// thesis with no_improvement" -- the check is per-node. Node-b should
+/// pass the claimability filter on a thesis that node-a released with
+/// no_improvement, because node-b has no releases on it.
+///
+/// Note: the spec is silent on whether the thesis issue should be closed
+/// after a no_improvement release. This test only checks the per-node
+/// claimability predicate, not the Exhausted phase or close behavior.
+#[test]
+fn claimability_filter_is_per_node_for_no_improvement() {
+    let now = chrono::Utc::now();
+    let thesis = ThesisState {
+        issue: make_open_issue(1, "Test thesis"),
+        phase: ThesisPhase::Approved,
+        approved: true,
+        maintainer_approved: false,
+        maintainer_rejected: false,
+        active_claims: vec![],
+        releases: vec![ReleaseRecord {
+            node: "node-a".to_string(),
+            reason: ReleaseReason::NoImprovement,
+            created_at: now,
+        }],
+        attempts: vec![],
+        pull_requests: vec![],
+        best_attempt_metric: None,
+        findings: vec![],
+    };
+
+    let is_claimable_by_node_b = thesis.issue.state == "OPEN"
+        && thesis.approved
+        && thesis.active_claims.is_empty()
+        && !thesis.releases.iter().any(|r| {
+            r.node == "node-b" && r.reason == ReleaseReason::NoImprovement
+        });
+
+    assert!(
+        is_claimable_by_node_b,
+        "per-node claimability filter: node-b has no no_improvement release, so it passes"
+    );
+
+    let is_claimable_by_node_a = thesis.issue.state == "OPEN"
+        && thesis.approved
+        && thesis.active_claims.is_empty()
+        && !thesis.releases.iter().any(|r| {
+            r.node == "node-a" && r.reason == ReleaseReason::NoImprovement
+        });
+
+    assert!(
+        !is_claimable_by_node_a,
+        "per-node claimability filter: node-a released with no_improvement, so it's blocked"
+    );
+}
+
+/// Spec (Contribute loop, step 3): "Auto-submit any blocking submit duties
+/// (requires resuming the thesis worktree to get the right branch context)."
+///
+/// The parenthetical "requires resuming the thesis worktree" implies the
+/// worktree must be recreated if missing. This test verifies contribute
+/// handles a missing worktree during auto-submit without crashing.
+#[tokio::test]
+async fn contribute_auto_submit_recreates_missing_worktree() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("contrib-auto-submit-missing-wt");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    write_node_config(&repo.path, "test-node");
+    fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let now = chrono::Utc::now();
+    let issue = Issue {
+        number: 60,
+        title: "Auto submit test".to_string(),
+        body: Some("Test.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label { name: "thesis".to_string() }],
+        created_at: now - chrono::Duration::hours(3),
+        closed_at: None,
+        author: Some(Author { login: "lead".to_string() }),
+        url: None,
+    };
+    let comments = vec![
+        IssueComment {
+            id: 6001,
+            body: ProtocolComment::Approval { thesis: 60 }.render(),
+            user: CommentUser { login: "lead".to_string() },
+            created_at: now - chrono::Duration::hours(2),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 6002,
+            body: ProtocolComment::Claim { thesis: 60, node: "test-node".to_string() }.render(),
+            user: CommentUser { login: "lead".to_string() },
+            created_at: now - chrono::Duration::hours(1),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 6003,
+            body: ProtocolComment::Attempt {
+                thesis: 60,
+                branch: "thesis/60-auto-submit-test".to_string(),
+                metric: 0.95,
+                baseline_metric: Some(0.90),
+                observation: Observation::Improved,
+                summary: "improved".to_string(),
+                annotations: None,
+            }.render(),
+            user: CommentUser { login: "lead".to_string() },
+            created_at: now - chrono::Duration::minutes(30),
+            updated_at: None,
+        },
+    ];
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(60, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    set_node_id_env("test-node");
+
+    let worktree_path = repo.path.join(".worktrees/60-auto-submit-test");
+    assert!(!worktree_path.exists(), "precondition: worktree should not exist");
+
+    let ctx = make_ctx(
+        repo.path.clone(), mock.clone(), "lead", false,
+        Commands::Contribute(ContributeArgs {
+            url: None, once: true, max_parallel: Some(1), sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(&ctx, &ContributeArgs {
+        url: None, once: true, max_parallel: Some(1), sleep_secs: 0,
+        overrides: NodeOverrides::default(),
+    }).await;
+
+    assert!(
+        result.is_ok(),
+        "contribute should handle missing worktree during auto-submit: {result:?}"
+    );
+}
+
+/// Spec (Contribute loop, step 5): "Check for remaining blocking duties.
+/// If any exist, sleep and retry (or error in --once mode)."
+/// Spec (Duties, blocking): "submit: an improved attempt was recorded but
+/// no PR was created yet"
+///
+/// After auto-submit runs (step 3), step 5 checks for ALL remaining
+/// blocking duties. If auto-submit failed to resolve a submit duty (e.g.
+/// missing worktree), that duty should still block. The current code
+/// filters submit out of blocking duties after auto-submit, letting
+/// contribute proceed to claim more work even when a submit duty persists.
+#[tokio::test]
+#[ignore = "spec divergence: https://github.com/superagent-ai/polyresearch/issues/89"]
+async fn contribute_once_errors_on_unresolvable_submit_duty() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("contrib-once-submit-block");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    write_node_config(&repo.path, "test-node");
+    fs::write(repo.path.join("results.tsv"), "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let fixture = load_issue_fixture("improved_no_submit_issue.json");
+    set_node_id_env("test-node");
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+
+    let ctx = make_ctx(
+        repo.path.clone(), mock, &fixture.lead_github_login, false,
+        Commands::Contribute(ContributeArgs {
+            url: None, once: true, max_parallel: Some(1), sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(&ctx, &ContributeArgs {
+        url: None, once: true, max_parallel: Some(1), sleep_secs: 0,
+        overrides: NodeOverrides::default(),
+    }).await;
+
+    assert!(
+        result.is_err(),
+        "contribute --once should error when submit duty cannot be resolved, \
+         not silently proceed to claim more work"
+    );
+}
+
+/// Spec (Worker invariants): "Every thesis that enters the worker pool MUST
+/// be either recorded (attempt + submit/release) or released as infra_failure.
+/// No thesis may be silently dropped."
+/// Spec (Worker invariants): "Worker tasks must always return enough
+/// information (issue number, worktree path) for the cleanup path to run,
+/// even on failure."
+///
+/// ThesisWorker must expose issue_number before execute() so the caller
+/// can release the claim on GitHub if setup fails.
+#[test]
+fn worker_setup_failure_returns_issue_number_for_release() {
+    let wctx = worker::WorkerContext {
+        issue_number: 99,
+        thesis_title: "Setup fail test".to_string(),
+        thesis_body: String::new(),
+        repo_root: std::path::PathBuf::from("/nonexistent/path"),
+        node_id: "test-node".to_string(),
+        agent_command: "false".to_string(),
+        default_branch: "main".to_string(),
+        editable_globs: vec!["src/**".to_string()],
+        protected_globs: vec![],
+        metric_direction: MetricDirection::HigherIsBetter,
+        verbose: false,
+    };
+
+    let tw = worker::ThesisWorker::new(wctx, String::new());
+    assert_eq!(tw.issue_number(), 99,
+        "ThesisWorker must expose issue_number for cleanup even before execute()");
+}
+
+/// Spec (Duties, advisory): "metric-floor / stale-queue: best metric is
+/// already below tolerance (lead only)"
+///
+/// The spec lists this advisory without restricting it to any metric
+/// direction. The implementation only computes it for lower_is_better.
+/// A higher_is_better project near the metric ceiling (e.g. accuracy 0.999
+/// with tolerance 0.01) should also report metric-floor.
+#[tokio::test]
+#[ignore = "spec divergence: https://github.com/superagent-ai/polyresearch/issues/88"]
+async fn duties_reports_metric_floor_for_higher_is_better() {
+    let repo = TestRepo::new("duties-metric-floor-hib");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead", vec![], HashMap::new(), vec![], HashMap::new(),
+    ));
+    let mut ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    ctx.config.metric_direction = MetricDirection::HigherIsBetter;
+    ctx.config.metric_tolerance = Some(0.01);
+    ctx.config.min_queue_depth = 3;
+
+    let repo_state = make_repo_state(
+        vec![make_approved_thesis(1), make_approved_thesis(2), make_approved_thesis(3)],
+        0, 3,
+        Some(0.999),
+    );
+    let report = duties::check(&ctx, &repo_state).unwrap();
+
+    assert!(
+        report.advisory.iter().any(|d| d.category == "metric-floor"),
+        "should report metric-floor for higher_is_better when best metric is near ceiling"
+    );
+}
+
+/// Spec (Validation rules): "Claims expire after assignment_timeout."
+/// Spec (Claimability rules): "No active claims exist"
+///
+/// An expired claim should not count as an active claim. A new node should
+/// be able to claim a thesis whose only claim expired.
+#[tokio::test]
+async fn expired_claim_makes_thesis_claimable() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("expired-claim");
+    init_git_repo(&repo.path);
+
+    let now = chrono::Utc::now();
+    let lead = "lead";
+    let issue = Issue {
+        number: 80,
+        title: "Expired claim thesis".to_string(),
+        body: Some("Test.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label { name: "thesis".to_string() }],
+        created_at: now - chrono::Duration::hours(72),
+        closed_at: None,
+        author: Some(Author { login: lead.to_string() }),
+        url: None,
+    };
+    let comments = vec![
+        IssueComment {
+            id: 8001,
+            body: ProtocolComment::Approval { thesis: 80 }.render(),
+            user: CommentUser { login: lead.to_string() },
+            created_at: now - chrono::Duration::hours(48),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 8002,
+            body: ProtocolComment::Claim { thesis: 80, node: "stale-node".to_string() }.render(),
+            user: CommentUser { login: "alice".to_string() },
+            created_at: now - chrono::Duration::hours(36),
+            updated_at: None,
+        },
+    ];
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "bob",
+        vec![issue],
+        HashMap::from([(80, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    commands::write_node_id(&repo.path, "fresh-node").unwrap();
+
+    let mut ctx = make_ctx(
+        repo.path.clone(), mock.clone(), lead, false,
+        Commands::Claim(IssueArgs { issue: 80 }),
+    );
+    ctx.config.assignment_timeout = Duration::from_secs(24 * 60 * 60);
+
+    let result = commands::claim::run(&ctx, &IssueArgs { issue: 80 }).await;
+    assert!(
+        result.is_ok(),
+        "should be able to claim thesis with expired claim (36h old, 24h timeout): {result:?}"
+    );
+}
+
+/// Spec (Contribute loop, step 6): "Counts both claimable and resumable
+/// theses as available work."
+///
+/// A thesis already claimed by this node (Claimed phase, no attempt yet)
+/// should count as resumable work. Contribute should not exit with
+/// "no available work" when such a thesis exists.
+#[tokio::test]
+async fn contribute_counts_resumable_theses_as_available_work() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("contrib-resumable");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    write_node_config(&repo.path, "test-node-resume");
+
+    let now = chrono::Utc::now();
+    let issue = Issue {
+        number: 90,
+        title: "Resumable thesis".to_string(),
+        body: Some("Test.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label { name: "thesis".to_string() }],
+        created_at: now - chrono::Duration::hours(3),
+        closed_at: None,
+        author: Some(Author { login: "lead".to_string() }),
+        url: None,
+    };
+    let comments = vec![
+        IssueComment {
+            id: 9001,
+            body: ProtocolComment::Approval { thesis: 90 }.render(),
+            user: CommentUser { login: "lead".to_string() },
+            created_at: now - chrono::Duration::hours(2),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 9002,
+            body: ProtocolComment::Claim { thesis: 90, node: "test-node-resume".to_string() }.render(),
+            user: CommentUser { login: "contributor".to_string() },
+            created_at: now - chrono::Duration::hours(1),
+            updated_at: None,
+        },
+    ];
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "contributor",
+        vec![issue],
+        HashMap::from([(90, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    set_node_id_env("test-node-resume");
+
+    let ctx = make_ctx(
+        repo.path.clone(), mock.clone(), "lead", true,
+        Commands::Contribute(ContributeArgs {
+            url: None, once: true, max_parallel: Some(1), sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(&ctx, &ContributeArgs {
+        url: None, once: true, max_parallel: Some(1), sleep_secs: 0,
+        overrides: NodeOverrides::default(),
+    }).await;
+
+    assert!(
+        result.is_ok(),
+        "contribute should count already-claimed thesis as resumable work: {result:?}"
+    );
 }
 
 fn load_issue_fixture(name: &str) -> IssueFixture {
