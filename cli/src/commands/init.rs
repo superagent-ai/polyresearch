@@ -28,7 +28,7 @@ pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
         .as_ref()
         .map(|config| config.capacity)
         .unwrap_or(DEFAULT_CAPACITY);
-    let capacity = args.capacity.unwrap_or(existing_capacity);
+    let capacity = args.overrides.capacity.unwrap_or(existing_capacity);
 
     if let Ok(false) = ctx.github.repo_has_issues() {
         eprintln!("Warning: Issues are disabled on this repository (common for forks).");
@@ -39,7 +39,7 @@ pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
     }
 
     if !ctx.cli.dry_run {
-        write_node_config(&ctx.repo_root, &node, Some(capacity))?;
+        write_node_config(&ctx.repo_root, &node, &args.overrides)?;
     }
 
     let output = InitOutput {

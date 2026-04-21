@@ -55,7 +55,7 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
     };
 
     ensure_node_config(&ctx.repo_root)?;
-    let node_config = NodeConfig::load(&ctx.repo_root)?;
+    let node_config = NodeConfig::load(&ctx.repo_root)?.with_overrides(&args.overrides);
     let node_id = node_config.node_id.clone();
     let agent_command = node_config.agent.command.clone();
 

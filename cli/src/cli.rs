@@ -49,13 +49,28 @@ pub enum Commands {
     Contribute(ContributeArgs),
 }
 
+#[derive(Debug, Args, Clone, Default)]
+pub struct NodeOverrides {
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=100))]
+    pub capacity: Option<u8>,
+
+    #[arg(long)]
+    pub api_budget: Option<u64>,
+
+    #[arg(long)]
+    pub request_delay: Option<u64>,
+
+    #[arg(long)]
+    pub agent_command: Option<String>,
+}
+
 #[derive(Debug, Args, Clone)]
 pub struct InitArgs {
     #[arg(long)]
     pub node: Option<String>,
 
-    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=100))]
-    pub capacity: Option<u8>,
+    #[command(flatten)]
+    pub overrides: NodeOverrides,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -194,10 +209,16 @@ pub struct BootstrapArgs {
     pub fork: Option<String>,
 
     #[arg(long)]
+    pub no_fork: bool,
+
+    #[arg(long)]
     pub goal: Option<String>,
 
     #[arg(long)]
     pub pause_after_bootstrap: bool,
+
+    #[command(flatten)]
+    pub overrides: NodeOverrides,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -207,6 +228,9 @@ pub struct LeadArgs {
 
     #[arg(long, default_value = "60")]
     pub sleep_secs: u64,
+
+    #[command(flatten)]
+    pub overrides: NodeOverrides,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -221,4 +245,7 @@ pub struct ContributeArgs {
 
     #[arg(long, default_value = "60")]
     pub sleep_secs: u64,
+
+    #[command(flatten)]
+    pub overrides: NodeOverrides,
 }

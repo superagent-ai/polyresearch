@@ -82,13 +82,17 @@ Bootstrap a new project:
 ```bash
 polyresearch bootstrap https://github.com/owner/repo
 polyresearch bootstrap https://github.com/owner/repo --fork myorg
+polyresearch bootstrap https://github.com/owner/repo --no-fork
 ```
+
+Bootstrap auto-forks when you lack push access to the target repo. Use `--fork <org>` to fork to a specific organization, or `--no-fork` to clone directly.
 
 Run the lead loop:
 
 ```bash
 polyresearch lead
 polyresearch lead --once    # single iteration, then exit
+polyresearch lead --agent-command "codex --full-auto"
 ```
 
 Run as a contributor:
@@ -97,7 +101,10 @@ Run as a contributor:
 polyresearch contribute https://github.com/owner/repo
 polyresearch contribute --once
 polyresearch contribute --max-parallel 4
+polyresearch contribute --capacity 50 --agent-command "codex --full-auto"
 ```
+
+All four node config settings can be overridden at runtime via `--capacity`, `--api-budget`, `--request-delay`, and `--agent-command`. These are pure runtime overrides and do not modify `.polyresearch-node.toml`.
 
 These three commands handle complete workflows. The sections below document the lower-level commands for manual operation and debugging.
 
@@ -114,9 +121,10 @@ Initialize the local node identity (the high-level commands do this automaticall
 ```bash
 polyresearch init
 polyresearch init --capacity 50
+polyresearch init --api-budget 10000 --request-delay 200 --agent-command "codex --full-auto"
 ```
 
-This writes `.polyresearch-node.toml` in the repo root. The file stores a stable `node_id` and a `capacity` percentage (1..=100) giving the share of the total machine this project may use.
+This writes `.polyresearch-node.toml` in the repo root. The file stores a stable `node_id`, a `capacity` percentage (1..=100) giving the share of the total machine this project may use, an `api_budget` for GitHub API rate pacing, a `request_delay_ms` between API calls, and an `[agent] command` for the experiment runner.
 
 Inspect the current state:
 
@@ -190,13 +198,13 @@ The maintainer comments `/approve` or `/reject` directly on thesis issues and ca
 
 High-level orchestration:
 
-- `polyresearch bootstrap <url>` -- clone/fork repo, write templates, init node, spawn setup agent
-- `polyresearch lead` -- continuous lead loop: sync, policy-check, decide, generate
-- `polyresearch contribute [url]` -- continuous contributor loop: claim, experiment, record, submit
+- `polyresearch bootstrap <url>` -- auto-fork (or `--fork <org>`, `--no-fork`), write templates, init node, spawn setup agent. Accepts `--capacity`, `--api-budget`, `--request-delay`, `--agent-command` to set initial node config values.
+- `polyresearch lead` -- continuous lead loop: sync, policy-check, decide, generate. Accepts `--capacity`, `--api-budget`, `--request-delay`, `--agent-command` as runtime overrides.
+- `polyresearch contribute [url]` -- continuous contributor loop: claim, experiment, record, submit. Accepts `--capacity`, `--api-budget`, `--request-delay`, `--agent-command` as runtime overrides.
 
 Status and inspection:
 
-- `polyresearch init` -- set node identity and `capacity` (percent of total machine), verify GitHub auth, detect repo
+- `polyresearch init` -- set node identity and config (`--capacity`, `--api-budget`, `--request-delay`, `--agent-command`), verify GitHub auth, detect repo
 - `polyresearch pace` -- show the hardware budget (machine, your max, live free), GitHub API budget, active claims, and recent node throughput
 - `polyresearch status` -- derive thesis state, queue depth, active nodes, current best metric
 - `polyresearch audit` -- validate raw GitHub activity and report invalid or suspicious protocol events

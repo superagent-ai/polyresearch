@@ -136,6 +136,24 @@ impl NodeConfig {
         Ok(())
     }
 
+    pub fn with_overrides(mut self, overrides: &crate::cli::NodeOverrides) -> Self {
+        if let Some(c) = overrides.capacity {
+            self.capacity = normalize_capacity(c);
+        }
+        if let Some(b) = overrides.api_budget {
+            self.api_budget = normalize_api_budget(b);
+        }
+        if let Some(d) = overrides.request_delay {
+            self.request_delay_ms = normalize_request_delay_ms(d);
+        }
+        if let Some(ref cmd) = overrides.agent_command {
+            self.agent = AgentConfig {
+                command: cmd.clone(),
+            };
+        }
+        self
+    }
+
     pub fn effective_capacity(&self) -> u8 {
         normalize_capacity(self.capacity)
     }
@@ -1015,6 +1033,90 @@ Do something.
     fn check_cli_version_skipped_when_unset() {
         let config = ProtocolConfig::default();
         assert!(config.check_cli_version("0.0.0").is_ok());
+    }
+
+    #[test]
+    fn with_overrides_applies_capacity() {
+        let config = NodeConfig::new("n", DEFAULT_CAPACITY, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS, None);
+        let overrides = crate::cli::NodeOverrides {
+            capacity: Some(42),
+            ..Default::default()
+        };
+        let updated = config.with_overrides(&overrides);
+        assert_eq!(updated.capacity, 42);
+        assert_eq!(updated.api_budget, DEFAULT_API_BUDGET);
+        assert_eq!(updated.request_delay_ms, DEFAULT_REQUEST_DELAY_MS);
+        assert_eq!(updated.agent, AgentConfig::default());
+    }
+
+    #[test]
+    fn with_overrides_applies_api_budget() {
+        let config = NodeConfig::new("n", DEFAULT_CAPACITY, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS, None);
+        let overrides = crate::cli::NodeOverrides {
+            api_budget: Some(10_000),
+            ..Default::default()
+        };
+        let updated = config.with_overrides(&overrides);
+        assert_eq!(updated.api_budget, 10_000);
+        assert_eq!(updated.capacity, DEFAULT_CAPACITY);
+    }
+
+    #[test]
+    fn with_overrides_applies_request_delay() {
+        let config = NodeConfig::new("n", DEFAULT_CAPACITY, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS, None);
+        let overrides = crate::cli::NodeOverrides {
+            request_delay: Some(500),
+            ..Default::default()
+        };
+        let updated = config.with_overrides(&overrides);
+        assert_eq!(updated.request_delay_ms, 500);
+    }
+
+    #[test]
+    fn with_overrides_applies_agent_command() {
+        let config = NodeConfig::new("n", DEFAULT_CAPACITY, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS, None);
+        let overrides = crate::cli::NodeOverrides {
+            agent_command: Some("codex --full-auto".to_string()),
+            ..Default::default()
+        };
+        let updated = config.with_overrides(&overrides);
+        assert_eq!(updated.agent.command, "codex --full-auto");
+    }
+
+    #[test]
+    fn with_overrides_applies_all_fields() {
+        let config = NodeConfig::new("n", 50, 3000, 200, None);
+        let overrides = crate::cli::NodeOverrides {
+            capacity: Some(80),
+            api_budget: Some(9000),
+            request_delay: Some(300),
+            agent_command: Some("my-agent run".to_string()),
+        };
+        let updated = config.with_overrides(&overrides);
+        assert_eq!(updated.capacity, 80);
+        assert_eq!(updated.api_budget, 9000);
+        assert_eq!(updated.request_delay_ms, 300);
+        assert_eq!(updated.agent.command, "my-agent run");
+        assert_eq!(updated.node_id, "n");
+    }
+
+    #[test]
+    fn with_overrides_empty_leaves_unchanged() {
+        let config = NodeConfig::new("n", 50, 3000, 200, Some(AgentConfig { command: "original".to_string() }));
+        let overrides = crate::cli::NodeOverrides::default();
+        let updated = config.clone().with_overrides(&overrides);
+        assert_eq!(updated, config);
+    }
+
+    #[test]
+    fn with_overrides_normalizes_zero_capacity() {
+        let config = NodeConfig::new("n", 50, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS, None);
+        let overrides = crate::cli::NodeOverrides {
+            capacity: Some(0),
+            ..Default::default()
+        };
+        let updated = config.with_overrides(&overrides);
+        assert_eq!(updated.capacity, DEFAULT_CAPACITY);
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {

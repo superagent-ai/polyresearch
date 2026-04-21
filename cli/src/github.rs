@@ -70,6 +70,23 @@ impl RepoRef {
         Self::parse(stripped)
     }
 
+    pub fn parse_url(url: &str) -> Option<Self> {
+        let stripped = url
+            .trim()
+            .trim_end_matches(".git")
+            .trim_start_matches("https://github.com/")
+            .trim_start_matches("http://github.com/")
+            .trim_start_matches("git@github.com:");
+        let (owner, name) = stripped.split_once('/')?;
+        if owner.is_empty() || name.is_empty() {
+            return None;
+        }
+        Some(Self {
+            owner: owner.to_string(),
+            name: name.to_string(),
+        })
+    }
+
     pub fn slug(&self) -> String {
         format!("{}/{}", self.owner, self.name)
     }
@@ -1007,5 +1024,36 @@ mod tests {
     #[test]
     fn jittered_delay_noops_for_zero_base() {
         assert_eq!(jittered_delay(Duration::ZERO), Duration::ZERO);
+    }
+
+    #[test]
+    fn parse_url_handles_https() {
+        let r = RepoRef::parse_url("https://github.com/owner/repo").unwrap();
+        assert_eq!(r.owner, "owner");
+        assert_eq!(r.name, "repo");
+    }
+
+    #[test]
+    fn parse_url_handles_https_with_git_suffix() {
+        let r = RepoRef::parse_url("https://github.com/owner/repo.git").unwrap();
+        assert_eq!(r.owner, "owner");
+        assert_eq!(r.name, "repo");
+    }
+
+    #[test]
+    fn parse_url_handles_ssh() {
+        let r = RepoRef::parse_url("git@github.com:owner/repo.git").unwrap();
+        assert_eq!(r.owner, "owner");
+        assert_eq!(r.name, "repo");
+    }
+
+    #[test]
+    fn parse_url_returns_none_for_garbage() {
+        assert!(RepoRef::parse_url("not-a-url").is_none());
+    }
+
+    #[test]
+    fn parse_url_returns_none_for_empty_parts() {
+        assert!(RepoRef::parse_url("https://github.com//").is_none());
     }
 }
