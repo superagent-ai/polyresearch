@@ -265,26 +265,34 @@ fn ensure_lead_login(repo_root: &Path, login: &str) -> Result<()> {
     let contents = fs::read_to_string(&path)
         .wrap_err_with(|| format!("failed to read {}", path.display()))?;
 
-    let mut modified = contents.clone();
-    for key in ["lead_github_login", "maintainer_github_login"] {
-        for line in contents.lines() {
+    let keys = ["lead_github_login", "maintainer_github_login"];
+    let mut changed = false;
+    let modified: String = contents
+        .lines()
+        .map(|line| {
             let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix(key) {
-                if let Some(value) = rest.strip_prefix(':') {
-                    let value = value.trim();
-                    if !value.is_empty() && value != login {
-                        modified = modified.replacen(
-                            &format!("{key}: {value}"),
-                            &format!("{key}: {login}"),
-                            1,
-                        );
+            for key in &keys {
+                if let Some(rest) = trimmed.strip_prefix(*key) {
+                    if let Some(value) = rest.strip_prefix(':') {
+                        let value = value.trim();
+                        if !value.is_empty() && value != login {
+                            changed = true;
+                            return format!("{key}: {login}");
+                        }
                     }
                 }
             }
-        }
-    }
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
 
-    if modified != contents {
+    if changed {
+        let modified = if contents.ends_with('\n') && !modified.ends_with('\n') {
+            format!("{modified}\n")
+        } else {
+            modified
+        };
         fs::write(&path, &modified)
             .wrap_err_with(|| format!("failed to write {}", path.display()))?;
         eprintln!("Updated lead/maintainer login in PROGRAM.md to `{login}`");

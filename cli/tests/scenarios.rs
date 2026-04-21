@@ -430,6 +430,74 @@ Do stuff.
     );
 }
 
+#[tokio::test]
+async fn scenario_bootstrap_login_fix_does_not_clobber_prose() {
+    let repo = ScenarioRepo::new("boot-prose-safe");
+    repo.init_git();
+
+    let program_with_prose = "\
+# Research Program
+
+cli_version: 0.5.2
+lead_github_login: upstream-owner
+maintainer_github_login: upstream-owner
+metric_tolerance: 0.01
+metric_direction: higher_is_better
+
+## Goal
+
+Ensure lead_github_login: upstream-owner appears in docs unchanged.
+
+## What you CAN modify
+
+- `src/`
+
+## What you CANNOT modify
+
+- `PROGRAM.md`
+";
+    fs::write(repo.path.join("PROGRAM.md"), program_with_prose).unwrap();
+
+    let github = Arc::new(ScenarioGitHub::new("fork-user"));
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        github,
+        "fork-user",
+        false,
+        Commands::Bootstrap(BootstrapArgs {
+            url: "https://github.com/test/repo".to_string(),
+            fork: None,
+            no_fork: true,
+            goal: None,
+            yes: false,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    commands::bootstrap::scaffold(
+        &ctx,
+        &BootstrapArgs {
+            url: "https://github.com/test/repo".to_string(),
+            fork: None,
+            no_fork: true,
+            goal: None,
+            yes: false,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .unwrap();
+
+    let program = fs::read_to_string(repo.path.join("PROGRAM.md")).unwrap();
+    assert!(
+        program.contains("lead_github_login: fork-user"),
+        "config line should be updated, got: {program}"
+    );
+    assert!(
+        program.contains("Ensure lead_github_login: upstream-owner appears in docs unchanged."),
+        "prose mention should be preserved, got: {program}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Contribute scenarios
 // ---------------------------------------------------------------------------
