@@ -80,7 +80,6 @@ fn sync_if_stale(ctx: &AppContext, repo_state: &RepositoryState, default_branch:
     }
 
     eprintln!("results.tsv is stale, syncing...");
-    let mut ledger = ledger;
     let missing = ledger.missing_rows(repo_state);
     if missing.is_empty() {
         return Ok(());
@@ -94,6 +93,14 @@ fn sync_if_stale(ctx: &AppContext, repo_state: &RepositoryState, default_branch:
     let current = commands::current_branch(&ctx.repo_root)?;
     if current != default_branch && current != "main" {
         eprintln!("Warning: not on {default_branch} branch, skipping sync commit");
+        return Ok(());
+    }
+
+    commands::run_git(&ctx.repo_root, &["pull", "--rebase"])?;
+
+    let mut ledger = Ledger::load(&ctx.repo_root)?;
+    let missing = ledger.missing_rows(repo_state);
+    if missing.is_empty() {
         return Ok(());
     }
 
