@@ -233,6 +233,7 @@ pub struct ProtocolConfig {
     pub required_confirmations: u64,
     pub metric_tolerance: Option<f64>,
     pub metric_direction: MetricDirection,
+    pub metric_bound: Option<f64>,
     pub lead_github_login: Option<String>,
     pub maintainer_github_login: Option<String>,
     pub auto_approve: bool,
@@ -250,6 +251,7 @@ impl Default for ProtocolConfig {
             required_confirmations: 0,
             metric_tolerance: None,
             metric_direction: MetricDirection::HigherIsBetter,
+            metric_bound: None,
             lead_github_login: None,
             maintainer_github_login: None,
             auto_approve: true,
@@ -312,6 +314,12 @@ impl ProtocolConfig {
                         other => return Err(eyre!("invalid metric_direction `{other}`")),
                     };
                 }
+                "metric_bound" => {
+                    config.metric_bound =
+                        Some(value.parse().wrap_err_with(|| {
+                            format!("invalid metric_bound value `{value}`")
+                        })?);
+                }
                 "lead_github_login" => {
                     if value != "replace-me" && !value.is_empty() {
                         config.lead_github_login = Some(value.to_string());
@@ -347,6 +355,13 @@ impl ProtocolConfig {
         }
 
         Ok(config)
+    }
+
+    pub fn resolved_metric_bound(&self) -> f64 {
+        self.metric_bound.unwrap_or(match self.metric_direction {
+            MetricDirection::LowerIsBetter => 0.0,
+            MetricDirection::HigherIsBetter => 1.0,
+        })
     }
 
     pub fn tolerance(&self) -> Result<f64> {
