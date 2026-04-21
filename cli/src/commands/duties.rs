@@ -201,7 +201,7 @@ fn check_lead_duties(
         advisory.push(DutyItem {
             category: "metric-floor".to_string(),
             message: format!(
-                "Best metric ({best:.1}ms) is below metric_tolerance ({tolerance:.1}ms). Further improvement within the current tolerance is impossible."
+                "Best metric ({best}) is within metric_tolerance ({tolerance}) of the limit. Further improvement within the current tolerance is impossible."
             ),
             command: "Consider adjusting metric_tolerance or concluding the program.".to_string(),
         });
@@ -210,7 +210,7 @@ fn check_lead_duties(
             advisory.push(DutyItem {
                 category: "stale-queue".to_string(),
                 message: format!(
-                    "Queue depth is {} but best metric ({best:.1}ms) is already below metric_tolerance ({tolerance:.1}ms). Existing theses may no longer contain meaningful work.",
+                    "Queue depth is {} but best metric ({best}) is already within metric_tolerance ({tolerance}) of the limit. Existing theses may no longer contain meaningful work.",
                     repo_state.queue_depth
                 ),
                 command: "polyresearch generate --title \"...\" --body \"...\"".to_string(),
@@ -324,7 +324,7 @@ fn check_contributor_idle_state(
         advisory.push(DutyItem {
             category: "no-claimable-work".to_string(),
             message: format!(
-                "Best metric ({best:.1}ms) is already below metric_tolerance ({tolerance:.1}ms). Remaining theses may not support another meaningful improvement. Wait for fresh theses from the lead."
+                "Best metric ({best}) is already within metric_tolerance ({tolerance}) of the limit. Remaining theses may not support another meaningful improvement. Wait for fresh theses from the lead."
             ),
             command: "sleep 60 && polyresearch duties".to_string(),
         });
@@ -360,17 +360,19 @@ fn check_contributor_idle_state(
 }
 
 fn metric_floor_info(ctx: &AppContext, repo_state: &RepositoryState) -> Option<(f64, f64)> {
+    use crate::config::MetricDirection;
+
     let tolerance = ctx.config.metric_tolerance?;
     let best = repo_state.current_best_accepted_metric?;
 
-    // Lower-is-better metrics have a generic floor at zero, so once the best score is
-    // below the required tolerance there is no room left for another meaningful win.
-    matches!(
-        ctx.config.metric_direction,
-        crate::config::MetricDirection::LowerIsBetter
-    )
-    .then_some((best, tolerance))
-    .filter(|(best, tolerance)| *best < *tolerance)
+    let exhausted = match ctx.config.metric_direction {
+        // Floor at zero: no room to improve downward by another tolerance step.
+        MetricDirection::LowerIsBetter => best < tolerance,
+        // Ceiling at 1.0: no room to improve upward by another tolerance step.
+        MetricDirection::HigherIsBetter => (1.0 - best) < tolerance,
+    };
+
+    exhausted.then_some((best, tolerance))
 }
 
 fn render_report(value: &DutyReport) -> String {
