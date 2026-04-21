@@ -309,7 +309,7 @@ impl GitHubClient {
             "--limit",
             "1000",
             "--json",
-            "number,title,body,state,headRefName,headRefOid,baseRefName,createdAt,closedAt,mergedAt,author,url",
+            "number,title,body,state,headRefName,headRefOid,baseRefName,createdAt,closedAt,mergedAt,author,url,mergeable",
         ])
     }
 
@@ -321,7 +321,7 @@ impl GitHubClient {
             "--repo",
             &self.repo.slug(),
             "--json",
-            "number,title,body,state,headRefName,headRefOid,baseRefName,createdAt,closedAt,mergedAt,author,url",
+            "number,title,body,state,headRefName,headRefOid,baseRefName,createdAt,closedAt,mergedAt,author,url,mergeable",
         ])
     }
 
@@ -725,6 +725,8 @@ pub struct PullRequest {
     pub author: Option<Author>,
     #[serde(default)]
     pub url: Option<String>,
+    #[serde(default)]
+    pub mergeable: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

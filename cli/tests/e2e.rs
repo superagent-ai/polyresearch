@@ -2383,6 +2383,7 @@ fn env_sha_none_vs_some_triggers_disagreement() {
             merged_at: None,
             author: None,
             url: None,
+            mergeable: None,
         },
         thesis_number: Some(5),
         policy_pass: true,

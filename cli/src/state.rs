@@ -669,6 +669,7 @@ mod tests {
                     merged_at: None,
                     author: None,
                     url: None,
+                    mergeable: None,
                 },
                 thesis_number: Some(1),
                 policy_pass: true,
