@@ -37,7 +37,7 @@ pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
 
     // Step 4: Spawn agent for project-specific setup
     if !args.pause_after_bootstrap {
-        spawn_setup_agent(&repo_root, &args.overrides)?;
+        spawn_setup_agent(&repo_root, &args.overrides, ctx.cli.verbose)?;
     } else {
         eprintln!("Pausing after bootstrap. Edit PROGRAM.md and PREPARE.md manually.");
     }
@@ -241,7 +241,7 @@ fn initialize_node(repo_root: &Path, overrides: &crate::cli::NodeOverrides) -> R
     Ok(())
 }
 
-fn spawn_setup_agent(repo_root: &Path, overrides: &crate::cli::NodeOverrides) -> Result<()> {
+fn spawn_setup_agent(repo_root: &Path, overrides: &crate::cli::NodeOverrides, verbose: bool) -> Result<()> {
     let node_config = NodeConfig::load(&repo_root.to_path_buf())
         .ok()
         .map(|c| c.with_overrides(overrides));
@@ -258,7 +258,7 @@ fn spawn_setup_agent(repo_root: &Path, overrides: &crate::cli::NodeOverrides) ->
     let prompt = include_str!("../../prompts/bootstrap-setup.md");
 
     eprintln!("Spawning agent for initial setup...");
-    let _ = crate::agent::spawn_experiment(&agent_command, repo_root, prompt);
+    let _ = crate::agent::spawn_experiment(&agent_command, repo_root, prompt, verbose);
     Ok(())
 }
 

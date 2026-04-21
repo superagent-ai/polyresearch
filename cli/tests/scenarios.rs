@@ -172,6 +172,7 @@ fn make_scenario_ctx(
             github_debug: false,
             json: false,
             dry_run,
+            verbose: false,
             command,
         },
         repo_root,

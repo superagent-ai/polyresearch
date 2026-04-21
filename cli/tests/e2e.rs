@@ -1502,6 +1502,7 @@ fn make_ctx(
             github_debug: false,
             json: false,
             dry_run,
+            verbose: false,
             command,
         },
         repo_root,
@@ -2555,6 +2556,7 @@ fn worker_context_carries_protected_globs() {
         editable_globs: vec!["src/**".to_string()],
         protected_globs: vec!["docs/**".to_string(), "config/".to_string()],
         metric_direction: polyresearch::config::MetricDirection::HigherIsBetter,
+        verbose: false,
     };
 
     assert_eq!(wctx.protected_globs.len(), 2);
