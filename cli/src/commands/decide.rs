@@ -59,30 +59,25 @@ pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
         pr_state.reviews.len() as u64
     };
 
-    let comment = ProtocolComment::Decision {
-        thesis: thesis.issue.number,
-        candidate_sha,
-        outcome,
-        confirmations,
-    };
-    let actual_outcome = if !ctx.cli.dry_run {
+    let result = if !ctx.cli.dry_run {
         execute_decision(
             &ctx.github,
             args.pr,
             thesis.issue.number,
+            candidate_sha,
             outcome,
-            &comment,
+            confirmations,
             ctx.config.required_confirmations,
         )?
     } else {
-        outcome
+        DecisionExecuted { outcome, confirmations }
     };
 
     let output = DecideOutput {
         pr: args.pr,
         thesis: thesis.issue.number,
-        outcome: actual_outcome,
-        confirmations,
+        outcome: result.outcome,
+        confirmations: result.confirmations,
     };
 
     print_value(ctx, &output, |value| {
@@ -209,61 +204,78 @@ pub(crate) fn decide_with_peer_review(
     Ok(Outcome::Disagreement)
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct DecisionExecuted {
+    pub outcome: Outcome,
+    pub confirmations: u64,
+}
+
 pub fn execute_decision(
     github: &Arc<dyn GitHubApi>,
     pr_number: u64,
     thesis_number: u64,
+    candidate_sha: String,
     outcome: Outcome,
-    comment: &ProtocolComment,
+    confirmations: u64,
     required_confirmations: u64,
-) -> Result<Outcome> {
-    let actual = match outcome {
+) -> Result<DecisionExecuted> {
+    let result = match outcome {
         Outcome::Accepted => {
             match github.merge_pull_request(pr_number) {
                 Ok(_) => {
+                    let comment = ProtocolComment::Decision {
+                        thesis: thesis_number,
+                        candidate_sha,
+                        outcome,
+                        confirmations,
+                    };
                     github.post_issue_comment(pr_number, &comment.render())?;
                     github.close_issue(thesis_number)?;
-                    Outcome::Accepted
+                    DecisionExecuted { outcome, confirmations }
                 }
                 Err(merge_err) => {
                     eprintln!(
                         "Merge of PR #{pr_number} failed ({merge_err:#}), falling back to stale decision"
                     );
-                    let candidate_sha = extract_candidate_sha(comment);
-                    let stale_comment = ProtocolComment::Decision {
+                    let comment = ProtocolComment::Decision {
                         thesis: thesis_number,
                         candidate_sha,
                         outcome: Outcome::Stale,
                         confirmations: 0,
                     };
-                    github.post_issue_comment(pr_number, &stale_comment.render())?;
+                    github.post_issue_comment(pr_number, &comment.render())?;
                     github.close_pull_request(pr_number)?;
-                    Outcome::Stale
+                    DecisionExecuted { outcome: Outcome::Stale, confirmations: 0 }
                 }
             }
         }
         Outcome::InfraFailure | Outcome::Stale => {
+            let comment = ProtocolComment::Decision {
+                thesis: thesis_number,
+                candidate_sha,
+                outcome,
+                confirmations,
+            };
             github.post_issue_comment(pr_number, &comment.render())?;
             github.close_pull_request(pr_number)?;
-            outcome
+            DecisionExecuted { outcome, confirmations }
         }
         Outcome::NonImprovement | Outcome::Disagreement | Outcome::PolicyRejection => {
+            let comment = ProtocolComment::Decision {
+                thesis: thesis_number,
+                candidate_sha,
+                outcome,
+                confirmations,
+            };
             github.post_issue_comment(pr_number, &comment.render())?;
             github.close_pull_request(pr_number)?;
             if required_confirmations > 0 || !matches!(outcome, Outcome::NonImprovement) {
                 github.close_issue(thesis_number)?;
             }
-            outcome
+            DecisionExecuted { outcome, confirmations }
         }
     };
-    Ok(actual)
-}
-
-fn extract_candidate_sha(comment: &ProtocolComment) -> String {
-    match comment {
-        ProtocolComment::Decision { candidate_sha, .. } => candidate_sha.clone(),
-        _ => String::new(),
-    }
+    Ok(result)
 }
 
 fn all_observations(reviews: &[ReviewRecord], observation: Observation) -> bool {

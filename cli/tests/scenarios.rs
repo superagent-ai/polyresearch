@@ -780,24 +780,19 @@ fn execute_decision_non_improvement_zero_conf_keeps_thesis_open() {
         mergeable: None,
     });
 
-    let comment = ProtocolComment::Decision {
-        thesis: 70,
-        candidate_sha: "sha".to_string(),
-        outcome: polyresearch::comments::Outcome::NonImprovement,
-        confirmations: 0,
-    };
-
-    let actual = commands::decide::execute_decision(
+    let result = commands::decide::execute_decision(
         &(Arc::clone(&github) as Arc<dyn GitHubApi>),
         70,
         70,
+        "sha".to_string(),
         polyresearch::comments::Outcome::NonImprovement,
-        &comment,
+        0,
         0,
     )
     .unwrap();
 
-    assert_eq!(actual, polyresearch::comments::Outcome::NonImprovement);
+    assert_eq!(result.outcome, polyresearch::comments::Outcome::NonImprovement);
+    assert_eq!(result.confirmations, 0);
     assert!(
         github.is_pr_closed(70),
         "PR should be closed on non_improvement"
@@ -827,24 +822,19 @@ fn execute_decision_disagreement_zero_conf_closes_thesis() {
         mergeable: None,
     });
 
-    let comment = ProtocolComment::Decision {
-        thesis: 71,
-        candidate_sha: "sha".to_string(),
-        outcome: polyresearch::comments::Outcome::Disagreement,
-        confirmations: 0,
-    };
-
-    let actual = commands::decide::execute_decision(
+    let result = commands::decide::execute_decision(
         &(Arc::clone(&github) as Arc<dyn GitHubApi>),
         71,
         71,
+        "sha".to_string(),
         polyresearch::comments::Outcome::Disagreement,
-        &comment,
+        0,
         0,
     )
     .unwrap();
 
-    assert_eq!(actual, polyresearch::comments::Outcome::Disagreement);
+    assert_eq!(result.outcome, polyresearch::comments::Outcome::Disagreement);
+    assert_eq!(result.confirmations, 0);
     assert!(
         github.is_pr_closed(71),
         "PR should be closed on disagreement"
@@ -874,24 +864,19 @@ fn execute_decision_accepted_merges_and_closes() {
         mergeable: None,
     });
 
-    let comment = ProtocolComment::Decision {
-        thesis: 72,
-        candidate_sha: "sha".to_string(),
-        outcome: polyresearch::comments::Outcome::Accepted,
-        confirmations: 0,
-    };
-
-    let actual = commands::decide::execute_decision(
+    let result = commands::decide::execute_decision(
         &(Arc::clone(&github) as Arc<dyn GitHubApi>),
         72,
         72,
+        "sha".to_string(),
         polyresearch::comments::Outcome::Accepted,
-        &comment,
+        0,
         0,
     )
     .unwrap();
 
-    assert_eq!(actual, polyresearch::comments::Outcome::Accepted);
+    assert_eq!(result.outcome, polyresearch::comments::Outcome::Accepted);
+    assert_eq!(result.confirmations, 0);
     assert!(github.is_pr_merged(72), "PR should be merged on accepted");
     assert!(
         github.is_issue_closed(72),
@@ -1053,27 +1038,26 @@ fn execute_decision_falls_back_on_merge_failure() {
         mergeable: Some("CONFLICTING".to_string()),
     });
 
-    let comment = ProtocolComment::Decision {
-        thesis: 73,
-        candidate_sha: "sha-conflict".to_string(),
-        outcome: polyresearch::comments::Outcome::Accepted,
-        confirmations: 0,
-    };
-
-    let actual = commands::decide::execute_decision(
+    let result = commands::decide::execute_decision(
         &(Arc::clone(&github) as Arc<dyn GitHubApi>),
         73,
         73,
+        "sha-conflict".to_string(),
         polyresearch::comments::Outcome::Accepted,
-        &comment,
+        5,
         0,
     );
 
-    assert!(actual.is_ok(), "should not propagate merge error: {actual:?}");
+    assert!(result.is_ok(), "should not propagate merge error: {result:?}");
+    let result = result.unwrap();
     assert_eq!(
-        actual.unwrap(),
+        result.outcome,
         polyresearch::comments::Outcome::Stale,
         "returned outcome should be Stale, not Accepted"
+    );
+    assert_eq!(
+        result.confirmations, 0,
+        "returned confirmations should be 0 for stale fallback, not the original value"
     );
     assert!(
         !github.is_pr_merged(73),

@@ -80,6 +80,7 @@ fn sync_if_stale(ctx: &AppContext, repo_state: &RepositoryState, default_branch:
     }
 
     eprintln!("results.tsv is stale, syncing...");
+    let mut ledger = ledger;
     let missing = ledger.missing_rows(repo_state);
     if missing.is_empty() {
         return Ok(());
@@ -93,14 +94,6 @@ fn sync_if_stale(ctx: &AppContext, repo_state: &RepositoryState, default_branch:
     let current = commands::current_branch(&ctx.repo_root)?;
     if current != default_branch && current != "main" {
         eprintln!("Warning: not on {default_branch} branch, skipping sync commit");
-        return Ok(());
-    }
-
-    commands::run_git(&ctx.repo_root, &["pull", "--rebase"])?;
-
-    let mut ledger = Ledger::load(&ctx.repo_root)?;
-    let missing = ledger.missing_rows(repo_state);
-    if missing.is_empty() {
         return Ok(());
     }
 
@@ -223,23 +216,17 @@ fn decide_ready_prs(ctx: &AppContext, config: &ProtocolConfig, repo_state: &Repo
             let candidate_sha = pr_state.pr.head_ref_oid.clone().unwrap_or_default();
             let confirmations = if required == 0 { 0 } else { pr_state.reviews.len() as u64 };
 
-            let comment = ProtocolComment::Decision {
-                thesis: thesis.issue.number,
-                candidate_sha,
-                outcome,
-                confirmations,
-            };
-
-            let actual_outcome = decide::execute_decision(
+            let result = decide::execute_decision(
                 &ctx.github,
                 pr_state.pr.number,
                 thesis.issue.number,
+                candidate_sha,
                 outcome,
-                &comment,
+                confirmations,
                 config.required_confirmations,
             )?;
 
-            eprintln!("PR #{} decided as {actual_outcome}", pr_state.pr.number);
+            eprintln!("PR #{} decided as {}", pr_state.pr.number, result.outcome);
         }
     }
     Ok(())
