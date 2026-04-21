@@ -264,8 +264,9 @@ async fn generate_if_needed(
     let prompt = agent::thesis_generation_prompt(capped);
     let repo_root = ctx.repo_root.clone();
     let agent_cmd = agent_command.to_string();
+    let verbose = ctx.cli.verbose;
     let proposals = tokio::task::spawn_blocking(move || {
-        agent::spawn_thesis_generation(&agent_cmd, &repo_root, &prompt)
+        agent::spawn_thesis_generation(&agent_cmd, &repo_root, &prompt, verbose)
     })
     .await
     .map_err(|e| eyre!("thesis generation task failed: {e}"))??;

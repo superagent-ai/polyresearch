@@ -802,7 +802,7 @@ fn run_command_with_retries(command: &mut Command, idempotent: bool) -> Result<S
 
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let Some(retry) = classify_retry(&stderr, idempotent) else {
-            return Err(eyre!("GitHub CLI command failed: {stderr}"));
+            return Err(error_with_hint(&stderr));
         };
 
         let retry_after = match retry {
@@ -826,7 +826,7 @@ fn run_command_with_retries(command: &mut Command, idempotent: bool) -> Result<S
 
         if attempt >= max_retries {
             return match retry {
-                RetryReason::Transient => Err(eyre!("GitHub CLI command failed: {stderr}")),
+                RetryReason::Transient => Err(error_with_hint(&stderr)),
                 RetryReason::RateLimited(kind) => Err(GitHubCliError::RateLimited {
                     kind,
                     retry_after_secs: retry_after.as_secs(),
@@ -925,6 +925,42 @@ fn classify_retry(stderr: &str, idempotent: bool) -> Option<RetryReason> {
     }
 
     None
+}
+
+fn classify_error_hint(stderr: &str) -> Option<&'static str> {
+    let lowered = stderr.to_ascii_lowercase();
+
+    if lowered.contains("has disabled issues") {
+        return Some("Enable Issues in your repository settings: gh api repos/OWNER/REPO --method PATCH -f has_issues=true");
+    }
+
+    if lowered.contains("could not authenticate")
+        || lowered.contains("authentication token")
+        || lowered.contains("auth token")
+        || lowered.contains("not logged in")
+    {
+        return Some("Run: gh auth login");
+    }
+
+    if lowered.contains("not found (http 404)") || lowered.contains("could not resolve") {
+        return Some("Check that the repository exists and you have access: gh repo view OWNER/REPO");
+    }
+
+    if lowered.contains("permission denied")
+        || lowered.contains("must have admin")
+        || lowered.contains("resource not accessible")
+    {
+        return Some("Check your permissions: gh api repos/OWNER/REPO --jq .permissions");
+    }
+
+    None
+}
+
+fn error_with_hint(stderr: &str) -> color_eyre::Report {
+    match classify_error_hint(stderr) {
+        Some(hint) => eyre!("GitHub CLI command failed: {stderr}\n  Hint: {hint}"),
+        None => eyre!("GitHub CLI command failed: {stderr}"),
+    }
 }
 
 fn resolve_rate_limit_delay(kind: RateLimitKind, attempt: usize, stderr: &str) -> Option<Duration> {

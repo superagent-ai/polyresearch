@@ -137,6 +137,13 @@ polyresearch status --json
 polyresearch status --tui
 ```
 
+Debug agent subprocess failures by showing the full command line and working directory:
+
+```bash
+polyresearch --verbose contribute --once
+POLYRESEARCH_VERBOSE=1 polyresearch lead --once
+```
+
 Debug GitHub traffic when you need to inspect request pacing or rate-limit headers:
 
 ```bash
@@ -206,6 +213,7 @@ These flags apply to every command.
 | `--github-debug` | bool | `false` | Log GitHub API requests and responses |
 | `--json` | bool | `false` | Output structured JSON instead of human-readable text |
 | `--dry-run` | bool | `false` | Preview actions without side effects |
+| `--verbose` | bool | `false` | Show full subprocess commands and working directories on failure (env: `POLYRESEARCH_VERBOSE`) |
 
 ### Node overrides
 

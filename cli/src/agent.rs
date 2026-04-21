@@ -1,10 +1,47 @@
 use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
 
 use color_eyre::eyre::{Context, Result, eyre};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+
+const STDOUT_TAIL_LIMIT: usize = 2000;
+
+fn log_subprocess_failure(label: &str, output: &Output, verbose: bool, command_line: Option<&str>, work_dir: Option<&Path>) {
+    let code = output.status.code()
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "signal".into());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    if verbose {
+        if let Some(cmd) = command_line {
+            eprintln!("[verbose] Command: {cmd}");
+        }
+        if let Some(dir) = work_dir {
+            eprintln!("[verbose] Working directory: {}", dir.display());
+        }
+        eprintln!("[verbose] Exit code: {code}");
+    }
+
+    eprintln!("{label} exited with status {code}");
+    if !stderr.trim().is_empty() {
+        eprintln!("  stderr: {}", stderr.trim());
+    }
+    if !stdout.trim().is_empty() {
+        let trimmed = stdout.trim();
+        let display = if trimmed.len() > STDOUT_TAIL_LIMIT {
+            &trimmed[trimmed.len() - STDOUT_TAIL_LIMIT..]
+        } else {
+            trimmed
+        };
+        eprintln!("  stdout (last): {display}");
+    }
+    if stderr.trim().is_empty() && stdout.trim().is_empty() {
+        eprintln!("  (no output captured from subprocess)");
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExperimentResult {
@@ -50,6 +87,7 @@ pub fn spawn_experiment(
     agent_command: &str,
     worktree_path: &Path,
     prompt: &str,
+    verbose: bool,
 ) -> Result<Option<ExperimentResult>> {
     let parts = shell_words(agent_command);
     if parts.is_empty() {
@@ -65,8 +103,7 @@ pub fn spawn_experiment(
     let output = cmd.output().wrap_err("failed to spawn agent")?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("Agent exited with non-zero status: {stderr}");
+        log_subprocess_failure("Agent", &output, verbose, Some(agent_command), Some(worktree_path));
     }
 
     let result_path = worktree_path.join(".polyresearch/result.json");
@@ -150,6 +187,7 @@ pub fn spawn_thesis_generation(
     agent_command: &str,
     worktree_path: &Path,
     prompt: &str,
+    verbose: bool,
 ) -> Result<Vec<ThesisProposal>> {
     let parts = shell_words(agent_command);
     if parts.is_empty() {
@@ -165,8 +203,7 @@ pub fn spawn_thesis_generation(
     let output = cmd.output().wrap_err("failed to spawn agent for thesis generation")?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("Thesis generation agent exited with non-zero status: {stderr}");
+        log_subprocess_failure("Thesis generation agent", &output, verbose, Some(agent_command), Some(worktree_path));
     }
 
     let proposals_path = worktree_path.join(".polyresearch/thesis-proposals.json");
@@ -241,6 +278,8 @@ fn run_harness_in(harness: &HarnessSpec, work_dir: &Path) -> Result<Option<f64>>
         .wrap_err("failed to run evaluation harness")?;
 
     if !output.status.success() {
+        let cmd_line = format!("{} {}", harness.runner, script_path.display());
+        log_subprocess_failure("Evaluation harness", &output, false, Some(&cmd_line), Some(work_dir));
         return Ok(None);
     }
 

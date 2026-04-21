@@ -23,6 +23,7 @@ pub struct WorkerContext {
     pub editable_globs: Vec<String>,
     pub protected_globs: Vec<String>,
     pub metric_direction: MetricDirection,
+    pub verbose: bool,
 }
 
 #[derive(Debug)]
@@ -116,6 +117,7 @@ impl ThesisWorker {
             &self.ctx.agent_command,
             &self.worktree_path,
             prompt,
+            self.ctx.verbose,
         )?;
 
         if result.is_some() {

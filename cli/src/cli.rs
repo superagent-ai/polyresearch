@@ -19,6 +19,11 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub dry_run: bool,
 
+    /// Show full subprocess commands and working directories on failure.
+    /// For GitHub API tracing, use --github-debug instead.
+    #[arg(long, global = true, env = "POLYRESEARCH_VERBOSE")]
+    pub verbose: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }

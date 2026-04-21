@@ -230,6 +230,7 @@ async fn run_iteration(
             default_branch,
             program,
             config,
+            ctx.cli.verbose,
         ));
         prior_attempts_list.push(worker::format_prior_attempts(thesis));
     }
@@ -255,6 +256,7 @@ async fn run_iteration(
             default_branch,
             program,
             config,
+            ctx.cli.verbose,
         ));
         prior_attempts_list.push(worker::format_prior_attempts(thesis));
     }
@@ -290,6 +292,7 @@ fn build_worker_context(
     default_branch: &str,
     program: &ProgramSpec,
     config: &ProtocolConfig,
+    verbose: bool,
 ) -> WorkerContext {
     WorkerContext {
         issue_number: thesis.issue.number,
@@ -302,6 +305,7 @@ fn build_worker_context(
         editable_globs: program.can_modify.clone(),
         protected_globs: program.cannot_modify.clone(),
         metric_direction: config.metric_direction,
+        verbose,
     }
 }
 
