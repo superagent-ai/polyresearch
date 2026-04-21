@@ -10,22 +10,23 @@ use crate::config::NodeConfig;
 use crate::github::RepoRef;
 
 pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
-    eprintln!("Bootstrapping polyresearch project from {}", args.url);
+    let upstream = RepoRef::from_user_input(&args.url)?;
+    let clone_url = upstream.clone_url();
+    eprintln!("Bootstrapping polyresearch project from {}", upstream.slug());
 
     let repo_root = if ctx.repo_root.join(".git").exists() {
         ctx.repo_root.clone()
     } else {
-        let name = repo_name_from_url(&args.url);
-        ctx.repo_root.join(name)
+        ctx.repo_root.join(&upstream.name)
     };
 
     // Step 1: Clone or fork-then-clone
     if args.no_fork {
-        clone_if_needed(&args.url, &repo_root)?;
+        clone_if_needed(&clone_url, &repo_root)?;
     } else if let Some(fork_owner) = &args.fork {
-        fork_and_clone(&args.url, fork_owner, &repo_root)?;
+        fork_and_clone(&upstream, fork_owner, &repo_root)?;
     } else {
-        auto_clone_or_fork(&args.url, &repo_root)?;
+        auto_clone_or_fork(&upstream, &repo_root)?;
     }
 
     // Step 2: Write templates
@@ -48,35 +49,23 @@ pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn repo_name_from_url(url: &str) -> String {
-    url.trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or("repo")
-        .trim_end_matches(".git")
-        .to_string()
-}
-
-fn auto_clone_or_fork(url: &str, repo_root: &Path) -> Result<()> {
+fn auto_clone_or_fork(upstream: &RepoRef, repo_root: &Path) -> Result<()> {
     if repo_root.join(".git").exists() {
         eprintln!("Repository already exists at {}", repo_root.display());
         let _ = commands::run_git(&repo_root.to_path_buf(), &["fetch", "origin"]);
         return Ok(());
     }
 
-    let upstream = RepoRef::parse_url(url)
-        .ok_or_else(|| eyre!("could not parse GitHub owner/repo from URL: {url}"))?;
-
     if has_push_access(&upstream.owner, &upstream.name) {
         eprintln!("Push access confirmed, cloning directly.");
-        clone_if_needed(url, repo_root)
+        clone_if_needed(&upstream.clone_url(), repo_root)
     } else {
         let login = get_current_login()?;
         eprintln!(
             "No push access to {}/{}, forking to {login}...",
             upstream.owner, upstream.name
         );
-        fork_and_clone(url, &login, repo_root)
+        fork_and_clone(upstream, &login, repo_root)
     }
 }
 
@@ -113,14 +102,15 @@ fn get_current_login() -> Result<String> {
     Ok(login)
 }
 
-fn fork_and_clone(url: &str, fork_owner: &str, repo_root: &Path) -> Result<()> {
+fn fork_and_clone(upstream: &RepoRef, fork_owner: &str, repo_root: &Path) -> Result<()> {
     if repo_root.join(".git").exists() {
         eprintln!("Repository already exists, skipping clone.");
         return Ok(());
     }
 
-    eprintln!("Forking {url} to {fork_owner}...");
-    let mut args = vec!["repo", "fork", url, "--clone=false"];
+    let slug = upstream.slug();
+    eprintln!("Forking {slug} to {fork_owner}...");
+    let mut args = vec!["repo", "fork", slug.as_str(), "--clone=false"];
 
     let current_user = Command::new("gh")
         .args(["api", "user", "--jq", ".login"])
@@ -147,13 +137,13 @@ fn fork_and_clone(url: &str, fork_owner: &str, repo_root: &Path) -> Result<()> {
         }
     }
 
-    let name = repo_name_from_url(url);
-    let fork_url = format!("https://github.com/{fork_owner}/{name}.git");
+    let fork_url = format!("https://github.com/{fork_owner}/{}.git", upstream.name);
     clone_if_needed(&fork_url, repo_root)?;
 
+    let upstream_url = upstream.clone_url();
     commands::run_git(
         &repo_root.to_path_buf(),
-        &["remote", "add", "upstream", url],
+        &["remote", "add", "upstream", &upstream_url],
     )
     .ok();
 

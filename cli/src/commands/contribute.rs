@@ -15,13 +15,13 @@ use crate::worker::{self, ThesisWorker, WorkerContext, WorkerOutcome};
 
 pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
     let ctx = if let Some(url) = &args.url {
+        let upstream = RepoRef::from_user_input(url)?;
         let repo_root = if ctx.repo_root.join(".git").exists() {
             ctx.repo_root.clone()
         } else {
-            let name = super::bootstrap::repo_name_from_url(url);
-            ctx.repo_root.join(name)
+            ctx.repo_root.join(&upstream.name)
         };
-        clone_repo(url, &repo_root)?;
+        clone_repo(&upstream.clone_url(), &repo_root)?;
         std::borrow::Cow::Owned(AppContext {
             repo_root,
             ..ctx.clone()

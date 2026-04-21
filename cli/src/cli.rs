@@ -203,6 +203,7 @@ pub struct AdminReopenThesisArgs {
 
 #[derive(Debug, Args, Clone)]
 pub struct BootstrapArgs {
+    #[arg(help = "GitHub repo (owner/repo or full URL)")]
     pub url: String,
 
     #[arg(long)]
@@ -235,6 +236,7 @@ pub struct LeadArgs {
 
 #[derive(Debug, Args, Clone)]
 pub struct ContributeArgs {
+    #[arg(help = "GitHub repo (owner/repo or full URL)")]
     pub url: Option<String>,
 
     #[arg(long)]
