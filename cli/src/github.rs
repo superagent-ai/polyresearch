@@ -86,6 +86,7 @@ fn strip_github_url(url: &str) -> &str {
         .trim_start_matches("https://github.com/")
         .trim_start_matches("http://github.com/")
         .trim_start_matches("git@github.com:")
+        .trim_end_matches('/')
 }
 
 #[derive(Debug, Clone)]
@@ -1051,5 +1052,12 @@ mod tests {
     #[test]
     fn parse_url_returns_none_for_empty_parts() {
         assert!(RepoRef::parse_url("https://github.com//").is_none());
+    }
+
+    #[test]
+    fn parse_url_handles_trailing_slash() {
+        let r = RepoRef::parse_url("https://github.com/owner/repo/").unwrap();
+        assert_eq!(r.owner, "owner");
+        assert_eq!(r.name, "repo");
     }
 }
