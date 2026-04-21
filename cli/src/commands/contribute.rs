@@ -110,6 +110,15 @@ async fn run_iteration(
         if !thesis.is_claimed_by(node_id) {
             continue;
         }
+        if thesis.issue.state != "OPEN" {
+            continue;
+        }
+        let already_resolved = thesis.pull_requests.iter().any(|pr| {
+            pr.pr.state == "MERGED" || pr.decision.is_some()
+        });
+        if already_resolved {
+            continue;
+        }
         let has_improved = thesis.attempts.iter().any(|a| {
             a.observation == Observation::Improved
                 && thesis
@@ -162,6 +171,30 @@ async fn run_iteration(
         repo_state = RepositoryState::derive(&ctx.github, config).await?;
     }
 
+    let is_lead = ctx
+        .config
+        .lead_github_login
+        .as_deref()
+        .map(|lead| {
+            ctx.github
+                .current_login()
+                .map(|l| l == lead)
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    if is_lead && !ctx.cli.dry_run {
+        if let Err(e) = crate::commands::lead::sync_if_stale(ctx, &repo_state, default_branch) {
+            eprintln!("Warning: lead sync failed: {e}");
+        }
+        if let Err(e) = crate::commands::lead::policy_check_open_prs(ctx, &repo_state) {
+            eprintln!("Warning: lead policy-check failed: {e}");
+        }
+        let updated = RepositoryState::derive(&ctx.github, config).await?;
+        if let Err(e) = crate::commands::lead::decide_ready_prs(ctx, config, &updated) {
+            eprintln!("Warning: lead decide failed: {e}");
+        }
+        repo_state = RepositoryState::derive(&ctx.github, config).await?;
+    }
     let duty_report = crate::commands::duties::check(ctx, &repo_state)?;
     if !duty_report.blocking.is_empty() {
         let items: Vec<String> = duty_report
