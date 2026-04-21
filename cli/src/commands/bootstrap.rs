@@ -44,6 +44,9 @@ pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
     // Step 5: Normalize PROGRAM.md
     normalize_program_md(&repo_root)?;
 
+    // Step 6: Commit and push setup files
+    commit_and_push_setup_files(&repo_root)?;
+
     eprintln!("Bootstrap complete.");
     Ok(())
 }
@@ -266,6 +269,43 @@ fn spawn_setup_agent(repo_root: &Path, overrides: &crate::cli::NodeOverrides) ->
 
     eprintln!("Spawning agent for initial setup...");
     let _ = crate::agent::spawn_experiment(&agent_command, repo_root, prompt);
+    Ok(())
+}
+
+pub fn commit_and_push_setup_files(repo_root: &Path) -> Result<()> {
+    let repo = repo_root.to_path_buf();
+
+    let setup_files: Vec<&str> = ["PROGRAM.md", "PREPARE.md", "results.tsv", ".polyresearch"]
+        .into_iter()
+        .filter(|f| repo_root.join(f).exists())
+        .collect();
+
+    if setup_files.is_empty() {
+        return Ok(());
+    }
+
+    let mut add_args: Vec<&str> = vec!["add", "--"];
+    add_args.extend(&setup_files);
+    commands::run_git(&repo, &add_args)?;
+
+    let has_staged = Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .current_dir(repo_root)
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(false);
+
+    if !has_staged {
+        eprintln!("Setup files already committed.");
+        return Ok(());
+    }
+
+    commands::run_git(&repo, &["commit", "-m", "Add polyresearch setup files"])?;
+
+    match commands::run_git(&repo, &["push", "origin", "HEAD"]) {
+        Ok(_) => eprintln!("Committed and pushed setup files."),
+        Err(err) => eprintln!("Committed setup files locally. Push failed (run `git push` manually): {err}"),
+    }
     Ok(())
 }
 
