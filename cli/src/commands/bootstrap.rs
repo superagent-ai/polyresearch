@@ -45,6 +45,9 @@ pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
     // Step 5: Normalize PROGRAM.md
     normalize_program_md(&repo_root)?;
 
+    // Step 6: Commit and push setup files
+    commit_and_push_setup_files(&repo_root)?;
+
     eprintln!("Bootstrap complete.");
     Ok(())
 }
@@ -256,6 +259,52 @@ fn spawn_setup_agent(repo_root: &Path, overrides: &crate::cli::NodeOverrides) ->
 
     eprintln!("Spawning agent for initial setup...");
     let _ = crate::agent::spawn_experiment(&agent_command, repo_root, prompt);
+    Ok(())
+}
+
+pub fn commit_and_push_setup_files(repo_root: &Path) -> Result<()> {
+    let repo = repo_root.to_path_buf();
+
+    let setup_paths: Vec<&str> = ["PROGRAM.md", "PREPARE.md", "results.tsv", ".polyresearch"]
+        .into_iter()
+        .filter(|f| repo_root.join(f).exists())
+        .collect();
+
+    if setup_paths.is_empty() {
+        return Ok(());
+    }
+
+    let mut add_args: Vec<&str> = vec!["add", "--"];
+    add_args.extend(&setup_paths);
+    commands::run_git(&repo, &add_args)?;
+
+    // Query which of our paths actually have staged changes. This scopes the
+    // commit to only setup files (preventing leakage from a dirty index) and
+    // avoids "pathspec didn't match" errors on empty directories like .polyresearch/.
+    let mut diff_args: Vec<&str> = vec!["diff", "--cached", "--name-only", "--"];
+    diff_args.extend(&setup_paths);
+    let diff_output = commands::run_git(&repo, &diff_args).unwrap_or_default();
+    let staged_files: Vec<String> = diff_output
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    if staged_files.is_empty() {
+        eprintln!("Setup files already committed.");
+        return Ok(());
+    }
+
+    let mut commit_args: Vec<&str> = vec!["commit", "-m", "Add polyresearch setup files", "--"];
+    for f in &staged_files {
+        commit_args.push(f.as_str());
+    }
+    commands::run_git(&repo, &commit_args)?;
+
+    match commands::run_git(&repo, &["push", "origin", "HEAD"]) {
+        Ok(_) => eprintln!("Committed and pushed setup files."),
+        Err(err) => eprintln!("Committed setup files locally. Push failed (run `git push` manually): {err}"),
+    }
     Ok(())
 }
 

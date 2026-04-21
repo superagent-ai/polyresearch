@@ -1924,6 +1924,85 @@ async fn bootstrap_normalizes_program_md_adds_missing_sections() {
     assert!(content.contains("## What you CANNOT modify"));
 }
 
+#[tokio::test]
+async fn bootstrap_commits_setup_files() {
+    let repo = TestRepo::new("bootstrap-commit");
+    init_git_repo(&repo.path);
+
+    // Create a bare remote so push succeeds
+    let bare = TestRepo::new("bootstrap-commit-bare");
+    let _ = fs::remove_dir_all(&bare.path);
+    Command::new("git")
+        .args(["clone", "--bare", &repo.path.to_string_lossy(), &bare.path.to_string_lossy()])
+        .output()
+        .unwrap();
+    run_git(&repo.path, &["remote", "add", "origin", &bare.path.to_string_lossy()]);
+
+    commands::bootstrap::write_templates(&repo.path, Some("Test goal")).unwrap();
+    commands::bootstrap::normalize_program_md(&repo.path).unwrap();
+    commands::bootstrap::commit_and_push_setup_files(&repo.path).unwrap();
+
+    // Verify git status is clean for setup files
+    let status_output = Command::new("git")
+        .args(["status", "--porcelain", "--", "PROGRAM.md", "PREPARE.md", "results.tsv", ".polyresearch"])
+        .current_dir(&repo.path)
+        .output()
+        .unwrap();
+    let status = String::from_utf8(status_output.stdout).unwrap();
+    assert!(status.trim().is_empty(), "setup files should be clean after commit, got: {status}");
+
+    // Verify commit exists with expected message
+    let log_output = Command::new("git")
+        .args(["log", "--oneline", "-1"])
+        .current_dir(&repo.path)
+        .output()
+        .unwrap();
+    let log = String::from_utf8(log_output.stdout).unwrap();
+    assert!(log.contains("Add polyresearch setup files"), "commit message not found in: {log}");
+
+    // Verify committed files
+    let show_output = Command::new("git")
+        .args(["show", "HEAD", "--name-only", "--format="])
+        .current_dir(&repo.path)
+        .output()
+        .unwrap();
+    let files = String::from_utf8(show_output.stdout).unwrap();
+    assert!(files.contains("PROGRAM.md"), "PROGRAM.md not in commit");
+    assert!(files.contains("PREPARE.md"), "PREPARE.md not in commit");
+    assert!(files.contains("results.tsv"), "results.tsv not in commit");
+}
+
+#[tokio::test]
+async fn bootstrap_commit_is_idempotent() {
+    let repo = TestRepo::new("bootstrap-commit-idempotent");
+    init_git_repo(&repo.path);
+
+    let bare = TestRepo::new("bootstrap-commit-idempotent-bare");
+    let _ = fs::remove_dir_all(&bare.path);
+    Command::new("git")
+        .args(["clone", "--bare", &repo.path.to_string_lossy(), &bare.path.to_string_lossy()])
+        .output()
+        .unwrap();
+    run_git(&repo.path, &["remote", "add", "origin", &bare.path.to_string_lossy()]);
+
+    commands::bootstrap::write_templates(&repo.path, None).unwrap();
+    commands::bootstrap::normalize_program_md(&repo.path).unwrap();
+    commands::bootstrap::commit_and_push_setup_files(&repo.path).unwrap();
+
+    // Second call should not error (nothing to commit)
+    commands::bootstrap::commit_and_push_setup_files(&repo.path).unwrap();
+
+    // Should still be only one setup commit
+    let log_output = Command::new("git")
+        .args(["log", "--oneline"])
+        .current_dir(&repo.path)
+        .output()
+        .unwrap();
+    let log = String::from_utf8(log_output.stdout).unwrap();
+    let setup_commits: Vec<&str> = log.lines().filter(|l| l.contains("Add polyresearch setup files")).collect();
+    assert_eq!(setup_commits.len(), 1, "expected exactly one setup commit, got: {log}");
+}
+
 // --- Contribute claimability tests ---
 
 #[test]
