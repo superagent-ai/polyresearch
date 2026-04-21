@@ -358,6 +358,78 @@ async fn scenario_bootstrap_idempotent() {
     );
 }
 
+#[tokio::test]
+async fn scenario_bootstrap_fixes_upstream_login() {
+    let repo = ScenarioRepo::new("boot-fix-login");
+    repo.init_git();
+
+    let upstream_program = "\
+# Research Program
+
+cli_version: 0.5.2
+lead_github_login: upstream-owner
+maintainer_github_login: upstream-owner
+metric_tolerance: 0.01
+metric_direction: higher_is_better
+
+## Goal
+
+Do stuff.
+
+## What you CAN modify
+
+- `src/`
+
+## What you CANNOT modify
+
+- `PROGRAM.md`
+";
+    fs::write(repo.path.join("PROGRAM.md"), upstream_program).unwrap();
+
+    let github = Arc::new(ScenarioGitHub::new("fork-user"));
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        github,
+        "fork-user",
+        false,
+        Commands::Bootstrap(BootstrapArgs {
+            url: "https://github.com/test/repo".to_string(),
+            fork: None,
+            no_fork: true,
+            goal: None,
+            yes: false,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    commands::bootstrap::scaffold(
+        &ctx,
+        &BootstrapArgs {
+            url: "https://github.com/test/repo".to_string(),
+            fork: None,
+            no_fork: true,
+            goal: None,
+            yes: false,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .unwrap();
+
+    let program = fs::read_to_string(repo.path.join("PROGRAM.md")).unwrap();
+    assert!(
+        program.contains("lead_github_login: fork-user"),
+        "lead login should be updated to fork user, got: {program}"
+    );
+    assert!(
+        program.contains("maintainer_github_login: fork-user"),
+        "maintainer login should be updated to fork user, got: {program}"
+    );
+    assert!(
+        !program.contains("upstream-owner"),
+        "upstream owner should be replaced"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Contribute scenarios
 // ---------------------------------------------------------------------------
