@@ -53,6 +53,9 @@ impl RepoRef {
         let (owner, name) = value
             .split_once('/')
             .ok_or_else(|| eyre!("expected repo in `owner/name` format"))?;
+        if owner.is_empty() || name.is_empty() || name.contains('/') {
+            return Err(eyre!("expected repo in `owner/name` format, got `{value}`"));
+        }
         Ok(Self {
             owner: owner.to_string(),
             name: name.to_string(),
@@ -1152,6 +1155,24 @@ mod tests {
     #[test]
     fn from_user_input_rejects_bare_owner() {
         assert!(RepoRef::from_user_input("owner").is_err());
+    }
+
+    #[test]
+    fn from_user_input_rejects_extra_path_segments() {
+        assert!(RepoRef::from_user_input("owner/repo/tree/main").is_err());
+        assert!(RepoRef::from_user_input("owner/repo/pulls").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_extra_path_segments() {
+        assert!(RepoRef::parse("owner/repo/extra").is_err());
+        assert!(RepoRef::parse("owner/repo/tree/main").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_empty_parts() {
+        assert!(RepoRef::parse("/name").is_err());
+        assert!(RepoRef::parse("owner/").is_err());
     }
 
     #[test]
