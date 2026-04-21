@@ -29,7 +29,7 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            command: "claude -p --permission-mode bypassPermissions".to_string(),
+            command: "claude -p --dangerously-skip-permissions".to_string(),
         }
     }
 }

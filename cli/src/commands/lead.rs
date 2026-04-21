@@ -27,7 +27,7 @@ pub async fn run(ctx: &AppContext, args: &LeadArgs) -> Result<()> {
             args.overrides
                 .agent_command
                 .clone()
-                .unwrap_or_else(|| "claude -p --permission-mode bypassPermissions".to_string())
+                .unwrap_or_else(|| "claude -p --dangerously-skip-permissions".to_string())
         });
 
     eprintln!("Running lead loop as `{login}`");

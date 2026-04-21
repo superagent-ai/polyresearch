@@ -1825,9 +1825,10 @@ async fn policy_check_rejects_stale_ledger() {
 fn write_program_md(path: &PathBuf) {
     fs::write(
         path.join("PROGRAM.md"),
-        r#"# Research Program
+        format!(
+            r#"# Research Program
 
-cli_version: 0.5.0
+cli_version: {}
 lead_github_login: lead
 maintainer_github_login: maintainer
 metric_tolerance: 0.01
@@ -1846,6 +1847,8 @@ Test goal.
 
 - `PREPARE.md`
 "#,
+            env!("CARGO_PKG_VERSION")
+        ),
     )
     .unwrap();
 }
@@ -1880,7 +1883,7 @@ async fn bootstrap_writes_templates_when_missing() {
     assert!(results_path.exists());
 
     let program = fs::read_to_string(&program_path).unwrap();
-    assert!(program.contains("cli_version: 0.5.0"));
+    assert!(program.contains(&format!("cli_version: {}", env!("CARGO_PKG_VERSION"))));
     assert!(program.contains("Optimize latency"));
     assert!(program.contains("## Goal"));
     assert!(program.contains("## What you CAN modify"));
@@ -2355,9 +2358,10 @@ async fn contribute_uses_real_config_not_default() {
 
     fs::write(
         repo.path.join("PROGRAM.md"),
-        r#"# Research Program
+        format!(
+            r#"# Research Program
 
-cli_version: 0.5.0
+cli_version: {}
 lead_github_login: actual-lead
 maintainer_github_login: actual-maintainer
 metric_tolerance: 0.01
@@ -2376,6 +2380,8 @@ Test.
 
 - `PREPARE.md`
 "#,
+            env!("CARGO_PKG_VERSION")
+        ),
     )
     .unwrap();
 
