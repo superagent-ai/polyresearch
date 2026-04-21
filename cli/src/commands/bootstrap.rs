@@ -46,7 +46,8 @@ pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
 }
 
 pub(crate) fn repo_name_from_url(url: &str) -> String {
-    url.rsplit('/')
+    url.trim_end_matches('/')
+        .rsplit('/')
         .next()
         .unwrap_or("repo")
         .trim_end_matches(".git")
