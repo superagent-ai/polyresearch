@@ -53,6 +53,9 @@ impl RepoRef {
         let (owner, name) = value
             .split_once('/')
             .ok_or_else(|| eyre!("expected repo in `owner/name` format"))?;
+        if owner.is_empty() || name.is_empty() || name.contains('/') {
+            return Err(eyre!("expected repo in `owner/name` format, got `{value}`"));
+        }
         Ok(Self {
             owner: owner.to_string(),
             name: name.to_string(),
@@ -81,12 +84,30 @@ impl RepoRef {
     pub fn slug(&self) -> String {
         format!("{}/{}", self.owner, self.name)
     }
+
+    /// Accepts either a full GitHub URL or bare `owner/repo` shorthand.
+    pub fn from_user_input(input: &str) -> Result<Self> {
+        if let Some(repo) = Self::parse_url(input) {
+            return Ok(repo);
+        }
+        let trimmed = input.trim();
+        if trimmed.contains("://") || trimmed.starts_with("git@") {
+            return Err(eyre!("not a recognized GitHub URL: {input}"));
+        }
+        Self::parse(trimmed)
+    }
+
+    pub fn clone_url(&self) -> String {
+        format!("https://github.com/{}/{}.git", self.owner, self.name)
+    }
 }
 
 fn strip_github_prefix(url: &str) -> Option<&str> {
     let trimmed = url.trim().trim_end_matches(".git");
     const PREFIXES: &[&str] = &[
+        "https://www.github.com/",
         "https://github.com/",
+        "http://www.github.com/",
         "http://github.com/",
         "git@github.com:",
     ];
@@ -1087,5 +1108,85 @@ mod tests {
     fn parse_url_rejects_owner_only() {
         assert!(RepoRef::parse_url("https://github.com/owner").is_none());
         assert!(RepoRef::parse_url("https://github.com/owner/").is_none());
+    }
+
+    #[test]
+    fn parse_url_handles_www_github() {
+        let r = RepoRef::parse_url("https://www.github.com/owner/repo").unwrap();
+        assert_eq!(r.owner, "owner");
+        assert_eq!(r.name, "repo");
+    }
+
+    #[test]
+    fn parse_url_handles_http_www_github() {
+        let r = RepoRef::parse_url("http://www.github.com/owner/repo.git").unwrap();
+        assert_eq!(r.owner, "owner");
+        assert_eq!(r.name, "repo");
+    }
+
+    #[test]
+    fn from_user_input_accepts_shorthand() {
+        let r = RepoRef::from_user_input("alanzabihi/dotenv").unwrap();
+        assert_eq!(r.owner, "alanzabihi");
+        assert_eq!(r.name, "dotenv");
+    }
+
+    #[test]
+    fn from_user_input_accepts_https_url() {
+        let r = RepoRef::from_user_input("https://github.com/owner/repo").unwrap();
+        assert_eq!(r.owner, "owner");
+        assert_eq!(r.name, "repo");
+    }
+
+    #[test]
+    fn from_user_input_accepts_www_url() {
+        let r = RepoRef::from_user_input("https://www.github.com/owner/repo").unwrap();
+        assert_eq!(r.owner, "owner");
+        assert_eq!(r.name, "repo");
+    }
+
+    #[test]
+    fn from_user_input_accepts_ssh_url() {
+        let r = RepoRef::from_user_input("git@github.com:owner/repo.git").unwrap();
+        assert_eq!(r.owner, "owner");
+        assert_eq!(r.name, "repo");
+    }
+
+    #[test]
+    fn from_user_input_rejects_bare_owner() {
+        assert!(RepoRef::from_user_input("owner").is_err());
+    }
+
+    #[test]
+    fn from_user_input_rejects_extra_path_segments() {
+        assert!(RepoRef::from_user_input("owner/repo/tree/main").is_err());
+        assert!(RepoRef::from_user_input("owner/repo/pulls").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_extra_path_segments() {
+        assert!(RepoRef::parse("owner/repo/extra").is_err());
+        assert!(RepoRef::parse("owner/repo/tree/main").is_err());
+    }
+
+    #[test]
+    fn parse_rejects_empty_parts() {
+        assert!(RepoRef::parse("/name").is_err());
+        assert!(RepoRef::parse("owner/").is_err());
+    }
+
+    #[test]
+    fn from_user_input_rejects_non_github_urls() {
+        assert!(RepoRef::from_user_input("https://gitlab.com/owner/repo").is_err());
+        assert!(RepoRef::from_user_input("https://bitbucket.org/owner/repo").is_err());
+    }
+
+    #[test]
+    fn clone_url_produces_https() {
+        let r = RepoRef {
+            owner: "alanzabihi".to_string(),
+            name: "dotenv".to_string(),
+        };
+        assert_eq!(r.clone_url(), "https://github.com/alanzabihi/dotenv.git");
     }
 }
