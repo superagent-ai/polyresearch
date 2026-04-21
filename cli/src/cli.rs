@@ -220,8 +220,8 @@ pub struct BootstrapArgs {
     #[arg(long)]
     pub goal: Option<String>,
 
-    #[arg(long)]
-    pub pause_after_bootstrap: bool,
+    #[arg(long, short = 'y')]
+    pub yes: bool,
 
     #[command(flatten)]
     pub overrides: NodeOverrides,

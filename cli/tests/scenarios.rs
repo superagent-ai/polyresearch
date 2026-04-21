@@ -264,23 +264,22 @@ async fn scenario_bootstrap_fresh() {
             fork: None,
             no_fork: true,
             goal: Some("Optimize throughput".to_string()),
-            pause_after_bootstrap: true,
+            yes: false,
             overrides: NodeOverrides::default(),
         }),
     );
 
-    commands::bootstrap::run(
+    commands::bootstrap::scaffold(
         &ctx,
         &BootstrapArgs {
             url: "https://github.com/test/repo".to_string(),
             fork: None,
             no_fork: true,
             goal: Some("Optimize throughput".to_string()),
-            pause_after_bootstrap: true,
+            yes: false,
             overrides: NodeOverrides::default(),
         },
     )
-    .await
     .unwrap();
 
     assert!(repo.path.join("PROGRAM.md").exists(), "PROGRAM.md created");
@@ -326,23 +325,22 @@ async fn scenario_bootstrap_idempotent() {
             fork: None,
             no_fork: true,
             goal: None,
-            pause_after_bootstrap: true,
+            yes: false,
             overrides: NodeOverrides::default(),
         }),
     );
 
-    commands::bootstrap::run(
+    commands::bootstrap::scaffold(
         &ctx,
         &BootstrapArgs {
             url: "https://github.com/test/repo".to_string(),
             fork: None,
             no_fork: true,
             goal: None,
-            pause_after_bootstrap: true,
+            yes: false,
             overrides: NodeOverrides::default(),
         },
     )
-    .await
     .unwrap();
 
     let program = fs::read_to_string(repo.path.join("PROGRAM.md")).unwrap();

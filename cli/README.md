@@ -83,9 +83,10 @@ Bootstrap a new project:
 polyresearch bootstrap https://github.com/owner/repo
 polyresearch bootstrap https://github.com/owner/repo --fork myorg
 polyresearch bootstrap https://github.com/owner/repo --no-fork
+polyresearch bootstrap https://github.com/owner/repo --yes   # skip confirmation, spawn agent immediately
 ```
 
-Bootstrap auto-forks when you lack push access to the target repo. Use `--fork <org>` to fork to a specific organization, or `--no-fork` to clone directly.
+Bootstrap auto-forks when you lack push access to the target repo. Use `--fork <org>` to fork to a specific organization, or `--no-fork` to clone directly. After writing templates and initializing the node, bootstrap pauses so you can review `PROGRAM.md`, `PREPARE.md`, and `.polyresearch-node.toml` before spawning the bootstrap agent. Pass `--yes` (`-y`) to skip the confirmation.
 
 Run the lead loop:
 
@@ -244,7 +245,7 @@ Several flags accept a fixed set of values.
 
 #### `bootstrap`
 
-Auto-fork, write templates, init node, and spawn the setup agent.
+Auto-fork, write templates, init node, confirm, then spawn the bootstrap agent.
 
 Usage: `polyresearch bootstrap <url> [flags]`
 
@@ -253,7 +254,7 @@ Usage: `polyresearch bootstrap <url> [flags]`
 | `--fork <org>` | string | — | Fork to a specific organization |
 | `--no-fork` | bool | `false` | Clone directly without forking (conflicts with `--fork`) |
 | `--goal <text>` | string | — | Initial research goal |
-| `--pause-after-bootstrap` | bool | `false` | Exit after setup instead of starting the loop |
+| `--yes`, `-y` | bool | `false` | Skip confirmation and spawn the bootstrap agent immediately |
 
 Also accepts [node overrides](#node-overrides).
 
