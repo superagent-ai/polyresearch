@@ -14,9 +14,22 @@ use crate::state::{RepositoryState, ThesisPhase, ThesisState};
 use crate::worker::{self, ThesisWorker, WorkerContext, WorkerOutcome};
 
 pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
-    if let Some(url) = &args.url {
-        clone_repo(url, &ctx.repo_root)?;
-    }
+    let ctx = if let Some(url) = &args.url {
+        let repo_root = if ctx.repo_root.join(".git").exists() {
+            ctx.repo_root.clone()
+        } else {
+            let name = super::bootstrap::repo_name_from_url(url);
+            ctx.repo_root.join(name)
+        };
+        clone_repo(url, &repo_root)?;
+        std::borrow::Cow::Owned(AppContext {
+            repo_root,
+            ..ctx.clone()
+        })
+    } else {
+        std::borrow::Cow::Borrowed(ctx)
+    };
+    let ctx = ctx.as_ref();
 
     let config = ProtocolConfig::load(&ctx.repo_root)?;
     config.check_cli_version(env!("CARGO_PKG_VERSION"))?;

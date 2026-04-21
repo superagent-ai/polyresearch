@@ -11,31 +11,47 @@ use crate::config::NodeConfig;
 pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
     eprintln!("Bootstrapping polyresearch project from {}", args.url);
 
+    let repo_root = if ctx.repo_root.join(".git").exists() {
+        ctx.repo_root.clone()
+    } else {
+        let name = repo_name_from_url(&args.url);
+        ctx.repo_root.join(name)
+    };
+
     // Step 1: Clone or reuse
     if let Some(fork_owner) = &args.fork {
-        fork_and_clone(&args.url, fork_owner, &ctx.repo_root)?;
+        fork_and_clone(&args.url, fork_owner, &repo_root)?;
     } else {
-        clone_if_needed(&args.url, &ctx.repo_root)?;
+        clone_if_needed(&args.url, &repo_root)?;
     }
 
     // Step 2: Write templates
-    write_templates(&ctx.repo_root, args.goal.as_deref())?;
+    write_templates(&repo_root, args.goal.as_deref())?;
 
     // Step 3: Initialize node config
-    initialize_node(&ctx.repo_root)?;
+    initialize_node(&repo_root)?;
 
     // Step 4: Spawn agent for project-specific setup
     if !args.pause_after_bootstrap {
-        spawn_setup_agent(&ctx.repo_root)?;
+        spawn_setup_agent(&repo_root)?;
     } else {
         eprintln!("Pausing after bootstrap. Edit PROGRAM.md and PREPARE.md manually.");
     }
 
     // Step 5: Normalize PROGRAM.md
-    normalize_program_md(&ctx.repo_root)?;
+    normalize_program_md(&repo_root)?;
 
     eprintln!("Bootstrap complete.");
     Ok(())
+}
+
+pub(crate) fn repo_name_from_url(url: &str) -> String {
+    url.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("repo")
+        .trim_end_matches(".git")
+        .to_string()
 }
 
 fn fork_and_clone(url: &str, fork_owner: &str, repo_root: &Path) -> Result<()> {
@@ -72,8 +88,8 @@ fn fork_and_clone(url: &str, fork_owner: &str, repo_root: &Path) -> Result<()> {
         }
     }
 
-    let repo_name = url.rsplit('/').next().unwrap_or("repo").trim_end_matches(".git");
-    let fork_url = format!("https://github.com/{fork_owner}/{repo_name}.git");
+    let name = repo_name_from_url(url);
+    let fork_url = format!("https://github.com/{fork_owner}/{name}.git");
     clone_if_needed(&fork_url, repo_root)?;
 
     commands::run_git(
