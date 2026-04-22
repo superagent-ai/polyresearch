@@ -1359,6 +1359,18 @@ fn execute_decision_rebase_and_retry_on_merge_conflict() {
         !github.is_branch_deleted("thesis/99-test"),
         "branch should NOT be deleted on successful merge"
     );
+
+    // Verify the Decision comment records the post-rebase SHA, not the
+    // stale pre-rebase placeholder.
+    let pr_bodies = github.comment_bodies_on(80);
+    let decision_body = pr_bodies
+        .iter()
+        .find(|b| b.contains("polyresearch:decision"))
+        .expect("should have posted a decision comment");
+    assert!(
+        !decision_body.contains("sha-rebase"),
+        "decision comment should contain the post-rebase SHA, not the stale pre-rebase value"
+    );
 }
 
 #[test]

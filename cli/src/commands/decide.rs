@@ -213,11 +213,13 @@ pub struct DecisionExecuted {
     pub confirmations: u64,
 }
 
+/// Rebase the thesis branch onto origin/main and force-push.
+/// Returns the new HEAD SHA on success so callers can update protocol records.
 fn try_rebase_onto_main(
     repo_root: &PathBuf,
     head_ref_name: &str,
     pr_number: u64,
-) -> Result<()> {
+) -> Result<String> {
     run_git(repo_root, &["fetch", "origin", "main", head_ref_name])?;
 
     let temp_dir = std::env::temp_dir().join(format!("poly-rebase-{pr_number}"));
@@ -235,14 +237,15 @@ fn try_rebase_onto_main(
         &["worktree", "add", &temp_path, &remote_ref, "--detach"],
     )?;
 
-    let rebase_result = (|| -> Result<()> {
+    let rebase_result = (|| -> Result<String> {
         run_git(&temp_dir, &["checkout", "-B", head_ref_name, &remote_ref])?;
         run_git(&temp_dir, &["rebase", "origin/main"])?;
+        let new_sha = run_git(&temp_dir, &["rev-parse", "HEAD"])?;
         run_git(
             &temp_dir,
             &["push", "--force-with-lease", "origin", head_ref_name],
         )?;
-        Ok(())
+        Ok(new_sha)
     })();
 
     if rebase_result.is_err() {
@@ -279,6 +282,10 @@ pub fn execute_decision(
 ) -> Result<DecisionExecuted> {
     let result = match outcome {
         Outcome::Accepted => {
+            // Track the effective SHA: stays as-is for direct merge,
+            // updated to the post-rebase SHA if rebase was needed.
+            let mut effective_sha = candidate_sha.clone();
+
             let merge_ok = match github.merge_pull_request(pr_number) {
                 Ok(_) => true,
                 Err(merge_err) => {
@@ -287,15 +294,18 @@ pub fn execute_decision(
                             "Merge of PR #{pr_number} failed ({merge_err:#}), attempting rebase onto main"
                         );
                         match try_rebase_onto_main(root, head_ref_name, pr_number) {
-                            Ok(()) => match github.merge_pull_request(pr_number) {
-                                Ok(_) => true,
-                                Err(retry_err) => {
-                                    eprintln!(
-                                        "Merge retry after rebase failed ({retry_err:#}), falling back to stale"
-                                    );
-                                    false
+                            Ok(new_sha) => {
+                                effective_sha = new_sha;
+                                match github.merge_pull_request(pr_number) {
+                                    Ok(_) => true,
+                                    Err(retry_err) => {
+                                        eprintln!(
+                                            "Merge retry after rebase failed ({retry_err:#}), falling back to stale"
+                                        );
+                                        false
+                                    }
                                 }
-                            },
+                            }
                             Err(rebase_err) => {
                                 eprintln!(
                                     "Rebase failed ({rebase_err:#}), falling back to stale decision"
@@ -315,7 +325,7 @@ pub fn execute_decision(
             if merge_ok {
                 let comment = ProtocolComment::Decision {
                     thesis: thesis_number,
-                    candidate_sha,
+                    candidate_sha: effective_sha,
                     outcome,
                     confirmations,
                 };
