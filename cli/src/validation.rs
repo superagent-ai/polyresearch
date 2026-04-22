@@ -75,6 +75,7 @@ pub struct ValidAttemptRecord {
     pub summary: String,
     pub author: String,
     pub created_at: DateTime<Utc>,
+    pub comment_id: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -141,6 +142,7 @@ pub struct IssueValidation {
     pub active_claims: Vec<ValidClaimRecord>,
     pub releases: Vec<ValidReleaseRecord>,
     pub attempts: Vec<ValidAttemptRecord>,
+    pub invalidated_attempt_branches: BTreeSet<String>,
     pub findings: Vec<AuditFinding>,
 }
 
@@ -687,12 +689,23 @@ pub fn validate_issue(
                         summary: summary.clone(),
                         author: comment.author.clone(),
                         created_at: comment.created_at,
+                        comment_id: comment.id,
                     });
                 }
             }
             _ => {}
         }
     }
+
+    let mut invalidated_attempt_branches = BTreeSet::new();
+    attempts.retain(|attempt| {
+        if acknowledged_comment_ids.contains(&attempt.comment_id) {
+            invalidated_attempt_branches.insert(attempt.branch.clone());
+            false
+        } else {
+            true
+        }
+    });
 
     findings.retain(|finding| {
         finding
@@ -714,6 +727,7 @@ pub fn validate_issue(
         active_claims,
         releases,
         attempts,
+        invalidated_attempt_branches,
         findings,
     }
 }
