@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 use color_eyre::eyre::{Result, eyre};
 use serde::Serialize;
@@ -7,7 +8,7 @@ use std::sync::Arc;
 
 use crate::cli::PrArgs;
 use crate::commands::guards::{ensure_current_ledger, ensure_lead, require_decidable_pr};
-use crate::commands::{AppContext, print_value};
+use crate::commands::{AppContext, print_value, run_git};
 use crate::comments::{Observation, Outcome, ProtocolComment};
 use crate::github::GitHubApi;
 use crate::ledger::Ledger;
@@ -62,9 +63,11 @@ pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
     let result = if !ctx.cli.dry_run {
         execute_decision(
             &ctx.github,
+            Some(&ctx.repo_root),
             args.pr,
             thesis.issue.number,
             candidate_sha,
+            &pr_state.pr.head_ref_name,
             outcome,
             confirmations,
             ctx.config.required_confirmations,
@@ -210,43 +213,135 @@ pub struct DecisionExecuted {
     pub confirmations: u64,
 }
 
+/// Rebase the thesis branch onto origin/main and force-push.
+/// Returns the new HEAD SHA on success so callers can update protocol records.
+fn try_rebase_onto_main(
+    repo_root: &PathBuf,
+    head_ref_name: &str,
+    pr_number: u64,
+) -> Result<String> {
+    run_git(repo_root, &["fetch", "origin", "main", head_ref_name])?;
+
+    let temp_dir = std::env::temp_dir().join(format!("poly-rebase-{pr_number}"));
+    let temp_path = temp_dir.to_string_lossy().into_owned();
+
+    // Clean up any stale worktree from a prior crash (follows the
+    // cleanup-on-entry pattern used by worker::create_baseline_worktree).
+    let _ = run_git(repo_root, &["worktree", "remove", &temp_path, "--force"]);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let _ = run_git(repo_root, &["worktree", "prune"]);
+
+    let remote_ref = format!("origin/{head_ref_name}");
+    run_git(
+        repo_root,
+        &["worktree", "add", &temp_path, &remote_ref, "--detach"],
+    )?;
+
+    let rebase_result = (|| -> Result<String> {
+        run_git(&temp_dir, &["checkout", "-B", head_ref_name, &remote_ref])?;
+        run_git(&temp_dir, &["rebase", "origin/main"])?;
+        let new_sha = run_git(&temp_dir, &["rev-parse", "HEAD"])?;
+        run_git(
+            &temp_dir,
+            &["push", "--force-with-lease", "origin", head_ref_name],
+        )?;
+        Ok(new_sha)
+    })();
+
+    if rebase_result.is_err() {
+        let _ = run_git(&temp_dir, &["rebase", "--abort"]);
+    }
+    let _ = run_git(repo_root, &["worktree", "remove", &temp_path, "--force"]);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    rebase_result
+}
+
+fn close_pr_and_cleanup(
+    github: &Arc<dyn GitHubApi>,
+    pr_number: u64,
+    head_ref_name: &str,
+) -> Result<()> {
+    github.close_pull_request(pr_number)?;
+    if let Err(e) = github.delete_ref(head_ref_name) {
+        eprintln!("Failed to delete branch {head_ref_name}: {e:#}");
+    }
+    Ok(())
+}
+
 pub fn execute_decision(
     github: &Arc<dyn GitHubApi>,
+    repo_root: Option<&PathBuf>,
     pr_number: u64,
     thesis_number: u64,
     candidate_sha: String,
+    head_ref_name: &str,
     outcome: Outcome,
     confirmations: u64,
     required_confirmations: u64,
 ) -> Result<DecisionExecuted> {
     let result = match outcome {
         Outcome::Accepted => {
-            match github.merge_pull_request(pr_number) {
-                Ok(_) => {
-                    let comment = ProtocolComment::Decision {
-                        thesis: thesis_number,
-                        candidate_sha,
-                        outcome,
-                        confirmations,
-                    };
-                    github.post_issue_comment(pr_number, &comment.render())?;
-                    github.close_issue(thesis_number)?;
-                    DecisionExecuted { outcome, confirmations }
-                }
+            // Track the effective SHA: stays as-is for direct merge,
+            // updated to the post-rebase SHA if rebase was needed.
+            let mut effective_sha = candidate_sha.clone();
+
+            let merge_ok = match github.merge_pull_request(pr_number) {
+                Ok(_) => true,
                 Err(merge_err) => {
-                    eprintln!(
-                        "Merge of PR #{pr_number} failed ({merge_err:#}), falling back to stale decision"
-                    );
-                    let comment = ProtocolComment::Decision {
-                        thesis: thesis_number,
-                        candidate_sha,
-                        outcome: Outcome::Stale,
-                        confirmations: 0,
-                    };
-                    github.post_issue_comment(pr_number, &comment.render())?;
-                    github.close_pull_request(pr_number)?;
-                    DecisionExecuted { outcome: Outcome::Stale, confirmations: 0 }
+                    if let Some(root) = repo_root {
+                        eprintln!(
+                            "Merge of PR #{pr_number} failed ({merge_err:#}), attempting rebase onto main"
+                        );
+                        match try_rebase_onto_main(root, head_ref_name, pr_number) {
+                            Ok(new_sha) => {
+                                effective_sha = new_sha;
+                                match github.merge_pull_request(pr_number) {
+                                    Ok(_) => true,
+                                    Err(retry_err) => {
+                                        eprintln!(
+                                            "Merge retry after rebase failed ({retry_err:#}), falling back to stale"
+                                        );
+                                        false
+                                    }
+                                }
+                            }
+                            Err(rebase_err) => {
+                                eprintln!(
+                                    "Rebase failed ({rebase_err:#}), falling back to stale decision"
+                                );
+                                false
+                            }
+                        }
+                    } else {
+                        eprintln!(
+                            "Merge of PR #{pr_number} failed ({merge_err:#}), falling back to stale decision"
+                        );
+                        false
+                    }
                 }
+            };
+
+            if merge_ok {
+                let comment = ProtocolComment::Decision {
+                    thesis: thesis_number,
+                    candidate_sha: effective_sha,
+                    outcome,
+                    confirmations,
+                };
+                github.post_issue_comment(pr_number, &comment.render())?;
+                github.close_issue(thesis_number)?;
+                DecisionExecuted { outcome, confirmations }
+            } else {
+                let comment = ProtocolComment::Decision {
+                    thesis: thesis_number,
+                    candidate_sha,
+                    outcome: Outcome::Stale,
+                    confirmations: 0,
+                };
+                github.post_issue_comment(pr_number, &comment.render())?;
+                close_pr_and_cleanup(github, pr_number, head_ref_name)?;
+                DecisionExecuted { outcome: Outcome::Stale, confirmations: 0 }
             }
         }
         Outcome::InfraFailure | Outcome::Stale => {
@@ -257,7 +352,7 @@ pub fn execute_decision(
                 confirmations,
             };
             github.post_issue_comment(pr_number, &comment.render())?;
-            github.close_pull_request(pr_number)?;
+            close_pr_and_cleanup(github, pr_number, head_ref_name)?;
             DecisionExecuted { outcome, confirmations }
         }
         Outcome::NonImprovement | Outcome::Disagreement | Outcome::PolicyRejection => {
@@ -268,7 +363,7 @@ pub fn execute_decision(
                 confirmations,
             };
             github.post_issue_comment(pr_number, &comment.render())?;
-            github.close_pull_request(pr_number)?;
+            close_pr_and_cleanup(github, pr_number, head_ref_name)?;
             if required_confirmations > 0 || !matches!(outcome, Outcome::NonImprovement) {
                 github.close_issue(thesis_number)?;
             }

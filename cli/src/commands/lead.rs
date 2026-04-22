@@ -225,9 +225,11 @@ pub fn decide_ready_prs(ctx: &AppContext, config: &ProtocolConfig, repo_state: &
 
             let result = decide::execute_decision(
                 &ctx.github,
+                Some(&ctx.repo_root),
                 pr_state.pr.number,
                 thesis.issue.number,
                 candidate_sha,
+                &pr_state.pr.head_ref_name,
                 outcome,
                 confirmations,
                 config.required_confirmations,
