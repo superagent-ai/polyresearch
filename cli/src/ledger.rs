@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -95,9 +96,18 @@ impl Ledger {
     }
 
     pub fn best_accepted_metric(&self, config: &ProtocolConfig) -> Option<f64> {
+        self.best_accepted_metric_excluding(config, &BTreeSet::new())
+    }
+
+    pub fn best_accepted_metric_excluding(
+        &self,
+        config: &ProtocolConfig,
+        excluded_branches: &BTreeSet<String>,
+    ) -> Option<f64> {
         self.rows
             .iter()
             .filter(|row| row.status == "accepted")
+            .filter(|row| !excluded_branches.contains(&row.attempt))
             .filter_map(|row| row.metric.parse::<f64>().ok())
             .fold(None, |current, metric| {
                 Some(match current {

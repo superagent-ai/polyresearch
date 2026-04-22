@@ -1687,6 +1687,7 @@ fn make_repo_state(
         active_nodes: vec![],
         queue_depth,
         current_best_accepted_metric,
+        invalidated_attempt_branches: std::collections::BTreeSet::new(),
         recent_events: vec![],
         audit_findings: vec![],
     }
@@ -1718,6 +1719,7 @@ fn make_approved_thesis(number: u64) -> ThesisState {
         attempts: vec![],
         pull_requests: vec![],
         best_attempt_metric: None,
+        invalidated_attempt_branches: std::collections::BTreeSet::new(),
         findings: vec![],
     }
 }
@@ -1747,6 +1749,7 @@ fn make_submitted_thesis(number: u64) -> ThesisState {
         attempts: vec![],
         pull_requests: vec![],
         best_attempt_metric: None,
+        invalidated_attempt_branches: std::collections::BTreeSet::new(),
         findings: vec![],
     }
 }
@@ -2573,6 +2576,7 @@ fn contribute_claimable_excludes_no_improvement_releases() {
         attempts: vec![],
         pull_requests: vec![],
         best_attempt_metric: None,
+        invalidated_attempt_branches: std::collections::BTreeSet::new(),
         findings: vec![],
     };
 
@@ -2613,6 +2617,7 @@ fn contribute_claimable_allows_infra_failure_reclaim() {
         attempts: vec![],
         pull_requests: vec![],
         best_attempt_metric: None,
+        invalidated_attempt_branches: std::collections::BTreeSet::new(),
         findings: vec![],
     };
 
@@ -3121,9 +3126,11 @@ fn worker_format_prior_attempts_with_data() {
             summary: "RMSNorm swap".to_string(),
             author: "alice".to_string(),
             created_at: chrono::Utc::now(),
+            comment_id: 0,
         }],
         pull_requests: vec![],
         best_attempt_metric: Some(0.95),
+        invalidated_attempt_branches: std::collections::BTreeSet::new(),
         findings: vec![],
     };
 
@@ -4638,6 +4645,7 @@ fn ledger_detects_missing_decided_row() {
             summary: "test".to_string(),
             author: "alice".to_string(),
             created_at: now - chrono::Duration::hours(1),
+            comment_id: 0,
         }],
         pull_requests: vec![PullRequestState {
             pr: PullRequest {
@@ -4670,6 +4678,7 @@ fn ledger_detects_missing_decided_row() {
             findings: vec![],
         }],
         best_attempt_metric: Some(0.95),
+        invalidated_attempt_branches: std::collections::BTreeSet::new(),
         findings: vec![],
     };
 
@@ -4719,6 +4728,7 @@ fn ledger_skips_open_attempts_with_no_decision() {
             summary: "test".to_string(),
             author: "alice".to_string(),
             created_at: now - chrono::Duration::minutes(30),
+            comment_id: 0,
         }],
         pull_requests: vec![PullRequestState {
             pr: PullRequest {
@@ -4746,6 +4756,7 @@ fn ledger_skips_open_attempts_with_no_decision() {
             findings: vec![],
         }],
         best_attempt_metric: Some(0.95),
+        invalidated_attempt_branches: std::collections::BTreeSet::new(),
         findings: vec![],
     };
 
@@ -4792,9 +4803,11 @@ fn ledger_detects_discarded_after_release() {
             summary: "no improvement".to_string(),
             author: "alice".to_string(),
             created_at: now - chrono::Duration::minutes(20),
+            comment_id: 0,
         }],
         pull_requests: vec![],
         best_attempt_metric: None,
+        invalidated_attempt_branches: std::collections::BTreeSet::new(),
         findings: vec![],
     };
 
@@ -4975,6 +4988,7 @@ fn claimability_filter_is_per_node_for_no_improvement() {
         attempts: vec![],
         pull_requests: vec![],
         best_attempt_metric: None,
+        invalidated_attempt_branches: std::collections::BTreeSet::new(),
         findings: vec![],
     };
 
@@ -5580,6 +5594,634 @@ fn computed_findings_without_comment_id_do_not_block_when_info() {
     );
 }
 
+// ===========================================================================
+// Category: Acknowledged-invalid attempts must not poison best-metric baseline
+// ===========================================================================
+
+fn make_decidable_state_with_poisoned_prior(
+    thesis_number: u64,
+    pr_number: u64,
+    current_metric: f64,
+    baseline: f64,
+    prior_valid_metric: f64,
+    poisoned_metric: f64,
+    lead: &str,
+) -> (
+    Vec<Issue>,
+    HashMap<u64, Vec<IssueComment>>,
+    Vec<PullRequest>,
+    HashMap<u64, Vec<IssueComment>>,
+) {
+    let now = chrono::Utc::now();
+
+    let prior_thesis_number = thesis_number + 100;
+    let prior_branch = format!("thesis/{prior_thesis_number}-prior");
+    let poisoned_branch = format!("thesis/{prior_thesis_number}-poisoned");
+
+    let prior_issue = Issue {
+        number: prior_thesis_number,
+        title: format!("Prior thesis {prior_thesis_number}"),
+        body: Some("Prior thesis with poisoned attempt.".to_string()),
+        state: "CLOSED".to_string(),
+        labels: vec![Label {
+            name: "thesis".to_string(),
+        }],
+        created_at: now - chrono::Duration::hours(10),
+        closed_at: Some(now - chrono::Duration::hours(4)),
+        author: Some(Author {
+            login: lead.to_string(),
+        }),
+        url: Some(format!(
+            "https://github.com/test/repo/issues/{prior_thesis_number}"
+        )),
+    };
+
+    let prior_approval = ProtocolComment::Approval {
+        thesis: prior_thesis_number,
+    };
+    let prior_claim = ProtocolComment::Claim {
+        thesis: prior_thesis_number,
+        node: "worker-a".to_string(),
+    };
+    let prior_attempt = ProtocolComment::Attempt {
+        thesis: prior_thesis_number,
+        branch: prior_branch.clone(),
+        metric: prior_valid_metric,
+        baseline_metric: Some(baseline),
+        observation: Observation::Improved,
+        summary: "valid prior attempt".to_string(),
+        annotations: None,
+    };
+    let prior_release = ProtocolComment::Release {
+        thesis: prior_thesis_number,
+        node: "worker-a".to_string(),
+        reason: ReleaseReason::NoImprovement,
+    };
+    let poisoned_claim = ProtocolComment::Claim {
+        thesis: prior_thesis_number,
+        node: "worker-b".to_string(),
+    };
+    let poisoned_attempt = ProtocolComment::Attempt {
+        thesis: prior_thesis_number,
+        branch: poisoned_branch.clone(),
+        metric: poisoned_metric,
+        baseline_metric: Some(baseline),
+        observation: Observation::Improved,
+        summary: "anomalous invalid attempt".to_string(),
+        annotations: None,
+    };
+    let acknowledge = ProtocolComment::AdminNote {
+        action: "acknowledge_invalid".to_string(),
+        target: format!("issue #{prior_thesis_number}"),
+        note: "Anomalous metric from node without valid claim".to_string(),
+        related_comment_id: Some(prior_thesis_number * 100 + 5),
+    };
+
+    let prior_issue_comments = vec![
+        IssueComment {
+            id: prior_thesis_number * 100,
+            body: prior_approval.render(),
+            user: CommentUser {
+                login: lead.to_string(),
+            },
+            created_at: now - chrono::Duration::hours(9),
+            updated_at: None,
+        },
+        IssueComment {
+            id: prior_thesis_number * 100 + 1,
+            body: prior_claim.render(),
+            user: CommentUser {
+                login: "contributor-a".to_string(),
+            },
+            created_at: now - chrono::Duration::hours(8),
+            updated_at: None,
+        },
+        IssueComment {
+            id: prior_thesis_number * 100 + 2,
+            body: prior_attempt.render(),
+            user: CommentUser {
+                login: "contributor-a".to_string(),
+            },
+            created_at: now - chrono::Duration::hours(7),
+            updated_at: None,
+        },
+        IssueComment {
+            id: prior_thesis_number * 100 + 3,
+            body: prior_release.render(),
+            user: CommentUser {
+                login: "contributor-a".to_string(),
+            },
+            created_at: now - chrono::Duration::hours(6),
+            updated_at: None,
+        },
+        IssueComment {
+            id: prior_thesis_number * 100 + 4,
+            body: poisoned_claim.render(),
+            user: CommentUser {
+                login: "contributor-b".to_string(),
+            },
+            created_at: now - chrono::Duration::hours(5) + chrono::Duration::minutes(10),
+            updated_at: None,
+        },
+        IssueComment {
+            id: prior_thesis_number * 100 + 5,
+            body: poisoned_attempt.render(),
+            user: CommentUser {
+                login: "contributor-b".to_string(),
+            },
+            created_at: now - chrono::Duration::hours(5) + chrono::Duration::minutes(20),
+            updated_at: None,
+        },
+        IssueComment {
+            id: prior_thesis_number * 100 + 6,
+            body: acknowledge.render(),
+            user: CommentUser {
+                login: lead.to_string(),
+            },
+            created_at: now - chrono::Duration::hours(4) + chrono::Duration::minutes(30),
+            updated_at: None,
+        },
+    ];
+
+    let prior_pr = PullRequest {
+        number: pr_number + 100,
+        title: format!("Thesis #{prior_thesis_number}: prior valid"),
+        body: Some(format!("References #{prior_thesis_number}")),
+        state: "MERGED".to_string(),
+        head_ref_name: prior_branch,
+        head_ref_oid: Some("def456".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: now - chrono::Duration::hours(7),
+        closed_at: Some(now - chrono::Duration::hours(4)),
+        merged_at: Some(now - chrono::Duration::hours(4)),
+        author: Some(Author {
+            login: "contributor-a".to_string(),
+        }),
+        url: Some(format!(
+            "https://github.com/test/repo/pull/{}",
+            pr_number + 100
+        )),
+        mergeable: None,
+    };
+
+    let prior_decision = ProtocolComment::Decision {
+        thesis: prior_thesis_number,
+        candidate_sha: "def456".to_string(),
+        outcome: Outcome::Accepted,
+        confirmations: 0,
+    };
+    let prior_policy_pass = ProtocolComment::PolicyPass {
+        thesis: prior_thesis_number,
+        candidate_sha: "def456".to_string(),
+    };
+    let prior_pr_comments = vec![
+        IssueComment {
+            id: (pr_number + 100) * 100,
+            body: prior_policy_pass.render(),
+            user: CommentUser {
+                login: lead.to_string(),
+            },
+            created_at: now - chrono::Duration::hours(5),
+            updated_at: None,
+        },
+        IssueComment {
+            id: (pr_number + 100) * 100 + 1,
+            body: prior_decision.render(),
+            user: CommentUser {
+                login: lead.to_string(),
+            },
+            created_at: now - chrono::Duration::hours(4),
+            updated_at: None,
+        },
+    ];
+
+    let current_branch = format!("thesis/{thesis_number}-current");
+    let current_issue = Issue {
+        number: thesis_number,
+        title: format!("Current thesis {thesis_number}"),
+        body: Some("Current thesis.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label {
+            name: "thesis".to_string(),
+        }],
+        created_at: now - chrono::Duration::hours(3),
+        closed_at: None,
+        author: Some(Author {
+            login: lead.to_string(),
+        }),
+        url: Some(format!(
+            "https://github.com/test/repo/issues/{thesis_number}"
+        )),
+    };
+
+    let current_approval = ProtocolComment::Approval {
+        thesis: thesis_number,
+    };
+    let current_claim = ProtocolComment::Claim {
+        thesis: thesis_number,
+        node: "worker-c".to_string(),
+    };
+    let current_attempt = ProtocolComment::Attempt {
+        thesis: thesis_number,
+        branch: current_branch.clone(),
+        metric: current_metric,
+        baseline_metric: Some(baseline),
+        observation: Observation::Improved,
+        summary: "current attempt".to_string(),
+        annotations: None,
+    };
+
+    let current_issue_comments = vec![
+        IssueComment {
+            id: thesis_number * 100,
+            body: current_approval.render(),
+            user: CommentUser {
+                login: lead.to_string(),
+            },
+            created_at: now - chrono::Duration::hours(2),
+            updated_at: None,
+        },
+        IssueComment {
+            id: thesis_number * 100 + 1,
+            body: current_claim.render(),
+            user: CommentUser {
+                login: "contributor-c".to_string(),
+            },
+            created_at: now - chrono::Duration::minutes(90),
+            updated_at: None,
+        },
+        IssueComment {
+            id: thesis_number * 100 + 2,
+            body: current_attempt.render(),
+            user: CommentUser {
+                login: "contributor-c".to_string(),
+            },
+            created_at: now - chrono::Duration::minutes(80),
+            updated_at: None,
+        },
+    ];
+
+    let current_pr = PullRequest {
+        number: pr_number,
+        title: format!("Thesis #{thesis_number}: current"),
+        body: Some(format!("References #{thesis_number}")),
+        state: "OPEN".to_string(),
+        head_ref_name: current_branch,
+        head_ref_oid: Some("abc123".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: now - chrono::Duration::minutes(70),
+        closed_at: None,
+        merged_at: None,
+        author: Some(Author {
+            login: "contributor-c".to_string(),
+        }),
+        url: Some(format!("https://github.com/test/repo/pull/{pr_number}")),
+        mergeable: None,
+    };
+
+    let current_policy_pass = ProtocolComment::PolicyPass {
+        thesis: thesis_number,
+        candidate_sha: "abc123".to_string(),
+    };
+    let current_pr_comments = vec![IssueComment {
+        id: pr_number * 100,
+        body: current_policy_pass.render(),
+        user: CommentUser {
+            login: lead.to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(5),
+        updated_at: None,
+    }];
+
+    let issues = vec![prior_issue, current_issue];
+    let mut issue_comments = HashMap::new();
+    issue_comments.insert(prior_thesis_number, prior_issue_comments);
+    issue_comments.insert(thesis_number, current_issue_comments);
+
+    let prs = vec![prior_pr, current_pr];
+    let mut pr_comments = HashMap::new();
+    pr_comments.insert(pr_number + 100, prior_pr_comments);
+    pr_comments.insert(pr_number, current_pr_comments);
+
+    (issues, issue_comments, prs, pr_comments)
+}
+
+#[tokio::test]
+async fn decide_excludes_acknowledged_invalid_from_best_metric() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("decide-excludes-ack-invalid");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(
+        repo.path.join("results.tsv"),
+        "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n\
+         #101\tthesis/101-prior\t17658.0000\t15000.0000\taccepted\tvalid prior attempt\n\
+         #101\tthesis/101-poisoned\t218000.0000\t15000.0000\taccepted\tanomalous invalid attempt\n",
+    )
+    .unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let (issues, ic, prs, pc) = make_decidable_state_with_poisoned_prior(
+        1,     // thesis_number (current)
+        50,    // pr_number (current)
+        20421.0, // current_metric
+        15000.0, // baseline
+        17658.0, // prior_valid_metric
+        218000.0, // poisoned_metric
+        "lead",
+    );
+    let mock = Arc::new(MockGitHubClient::new("lead", issues, ic, prs, pc));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        "lead",
+        false,
+        Commands::Decide(PrArgs { pr: 50 }),
+    );
+
+    commands::decide::run(&ctx, &PrArgs { pr: 50 })
+        .await
+        .unwrap();
+
+    assert!(
+        mock.merged_prs.lock().unwrap().contains(&50),
+        "PR should be merged: 20421 > 17658 (valid best), not compared against 218000 (acknowledged-invalid)"
+    );
+}
+
+#[tokio::test]
+async fn decide_best_metric_uses_only_valid_accepted() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("decide-valid-accepted-only");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(
+        repo.path.join("results.tsv"),
+        "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n\
+         #101\tthesis/101-prior\t200.0000\t50.0000\taccepted\tsecond valid attempt\n\
+         #101\tthesis/101-poisoned\t500.0000\t50.0000\taccepted\tanomalous invalid attempt\n",
+    )
+    .unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let (issues, ic, prs, pc) = make_decidable_state_with_poisoned_prior(
+        1,     // thesis_number
+        50,    // pr_number
+        250.0, // current_metric
+        50.0,  // baseline
+        200.0, // prior_valid_metric
+        500.0, // poisoned_metric
+        "lead",
+    );
+    let mock = Arc::new(MockGitHubClient::new("lead", issues, ic, prs, pc));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        "lead",
+        false,
+        Commands::Decide(PrArgs { pr: 50 }),
+    );
+
+    commands::decide::run(&ctx, &PrArgs { pr: 50 })
+        .await
+        .unwrap();
+
+    assert!(
+        mock.merged_prs.lock().unwrap().contains(&50),
+        "PR should be merged: 250 > 200 (valid best), not compared against 500 (acknowledged-invalid)"
+    );
+}
+
+#[tokio::test]
+async fn decide_falls_back_to_baseline_when_only_prior_was_invalid() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("decide-fallback-baseline");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(
+        repo.path.join("results.tsv"),
+        "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n",
+    )
+    .unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let now = chrono::Utc::now();
+    let thesis_number: u64 = 13;
+    let pr_number: u64 = 60;
+    let branch = format!("thesis/{thesis_number}-test");
+
+    let issue = Issue {
+        number: thesis_number,
+        title: format!("Thesis {thesis_number}"),
+        body: Some("Test thesis.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label {
+            name: "thesis".to_string(),
+        }],
+        created_at: now - chrono::Duration::hours(5),
+        closed_at: None,
+        author: Some(Author {
+            login: "lead".to_string(),
+        }),
+        url: Some(format!(
+            "https://github.com/test/repo/issues/{thesis_number}"
+        )),
+    };
+
+    let approval = ProtocolComment::Approval {
+        thesis: thesis_number,
+    };
+    let claim = ProtocolComment::Claim {
+        thesis: thesis_number,
+        node: "worker-a".to_string(),
+    };
+    let attempt = ProtocolComment::Attempt {
+        thesis: thesis_number,
+        branch: format!("thesis/{thesis_number}-poisoned"),
+        metric: 999.0,
+        baseline_metric: Some(50.0),
+        observation: Observation::Improved,
+        summary: "anomalous attempt".to_string(),
+        annotations: None,
+    };
+    let release = ProtocolComment::Release {
+        thesis: thesis_number,
+        node: "worker-a".to_string(),
+        reason: ReleaseReason::NoImprovement,
+    };
+    let acknowledge = ProtocolComment::AdminNote {
+        action: "acknowledge_invalid".to_string(),
+        target: format!("issue #{thesis_number}"),
+        note: "Invalid attempt".to_string(),
+        related_comment_id: Some(thesis_number * 100 + 2),
+    };
+    let claim2 = ProtocolComment::Claim {
+        thesis: thesis_number,
+        node: "worker-b".to_string(),
+    };
+    let real_attempt = ProtocolComment::Attempt {
+        thesis: thesis_number,
+        branch: branch.clone(),
+        metric: 75.0,
+        baseline_metric: Some(50.0),
+        observation: Observation::Improved,
+        summary: "real attempt".to_string(),
+        annotations: None,
+    };
+
+    let issue_comments = vec![
+        IssueComment {
+            id: thesis_number * 100,
+            body: approval.render(),
+            user: CommentUser {
+                login: "lead".to_string(),
+            },
+            created_at: now - chrono::Duration::hours(7),
+            updated_at: None,
+        },
+        IssueComment {
+            id: thesis_number * 100 + 1,
+            body: claim.render(),
+            user: CommentUser {
+                login: "contributor".to_string(),
+            },
+            created_at: now - chrono::Duration::hours(6),
+            updated_at: None,
+        },
+        IssueComment {
+            id: thesis_number * 100 + 2,
+            body: attempt.render(),
+            user: CommentUser {
+                login: "contributor".to_string(),
+            },
+            created_at: now - chrono::Duration::hours(5),
+            updated_at: None,
+        },
+        IssueComment {
+            id: thesis_number * 100 + 3,
+            body: release.render(),
+            user: CommentUser {
+                login: "contributor".to_string(),
+            },
+            created_at: now - chrono::Duration::hours(4),
+            updated_at: None,
+        },
+        IssueComment {
+            id: thesis_number * 100 + 4,
+            body: acknowledge.render(),
+            user: CommentUser {
+                login: "lead".to_string(),
+            },
+            created_at: now - chrono::Duration::hours(3),
+            updated_at: None,
+        },
+        IssueComment {
+            id: thesis_number * 100 + 5,
+            body: claim2.render(),
+            user: CommentUser {
+                login: "contributor2".to_string(),
+            },
+            created_at: now - chrono::Duration::hours(2),
+            updated_at: None,
+        },
+        IssueComment {
+            id: thesis_number * 100 + 6,
+            body: real_attempt.render(),
+            user: CommentUser {
+                login: "contributor2".to_string(),
+            },
+            created_at: now - chrono::Duration::minutes(90),
+            updated_at: None,
+        },
+    ];
+
+    let pr = PullRequest {
+        number: pr_number,
+        title: format!("Thesis #{thesis_number}: real attempt"),
+        body: Some(format!("References #{thesis_number}")),
+        state: "OPEN".to_string(),
+        head_ref_name: branch,
+        head_ref_oid: Some("abc123".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: now - chrono::Duration::minutes(80),
+        closed_at: None,
+        merged_at: None,
+        author: Some(Author {
+            login: "contributor2".to_string(),
+        }),
+        url: Some(format!("https://github.com/test/repo/pull/{pr_number}")),
+        mergeable: None,
+    };
+
+    let policy_pass = ProtocolComment::PolicyPass {
+        thesis: thesis_number,
+        candidate_sha: "abc123".to_string(),
+    };
+    let pr_comments = vec![IssueComment {
+        id: pr_number * 100,
+        body: policy_pass.render(),
+        user: CommentUser {
+            login: "lead".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(5),
+        updated_at: None,
+    }];
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(thesis_number, issue_comments)]),
+        vec![pr],
+        HashMap::from([(pr_number, pr_comments)]),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        "lead",
+        false,
+        Commands::Decide(PrArgs { pr: pr_number }),
+    );
+
+    commands::decide::run(&ctx, &PrArgs { pr: pr_number })
+        .await
+        .unwrap();
+
+    assert!(
+        mock.merged_prs.lock().unwrap().contains(&pr_number),
+        "PR should be merged: only prior attempt was acknowledged-invalid, so comparison falls back to baseline (75 > 50)"
+    );
+}
+
+#[test]
+fn admin_note_acknowledge_invalid_format_detected() {
+    let body = "Polyresearch admin repair: Acknowledge anomalous attempt.\n\n\
+                <!-- polyresearch:admin-note\n\
+                action: acknowledge_invalid\n\
+                target: issue #1\n\
+                note: Acknowledge anomalous attempt.\n\
+                related_comment_id: 105\n\
+                -->";
+    let parsed = ProtocolComment::parse(body).unwrap();
+    assert!(parsed.is_some(), "admin-note should be parsed");
+    match parsed.unwrap() {
+        ProtocolComment::AdminNote {
+            action,
+            target,
+            note,
+            related_comment_id,
+        } => {
+            assert_eq!(action, "acknowledge_invalid");
+            assert_eq!(target, "issue #1");
+            assert_eq!(note, "Acknowledge anomalous attempt.");
+            assert_eq!(related_comment_id, Some(105));
+        }
+        other => panic!("expected AdminNote, got: {other:?}"),
+    }
+}
+
 fn load_issue_fixture(name: &str) -> IssueFixture {
     serde_json::from_str(include_fixture(name)).unwrap()
 }
@@ -5612,6 +6254,9 @@ fn include_fixture(name: &str) -> &'static str {
         }
         "closed_improved_thesis_issue.json" => {
             include_str!("fixtures/closed_improved_thesis_issue.json")
+        }
+        "poisoned_baseline_issue.json" => {
+            include_str!("fixtures/poisoned_baseline_issue.json")
         }
         other => panic!("unknown fixture: {other}"),
     }

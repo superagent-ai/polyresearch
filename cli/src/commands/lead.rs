@@ -244,7 +244,13 @@ pub fn decide_ready_prs(
             }
 
             let outcome = if let Some(ref ledger) = ledger {
-                decide::decide_without_peer_review(ctx, thesis, pr_state, ledger)?
+                decide::decide_without_peer_review(
+                    ctx,
+                    thesis,
+                    pr_state,
+                    ledger,
+                    &repo_state.invalidated_attempt_branches,
+                )?
             } else {
                 decide::decide_with_peer_review(ctx, pr_state)?
             };

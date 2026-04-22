@@ -17,6 +17,7 @@ pub struct RepositoryState {
     pub active_nodes: Vec<String>,
     pub queue_depth: usize,
     pub current_best_accepted_metric: Option<f64>,
+    pub invalidated_attempt_branches: BTreeSet<String>,
     pub recent_events: Vec<ActivityEvent>,
     pub audit_findings: Vec<AuditFinding>,
 }
@@ -33,6 +34,7 @@ pub struct ThesisState {
     pub attempts: Vec<AttemptRecord>,
     pub pull_requests: Vec<PullRequestState>,
     pub best_attempt_metric: Option<f64>,
+    pub invalidated_attempt_branches: BTreeSet<String>,
     pub findings: Vec<AuditFinding>,
 }
 
@@ -74,6 +76,7 @@ pub struct AttemptRecord {
     pub summary: String,
     pub author: String,
     pub created_at: DateTime<Utc>,
+    pub comment_id: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -193,12 +196,18 @@ impl RepositoryState {
                 .then_with(|| left.message.cmp(&right.message))
         });
 
+        let invalidated_attempt_branches = theses
+            .iter()
+            .flat_map(|thesis| thesis.invalidated_attempt_branches.iter().cloned())
+            .collect::<BTreeSet<_>>();
+
         Ok(Self {
             theses,
             pull_request_count,
             active_nodes,
             queue_depth,
             current_best_accepted_metric,
+            invalidated_attempt_branches,
             recent_events,
             audit_findings,
         })
@@ -259,6 +268,7 @@ impl ThesisState {
                 summary: attempt.summary.clone(),
                 author: attempt.author.clone(),
                 created_at: attempt.created_at,
+                comment_id: attempt.comment_id,
             })
             .collect::<Vec<_>>();
         let releases = validation
@@ -330,6 +340,7 @@ impl ThesisState {
             attempts,
             pull_requests,
             best_attempt_metric,
+            invalidated_attempt_branches: validation.invalidated_attempt_branches,
             findings: validation.findings,
         })
     }
@@ -628,6 +639,7 @@ mod tests {
             attempts: vec![],
             pull_requests: vec![],
             best_attempt_metric: None,
+            invalidated_attempt_branches: BTreeSet::new(),
             findings: vec![],
         };
 
@@ -655,6 +667,7 @@ mod tests {
             active_claims: vec![],
             releases: vec![],
             attempts: vec![],
+            invalidated_attempt_branches: BTreeSet::new(),
             pull_requests: vec![PullRequestState {
                 pr: PullRequest {
                     number: 2,

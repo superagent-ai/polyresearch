@@ -49,7 +49,13 @@ pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
     }
 
     let outcome = if ctx.config.required_confirmations == 0 {
-        decide_without_peer_review(ctx, thesis, pr_state, &ledger)?
+        decide_without_peer_review(
+            ctx,
+            thesis,
+            pr_state,
+            &ledger,
+            &repo_state.invalidated_attempt_branches,
+        )?
     } else {
         decide_with_peer_review(ctx, pr_state)?
     };
@@ -119,6 +125,7 @@ pub(crate) fn decide_without_peer_review(
     thesis: &crate::state::ThesisState,
     pr_state: &crate::state::PullRequestState,
     ledger: &Ledger,
+    invalidated_branches: &std::collections::BTreeSet<String>,
 ) -> Result<Outcome> {
     let tolerance = ctx.config.tolerance()?;
     let branch = &pr_state.pr.head_ref_name;
@@ -140,7 +147,9 @@ pub(crate) fn decide_without_peer_review(
         return Ok(Outcome::NonImprovement);
     }
 
-    if let Some(best_accepted) = ledger.best_accepted_metric(&ctx.config) {
+    if let Some(best_accepted) =
+        ledger.best_accepted_metric_excluding(&ctx.config, invalidated_branches)
+    {
         let meets_or_exceeds = match ctx.config.metric_direction {
             crate::config::MetricDirection::HigherIsBetter => attempt.metric >= best_accepted,
             crate::config::MetricDirection::LowerIsBetter => attempt.metric <= best_accepted,
