@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use color_eyre::eyre::{Context, Result, eyre};
 
-use crate::agent::{self, ExperimentResult, RecoveredMetric};
+use crate::agent::{self, AgentOutcome, ExperimentResult, RecoveredMetric};
 use crate::comments::{Observation, ProtocolComment, ReleaseReason};
 use crate::commands;
 use crate::config::MetricDirection;
@@ -24,6 +24,7 @@ pub struct WorkerContext {
     pub protected_globs: Vec<String>,
     pub metric_direction: MetricDirection,
     pub verbose: bool,
+    pub agent_timeout_secs: u64,
 }
 
 #[derive(Debug)]
@@ -62,6 +63,12 @@ impl WorkerOutcome {
             | Self::Failed { worktree_path, .. } => worktree_path,
         }
     }
+}
+
+pub(crate) enum ExperimentOutcome {
+    Result(ExperimentResult),
+    TimedOut,
+    NoResult,
 }
 
 pub struct ThesisWorker {
@@ -110,18 +117,24 @@ impl ThesisWorker {
         Ok(())
     }
 
-    pub fn run_experiment(&self) -> Result<Option<ExperimentResult>> {
+    fn run_experiment(&self) -> Result<ExperimentOutcome> {
         let prompt = agent::experiment_prompt();
+        let timeout = std::time::Duration::from_secs(self.ctx.agent_timeout_secs);
 
-        let result = agent::spawn_experiment(
+        let outcome = agent::spawn_experiment(
             &self.ctx.agent_command,
             &self.worktree_path,
             prompt,
             self.ctx.verbose,
+            timeout,
         )?;
 
-        if result.is_some() {
-            return Ok(result);
+        match outcome {
+            AgentOutcome::TimedOut => return Ok(ExperimentOutcome::TimedOut),
+            AgentOutcome::Completed(Some(result)) => {
+                return Ok(ExperimentOutcome::Result(result));
+            }
+            AgentOutcome::Completed(None) => {}
         }
 
         eprintln!(
@@ -131,7 +144,7 @@ impl ThesisWorker {
 
         if let Some(recovered) = agent::recover_from_logs(&self.worktree_path) {
             eprintln!("Recovered metric {:.4} from run logs", recovered.metric);
-            return Ok(Some(classify_recovered(recovered, self.ctx.metric_direction)));
+            return Ok(ExperimentOutcome::Result(classify_recovered(recovered, self.ctx.metric_direction)));
         }
 
         eprintln!("Log recovery failed; attempting direct harness execution...");
@@ -144,12 +157,12 @@ impl ThesisWorker {
         match harness_result {
             Ok(Some(recovered)) => {
                 eprintln!("Recovered metric {:.4} from direct harness", recovered.metric);
-                Ok(Some(classify_recovered(recovered, self.ctx.metric_direction)))
+                Ok(ExperimentOutcome::Result(classify_recovered(recovered, self.ctx.metric_direction)))
             }
-            Ok(None) => Ok(None),
+            Ok(None) => Ok(ExperimentOutcome::NoResult),
             Err(err) => {
                 eprintln!("Harness recovery failed: {err}");
-                Ok(None)
+                Ok(ExperimentOutcome::NoResult)
             }
         }
     }
@@ -248,8 +261,16 @@ impl ThesisWorker {
         }
 
         let result = match self.run_experiment() {
-            Ok(Some(result)) => result,
-            Ok(None) => {
+            Ok(ExperimentOutcome::Result(result)) => result,
+            Ok(ExperimentOutcome::TimedOut) => {
+                let _ = self.release(&github, ReleaseReason::Timeout, dry_run);
+                return WorkerOutcome::Failed {
+                    issue_number: self.ctx.issue_number,
+                    worktree_path: self.worktree_path.clone(),
+                    reason: format!("agent timed out after {}s", self.ctx.agent_timeout_secs),
+                };
+            }
+            Ok(ExperimentOutcome::NoResult) => {
                 let _ = self.release(&github, ReleaseReason::InfraFailure, dry_run);
                 return WorkerOutcome::Failed {
                     issue_number: self.ctx.issue_number,

@@ -115,8 +115,21 @@ Test scenario goal.
     }
 
     fn write_node_config(&self, node_id: &str, agent_command: &str) {
+        self.write_node_config_with_timeout(node_id, agent_command, None);
+    }
+
+    fn write_node_config_with_timeout(
+        &self,
+        node_id: &str,
+        agent_command: &str,
+        timeout_secs: Option<u64>,
+    ) {
+        let timeout_line = match timeout_secs {
+            Some(t) => format!("timeout_secs = {t}\n"),
+            None => String::new(),
+        };
         let content = format!(
-            "node_id = \"{node_id}\"\ncapacity = 75\n\n[agent]\ncommand = \"{agent_command}\"\n"
+            "node_id = \"{node_id}\"\ncapacity = 75\n\n[agent]\ncommand = \"{agent_command}\"\n{timeout_line}"
         );
         fs::write(self.path.join(".polyresearch-node.toml"), content).unwrap();
     }
@@ -126,6 +139,19 @@ Test scenario goal.
         self.write_prepare_md();
         self.write_results_tsv();
         self.write_node_config(node_id, agent_command);
+    }
+
+    fn write_full_setup_with_timeout(
+        &self,
+        lead: &str,
+        node_id: &str,
+        agent_command: &str,
+        timeout_secs: u64,
+    ) {
+        self.write_program_md(lead);
+        self.write_prepare_md();
+        self.write_results_tsv();
+        self.write_node_config_with_timeout(node_id, agent_command, Some(timeout_secs));
     }
 
     fn commit_all(&self, message: &str) {
@@ -2847,4 +2873,109 @@ fn resolve_default_branch_falls_back_to_main() {
     let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
     let branch = config.resolve_default_branch(&repo.path).unwrap();
     assert_eq!(branch, "main", "should fall back to 'main' when not set and git detection unavailable");
+}
+
+#[tokio::test]
+async fn scenario_contribute_timeout_kills_agent() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("contrib-timeout");
+    repo.init_git();
+
+    let agent_cmd = mock_agent_command("hang");
+    repo.write_full_setup_with_timeout("lead", "test-node-timeout", &agent_cmd, 3);
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    let (issue, comments) = make_approved_thesis(95, "Timeout experiment", "lead");
+    let github = Arc::new(ScenarioGitHub::new("contributor"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(95, comments);
+
+    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-timeout"); }
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(
+        &ctx,
+        &ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(result.is_ok(), "contribute should handle agent timeout gracefully: {result:?}");
+
+    let posted = github.posted_comments();
+    let has_release_timeout = posted.iter().any(|(_, body)| {
+        body.contains("polyresearch:release") && body.contains("timeout")
+    });
+    assert!(
+        has_release_timeout,
+        "expected a release comment with reason=timeout, got: {posted:?}"
+    );
+}
+
+#[tokio::test]
+async fn scenario_contribute_fast_agent_unaffected_by_timeout() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("contrib-fast");
+    repo.init_git();
+
+    let agent_cmd = mock_agent_command("improved");
+    repo.write_full_setup_with_timeout("lead", "test-node-fast", &agent_cmd, 60);
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    let (issue, comments) = make_approved_thesis(96, "Fast experiment", "lead");
+    let github = Arc::new(ScenarioGitHub::new("contributor"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(96, comments);
+
+    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-fast"); }
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        true,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(
+        &ctx,
+        &ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(result.is_ok(), "contribute should succeed with short-lived agent: {result:?}");
 }

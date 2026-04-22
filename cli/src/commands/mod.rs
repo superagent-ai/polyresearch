@@ -148,6 +148,7 @@ pub fn write_node_config(
             .as_ref()
             .map(|cmd| crate::config::AgentConfig {
                 command: cmd.clone(),
+                ..Default::default()
             })
             .or(existing_agent),
     )

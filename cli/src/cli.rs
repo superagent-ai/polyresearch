@@ -67,6 +67,9 @@ pub struct NodeOverrides {
 
     #[arg(long)]
     pub agent_command: Option<String>,
+
+    #[arg(long)]
+    pub agent_timeout: Option<u64>,
 }
 
 #[derive(Debug, Args, Clone)]

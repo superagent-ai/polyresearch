@@ -351,7 +351,8 @@ fn spawn_setup_agent(repo_root: &Path, overrides: &crate::cli::NodeOverrides, ve
     );
 
     eprintln!("Spawning agent for initial setup...");
-    let _ = crate::agent::spawn_experiment(&agent_command, repo_root, &prompt, verbose);
+    let timeout = std::time::Duration::from_secs(crate::config::DEFAULT_AGENT_TIMEOUT_SECS);
+    let _ = crate::agent::spawn_experiment(&agent_command, repo_root, &prompt, verbose, timeout);
     Ok(())
 }
 

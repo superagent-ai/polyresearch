@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Context, Result, eyre};
 use regex::Regex;
@@ -88,12 +90,25 @@ pub struct ThesisProposal {
     pub body: String,
 }
 
+#[derive(Debug)]
+pub enum AgentOutcome {
+    Completed(Option<ExperimentResult>),
+    TimedOut,
+}
+
+fn read_to_vec(mut r: impl std::io::Read + Send + 'static) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let _ = r.read_to_end(&mut buf);
+    buf
+}
+
 pub fn spawn_experiment(
     agent_command: &str,
     worktree_path: &Path,
     prompt: &str,
     verbose: bool,
-) -> Result<Option<ExperimentResult>> {
+    timeout: Duration,
+) -> Result<AgentOutcome> {
     let parts = shell_words(agent_command);
     if parts.is_empty() {
         return Err(eyre!("agent command is empty"));
@@ -103,9 +118,39 @@ pub fn spawn_experiment(
     cmd.args(&parts[1..]);
     cmd.current_dir(worktree_path);
     cmd.arg(prompt);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
 
-    eprintln!("Spawning agent in {}...", worktree_path.display());
-    let output = cmd.output().wrap_err("failed to spawn agent")?;
+    eprintln!("Spawning agent in {} (timeout {}s)...", worktree_path.display(), timeout.as_secs());
+    let mut child = cmd.spawn().wrap_err("failed to spawn agent")?;
+
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+    let stdout_thread = stdout_pipe.map(|r| thread::spawn(move || read_to_vec(r)));
+    let stderr_thread = stderr_pipe.map(|r| thread::spawn(move || read_to_vec(r)));
+
+    let deadline = Instant::now() + timeout;
+    let timed_out = loop {
+        match child.try_wait().wrap_err("failed to poll agent process")? {
+            Some(_status) => break false,
+            None if Instant::now() >= deadline => {
+                eprintln!("Agent timed out after {}s, killing pid {}...", timeout.as_secs(), child.id());
+                let _ = child.kill();
+                let _ = child.wait();
+                break true;
+            }
+            None => thread::sleep(Duration::from_secs(1)),
+        }
+    };
+
+    if timed_out {
+        return Ok(AgentOutcome::TimedOut);
+    }
+
+    let stdout = stdout_thread.and_then(|h| h.join().ok()).unwrap_or_default();
+    let stderr = stderr_thread.and_then(|h| h.join().ok()).unwrap_or_default();
+    let status = child.wait().wrap_err("failed to wait on agent")?;
+    let output = Output { status, stdout, stderr };
 
     if !output.status.success() {
         log_subprocess_failure("Agent", &output, verbose, Some(agent_command), Some(worktree_path));
@@ -117,10 +162,10 @@ pub fn spawn_experiment(
             .wrap_err("failed to read .polyresearch/result.json")?;
         let result: ExperimentResult = serde_json::from_str(&contents)
             .wrap_err("failed to parse .polyresearch/result.json")?;
-        return Ok(Some(result));
+        return Ok(AgentOutcome::Completed(Some(result)));
     }
 
-    Ok(None)
+    Ok(AgentOutcome::Completed(None))
 }
 
 pub fn recover_from_logs(worktree_path: &Path) -> Option<RecoveredMetric> {

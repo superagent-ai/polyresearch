@@ -233,6 +233,7 @@ async fn run_iteration(
             program,
             config,
             ctx.cli.verbose,
+            node_config.agent.timeout_secs,
         ));
         prior_attempts_list.push(worker::format_prior_attempts(thesis));
     }
@@ -259,6 +260,7 @@ async fn run_iteration(
             program,
             config,
             ctx.cli.verbose,
+            node_config.agent.timeout_secs,
         ));
         prior_attempts_list.push(worker::format_prior_attempts(thesis));
     }
@@ -295,6 +297,7 @@ fn build_worker_context(
     program: &ProgramSpec,
     config: &ProtocolConfig,
     verbose: bool,
+    agent_timeout_secs: u64,
 ) -> WorkerContext {
     WorkerContext {
         issue_number: thesis.issue.number,
@@ -308,6 +311,7 @@ fn build_worker_context(
         protected_globs: program.cannot_modify.clone(),
         metric_direction: config.metric_direction,
         verbose,
+        agent_timeout_secs,
     }
 }
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Mock agent for scenario tests.
-# Controlled by MOCK_AGENT_RESULT: improved, no_improvement, crashed, fail
+# Controlled by MOCK_AGENT_RESULT: improved, no_improvement, crashed, fail, hang
 RESULT_DIR="$PWD/.polyresearch"
 mkdir -p "$RESULT_DIR"
 
@@ -24,5 +24,8 @@ RESULT
         ;;
     fail)
         exit 1
+        ;;
+    hang)
+        sleep 999999
         ;;
 esac

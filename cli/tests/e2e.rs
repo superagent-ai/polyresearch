@@ -2819,6 +2819,7 @@ fn worker_context_carries_protected_globs() {
         protected_globs: vec!["docs/**".to_string(), "config/".to_string()],
         metric_direction: polyresearch::config::MetricDirection::HigherIsBetter,
         verbose: false,
+        agent_timeout_secs: polyresearch::config::DEFAULT_AGENT_TIMEOUT_SECS,
     };
 
     assert_eq!(wctx.protected_globs.len(), 2);
@@ -4251,6 +4252,7 @@ fn worker_setup_failure_returns_issue_number_for_release() {
         protected_globs: vec![],
         metric_direction: MetricDirection::HigherIsBetter,
         verbose: false,
+        agent_timeout_secs: polyresearch::config::DEFAULT_AGENT_TIMEOUT_SECS,
     };
 
     let tw = worker::ThesisWorker::new(wctx, String::new());
