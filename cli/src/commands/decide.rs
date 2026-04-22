@@ -223,6 +223,12 @@ fn try_rebase_onto_main(
     let temp_dir = std::env::temp_dir().join(format!("poly-rebase-{pr_number}"));
     let temp_path = temp_dir.to_string_lossy().into_owned();
 
+    // Clean up any stale worktree from a prior crash (follows the
+    // cleanup-on-entry pattern used by worker::create_baseline_worktree).
+    let _ = run_git(repo_root, &["worktree", "remove", &temp_path, "--force"]);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let _ = run_git(repo_root, &["worktree", "prune"]);
+
     let remote_ref = format!("origin/{head_ref_name}");
     run_git(
         repo_root,
