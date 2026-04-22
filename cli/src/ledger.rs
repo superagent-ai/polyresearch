@@ -67,7 +67,7 @@ impl Ledger {
         repo_state
             .theses
             .iter()
-            .flat_map(|thesis| rows_for_thesis(thesis))
+            .flat_map(rows_for_thesis)
             .filter(|row| !self.contains_attempt(&row.attempt))
             .collect()
     }
@@ -156,7 +156,10 @@ fn rows_for_thesis(thesis: &ThesisState) -> Vec<LedgerRow> {
             thesis: format!("#{}", thesis.issue.number),
             attempt: attempt.branch.clone(),
             metric,
-            baseline: attempt.baseline_metric.map(|b| format!("{b:.4}")).unwrap_or_else(|| "N/A".to_string()),
+            baseline: attempt
+                .baseline_metric
+                .map(|b| format!("{b:.4}"))
+                .unwrap_or_else(|| "N/A".to_string()),
             status,
             summary: attempt.summary.clone(),
         });

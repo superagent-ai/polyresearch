@@ -133,10 +133,9 @@ fn select_claimable_theses<'a>(
         .filter(|thesis| matches!(thesis.phase, ThesisPhase::Approved))
         .filter(|thesis| thesis.active_claims.is_empty())
         .filter(|thesis| {
-            !thesis
-                .releases
-                .iter()
-                .any(|release| release.node == node && release.reason == ReleaseReason::NoImprovement)
+            !thesis.releases.iter().any(|release| {
+                release.node == node && release.reason == ReleaseReason::NoImprovement
+            })
         })
         .collect::<Vec<_>>();
     theses.sort_by_key(|thesis| thesis.issue.number);

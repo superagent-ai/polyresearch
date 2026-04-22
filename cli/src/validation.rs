@@ -225,10 +225,10 @@ pub fn validate_pull_request(
                         &comment,
                         "admin repair note from non-lead actor",
                     ));
-                } else if action == "acknowledge_invalid" {
-                    if let Some(related_comment_id) = related_comment_id {
-                        acknowledged_comment_ids.insert(*related_comment_id);
-                    }
+                } else if action == "acknowledge_invalid"
+                    && let Some(related_comment_id) = related_comment_id
+                {
+                    acknowledged_comment_ids.insert(*related_comment_id);
                 }
             }
             Some(ProtocolComment::PolicyPass {
@@ -482,10 +482,10 @@ pub fn validate_issue(
                         &comment,
                         "admin repair note from non-lead actor",
                     ));
-                } else if action == "acknowledge_invalid" {
-                    if let Some(related_comment_id) = related_comment_id {
-                        acknowledged_comment_ids.insert(*related_comment_id);
-                    }
+                } else if action == "acknowledge_invalid"
+                    && let Some(related_comment_id) = related_comment_id
+                {
+                    acknowledged_comment_ids.insert(*related_comment_id);
                 }
             }
             Some(ProtocolComment::Approval { thesis }) => {
@@ -960,11 +960,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             protocol: None,
         };
-        let finding = invalid_issue_like(
-            AuditScope::Issue { number: 1 },
-            &envelope,
-            "test",
-        );
+        let finding = invalid_issue_like(AuditScope::Issue { number: 1 }, &envelope, "test");
         assert!(matches!(finding.severity, AuditSeverity::Invalid));
         assert!(finding.severity.is_blocking());
     }
@@ -977,11 +973,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             protocol: None,
         };
-        let finding = suspicious_issue_like(
-            AuditScope::Issue { number: 1 },
-            &envelope,
-            "test",
-        );
+        let finding = suspicious_issue_like(AuditScope::Issue { number: 1 }, &envelope, "test");
         assert!(matches!(finding.severity, AuditSeverity::Suspicious));
         assert!(!finding.severity.is_blocking());
     }

@@ -39,14 +39,14 @@ pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
         ));
     }
 
-    if let Some(max_queue_depth) = ctx.config.max_queue_depth {
-        if repo_state.queue_depth >= max_queue_depth {
-            return Err(eyre!(
-                "queue depth is already {} (max_queue_depth = {}), refusing to generate more theses",
-                repo_state.queue_depth,
-                max_queue_depth
-            ));
-        }
+    if let Some(max_queue_depth) = ctx.config.max_queue_depth
+        && repo_state.queue_depth >= max_queue_depth
+    {
+        return Err(eyre!(
+            "queue depth is already {} (max_queue_depth = {}), refusing to generate more theses",
+            repo_state.queue_depth,
+            max_queue_depth
+        ));
     }
 
     let warned_below_min_queue_depth = repo_state.queue_depth < ctx.config.min_queue_depth;

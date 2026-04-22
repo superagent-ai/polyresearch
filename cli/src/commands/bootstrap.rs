@@ -55,7 +55,10 @@ pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
 pub fn scaffold(ctx: &AppContext, args: &BootstrapArgs) -> Result<(std::path::PathBuf, String)> {
     let upstream = RepoRef::from_user_input(&args.url)?;
     let clone_url = upstream.clone_url();
-    eprintln!("Bootstrapping polyresearch project from {}", upstream.slug());
+    eprintln!(
+        "Bootstrapping polyresearch project from {}",
+        upstream.slug()
+    );
 
     let repo_root = if ctx.repo_root.join(".git").exists() {
         ctx.repo_root.clone()
@@ -129,7 +132,9 @@ fn get_current_login() -> Result<String> {
     }
     let login = String::from_utf8(output.stdout)?.trim().to_string();
     if login.is_empty() {
-        return Err(eyre!("could not determine GitHub login; run `gh auth login` first"));
+        return Err(eyre!(
+            "could not determine GitHub login; run `gh auth login` first"
+        ));
     }
     Ok(login)
 }
@@ -242,8 +247,11 @@ pub fn write_templates(repo_root: &Path, goal: Option<&str>, login: &str) -> Res
 
     let results_path = repo_root.join("results.tsv");
     if !results_path.exists() {
-        fs::write(&results_path, "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n")
-            .wrap_err_with(|| format!("failed to write {}", results_path.display()))?;
+        fs::write(
+            &results_path,
+            "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n",
+        )
+        .wrap_err_with(|| format!("failed to write {}", results_path.display()))?;
         eprintln!("Created {}", results_path.display());
     }
 
@@ -265,8 +273,8 @@ fn ensure_lead_login(repo_root: &Path, login: &str) -> Result<()> {
         return Ok(());
     }
 
-    let contents = fs::read_to_string(&path)
-        .wrap_err_with(|| format!("failed to read {}", path.display()))?;
+    let contents =
+        fs::read_to_string(&path).wrap_err_with(|| format!("failed to read {}", path.display()))?;
 
     let keys = ["lead_github_login", "maintainer_github_login"];
     let mut changed = false;
@@ -275,13 +283,13 @@ fn ensure_lead_login(repo_root: &Path, login: &str) -> Result<()> {
         .map(|line| {
             let trimmed = line.trim();
             for key in &keys {
-                if let Some(rest) = trimmed.strip_prefix(*key) {
-                    if let Some(value) = rest.strip_prefix(':') {
-                        let value = value.trim();
-                        if !value.is_empty() && value != login {
-                            changed = true;
-                            return format!("{key}: {login}");
-                        }
+                if let Some(rest) = trimmed.strip_prefix(*key)
+                    && let Some(value) = rest.strip_prefix(':')
+                {
+                    let value = value.trim();
+                    if !value.is_empty() && value != login {
+                        changed = true;
+                        return format!("{key}: {login}");
                     }
                 }
             }
@@ -314,7 +322,12 @@ fn replace_goal_section(template: &str, goal: &str) -> String {
         .find("\n## ")
         .map(|i| body_start + i)
         .unwrap_or(template.len());
-    format!("{}\n{}\n{}", &template[..body_start], goal, &template[body_end..])
+    format!(
+        "{}\n{}\n{}",
+        &template[..body_start],
+        goal,
+        &template[body_end..]
+    )
 }
 
 fn initialize_node(repo_root: &Path, overrides: &crate::cli::NodeOverrides) -> Result<()> {
@@ -326,8 +339,13 @@ fn initialize_node(repo_root: &Path, overrides: &crate::cli::NodeOverrides) -> R
     Ok(())
 }
 
-fn spawn_setup_agent(repo_root: &Path, overrides: &crate::cli::NodeOverrides, verbose: bool, login: &str) -> Result<()> {
-    let node_config = NodeConfig::load(&repo_root.to_path_buf())
+fn spawn_setup_agent(
+    repo_root: &Path,
+    overrides: &crate::cli::NodeOverrides,
+    verbose: bool,
+    login: &str,
+) -> Result<()> {
+    let node_config = NodeConfig::load(repo_root)
         .ok()
         .map(|c| c.with_overrides(overrides));
     let agent_command = node_config
@@ -397,7 +415,9 @@ pub fn commit_and_push_setup_files(repo_root: &Path) -> Result<()> {
 
     match commands::run_git(&repo, &["push", "origin", "HEAD"]) {
         Ok(_) => eprintln!("Committed and pushed setup files."),
-        Err(err) => eprintln!("Committed setup files locally. Push failed (run `git push` manually): {err}"),
+        Err(err) => {
+            eprintln!("Committed setup files locally. Push failed (run `git push` manually): {err}")
+        }
     }
     Ok(())
 }
@@ -412,8 +432,8 @@ pub fn normalize_program_md(repo_root: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let contents = fs::read_to_string(&path)
-        .wrap_err_with(|| format!("failed to read {}", path.display()))?;
+    let contents =
+        fs::read_to_string(&path).wrap_err_with(|| format!("failed to read {}", path.display()))?;
 
     let required_sections = [
         "## Goal",

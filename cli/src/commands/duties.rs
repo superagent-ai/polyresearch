@@ -279,7 +279,9 @@ fn check_contributor_idle_state(
     if repo_state.queue_depth == 0 {
         advisory.push(DutyItem {
             category: "idle".to_string(),
-            message: "Queue is empty. Wait for the lead to generate theses. Do not assume lead duties.".to_string(),
+            message:
+                "Queue is empty. Wait for the lead to generate theses. Do not assume lead duties."
+                    .to_string(),
             command: "sleep 60 && polyresearch duties".to_string(),
         });
         return Ok(());
@@ -341,10 +343,9 @@ fn check_contributor_idle_state(
         .filter(|thesis| {
             thesis.issue.state == "OPEN"
                 && matches!(thesis.phase, ThesisPhase::Approved)
-                && !thesis
-                    .releases
-                    .iter()
-                    .any(|release| release.node == node_id && release.reason == ReleaseReason::NoImprovement)
+                && !thesis.releases.iter().any(|release| {
+                    release.node == node_id && release.reason == ReleaseReason::NoImprovement
+                })
         })
         .count();
 

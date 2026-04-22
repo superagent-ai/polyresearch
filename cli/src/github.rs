@@ -64,8 +64,8 @@ impl RepoRef {
     }
 
     fn parse_remote(remote: &str) -> Result<Self> {
-        let stripped = strip_github_prefix(remote)
-            .unwrap_or_else(|| remote.trim().trim_end_matches(".git"));
+        let stripped =
+            strip_github_prefix(remote).unwrap_or_else(|| remote.trim().trim_end_matches(".git"));
         Self::parse(stripped)
     }
 
@@ -173,10 +173,10 @@ impl GitHubClient {
     }
 
     pub fn auth_token(&self) -> Result<String> {
-        if let Ok(token) = env::var("GITHUB_TOKEN") {
-            if !token.trim().is_empty() {
-                return Ok(token);
-            }
+        if let Ok(token) = env::var("GITHUB_TOKEN")
+            && !token.trim().is_empty()
+        {
+            return Ok(token);
         }
 
         let output = Command::new("gh")
@@ -824,8 +824,8 @@ impl std::error::Error for GitHubCliError {}
 
 fn run_json_command(mut command: Command, idempotent: bool) -> Result<serde_json::Value> {
     let stdout = run_command_with_retries(&mut command, idempotent)?;
-    Ok(serde_json::from_str(&stdout)
-        .wrap_err_with(|| format!("failed to parse GitHub CLI JSON output: {stdout}"))?)
+    serde_json::from_str(&stdout)
+        .wrap_err_with(|| format!("failed to parse GitHub CLI JSON output: {stdout}"))
 }
 
 fn run_text_command(mut command: Command, idempotent: bool) -> Result<String> {
@@ -975,7 +975,9 @@ fn classify_error_hint(stderr: &str) -> Option<&'static str> {
     let lowered = stderr.to_ascii_lowercase();
 
     if lowered.contains("has disabled issues") {
-        return Some("Enable Issues in your repository settings: gh api repos/OWNER/REPO --method PATCH -f has_issues=true");
+        return Some(
+            "Enable Issues in your repository settings: gh api repos/OWNER/REPO --method PATCH -f has_issues=true",
+        );
     }
 
     if lowered.contains("could not authenticate")
@@ -987,7 +989,9 @@ fn classify_error_hint(stderr: &str) -> Option<&'static str> {
     }
 
     if lowered.contains("http 404") || lowered.contains("could not resolve") {
-        return Some("Check that the repository exists and you have access: gh repo view OWNER/REPO");
+        return Some(
+            "Check that the repository exists and you have access: gh repo view OWNER/REPO",
+        );
     }
 
     if lowered.contains("permission denied")
@@ -1157,7 +1161,8 @@ mod tests {
         );
         let last_attempt = SECONDARY_RETRY_DELAYS_SECS.len() - 1;
         for _ in 0..100 {
-            let d = resolve_rate_limit_delay(RateLimitKind::Secondary, last_attempt, stderr).unwrap();
+            let d =
+                resolve_rate_limit_delay(RateLimitKind::Secondary, last_attempt, stderr).unwrap();
             assert!(
                 d <= MAX_RETRY_DELAY,
                 "secondary fallback delay {d:?} exceeded MAX_RETRY_DELAY at max attempt"
@@ -1168,7 +1173,10 @@ mod tests {
     #[test]
     fn primary_rate_limit_cap_limits_large_values() {
         assert_eq!(capped_delay(Duration::from_secs(2861)), MAX_RETRY_DELAY);
-        assert_eq!(capped_delay(Duration::from_secs(120)), Duration::from_secs(120));
+        assert_eq!(
+            capped_delay(Duration::from_secs(120)),
+            Duration::from_secs(120)
+        );
     }
 
     #[test]
@@ -1178,7 +1186,10 @@ mod tests {
         for _ in 0..100 {
             seen.insert(jittered_delay(base).as_millis());
         }
-        assert!(seen.len() >= 2, "jittered_delay produced no variation across 100 calls");
+        assert!(
+            seen.len() >= 2,
+            "jittered_delay produced no variation across 100 calls"
+        );
     }
 
     #[test]
@@ -1206,7 +1217,10 @@ mod tests {
         for _ in 0..100 {
             seen.insert(server_jittered_delay(base).as_millis());
         }
-        assert!(seen.len() >= 2, "server_jittered_delay produced no variation across 100 calls");
+        assert!(
+            seen.len() >= 2,
+            "server_jittered_delay produced no variation across 100 calls"
+        );
     }
 
     #[test]

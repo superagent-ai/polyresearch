@@ -54,7 +54,11 @@ pub async fn run(ctx: &AppContext) -> Result<()> {
     };
 
     print_value(ctx, &output, |value| {
-        if value.invalid_count == 0 && value.suspicious_count == 0 && value.info_count == 0 && value.ledger_current {
+        if value.invalid_count == 0
+            && value.suspicious_count == 0
+            && value.info_count == 0
+            && value.ledger_current
+        {
             format!("Audit clean for {}.", value.repo)
         } else {
             format!(
