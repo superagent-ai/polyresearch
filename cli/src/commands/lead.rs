@@ -51,7 +51,18 @@ pub async fn run(ctx: &AppContext, args: &LeadArgs) -> Result<()> {
         .map_err(|e| eyre!("lead workflow agent task failed: {e}"))?;
 
         match result {
-            Ok(()) => break,
+            Ok(()) => {
+                let repo_state =
+                    RepositoryState::derive(&ctx.github, &ctx.config).await?;
+                if repo_state.queue_depth < config.min_queue_depth {
+                    eprintln!(
+                        "Warning: queue depth is {} (min = {}). \
+                         Lead agent may not have generated enough theses.",
+                        repo_state.queue_depth, config.min_queue_depth
+                    );
+                }
+                break;
+            }
             Err(err) => {
                 eprintln!("Lead agent failed: {err}");
                 if once {

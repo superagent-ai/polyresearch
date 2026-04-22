@@ -411,7 +411,10 @@ pub fn lead_workflow_prompt(once: bool, sleep_secs: u64) -> String {
 
     if once {
         prompt.push_str(
-            "\n\nIMPORTANT: Run exactly ONE iteration of the loop (steps 1-6), then stop. Do not loop.\n",
+            "\n\nIMPORTANT: Run exactly ONE full iteration — you MUST execute steps 1 through 6 in order, then stop. \
+             Complete every step before exiting. Do not stop after a single step or subset of steps. \
+             If a step has nothing to do (e.g. no PRs to decide), skip it and move to the next step. \
+             You must reach the queue check (step 4) and generate theses if the queue is below min_queue_depth.\n",
         );
     } else {
         prompt.push_str(&format!(
@@ -785,5 +788,35 @@ mod tests {
         assert_eq!(parse_prepare_key(&dir, "prereq_command"), None);
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn lead_prompt_once_requires_all_steps() {
+        let prompt = lead_workflow_prompt(true, 60);
+        assert!(
+            prompt.contains("steps 1 through 6"),
+            "once prompt must reference all six steps"
+        );
+        assert!(
+            prompt.contains("MUST"),
+            "once prompt must use mandatory language"
+        );
+        assert!(
+            prompt.contains("queue check"),
+            "once prompt must mention the queue check"
+        );
+    }
+
+    #[test]
+    fn lead_prompt_base_has_mandatory_completion() {
+        let prompt = lead_workflow_prompt(false, 60);
+        assert!(
+            prompt.contains("MUST complete ALL steps"),
+            "base prompt must require completing all steps"
+        );
+        assert!(
+            prompt.contains("primary goal"),
+            "base prompt must frame queue depth as the primary goal"
+        );
     }
 }
