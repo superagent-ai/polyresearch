@@ -139,6 +139,28 @@ fn get_current_login() -> Result<String> {
     Ok(login)
 }
 
+fn enable_issues(owner: &str, name: &str) {
+    eprintln!("Enabling GitHub Issues on {owner}/{name}...");
+    let result = Command::new("gh")
+        .args([
+            "api",
+            &format!("repos/{owner}/{name}"),
+            "--method",
+            "PATCH",
+            "-f",
+            "has_issues=true",
+        ])
+        .output();
+    match result {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!("Warning: could not enable Issues: {stderr}");
+        }
+        Err(e) => eprintln!("Warning: could not enable Issues: {e}"),
+    }
+}
+
 fn fork_and_clone(upstream: &RepoRef, fork_owner: &str, repo_root: &Path) -> Result<()> {
     if repo_root.join(".git").exists() {
         eprintln!("Repository already exists, skipping clone.");
@@ -183,6 +205,8 @@ fn fork_and_clone(upstream: &RepoRef, fork_owner: &str, repo_root: &Path) -> Res
         &["remote", "add", "upstream", &upstream_url],
     )
     .ok();
+
+    enable_issues(fork_owner, &upstream.name);
 
     Ok(())
 }
