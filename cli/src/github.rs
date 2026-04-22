@@ -19,6 +19,7 @@ use crate::throttle;
 const COMMENT_FETCH_CONCURRENCY_LIMIT: usize = 2;
 const TRANSIENT_RETRY_DELAYS_SECS: [u64; 3] = [5, 10, 20];
 const SECONDARY_RETRY_DELAYS_SECS: [u64; 3] = [90, 180, 300];
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoRef {
@@ -992,16 +993,23 @@ fn resolve_rate_limit_delay(kind: RateLimitKind, attempt: usize, stderr: &str) -
             status.resources.core.reset_at().map(|reset_at| {
                 let wait = (reset_at - Utc::now())
                     .to_std()
-                    .unwrap_or_else(|_| Duration::from_secs(0));
-                wait + Duration::from_secs(1)
+                    .unwrap_or(Duration::from_secs(5));
+                let wait = if wait.is_zero() {
+                    Duration::from_secs(5)
+                } else {
+                    wait
+                };
+                jittered_delay(capped_delay(wait + Duration::from_secs(1)))
             })
         }),
-        RateLimitKind::Secondary => parse_retry_after(stderr).or_else(|| {
-            Some(jittered_delay(Duration::from_secs(
-                SECONDARY_RETRY_DELAYS_SECS
-                    [attempt.min(SECONDARY_RETRY_DELAYS_SECS.len().saturating_sub(1))],
-            )))
-        }),
+        RateLimitKind::Secondary => parse_retry_after(stderr)
+            .map(|d| jittered_delay(capped_delay(d)))
+            .or_else(|| {
+                Some(jittered_delay(Duration::from_secs(
+                    SECONDARY_RETRY_DELAYS_SECS
+                        [attempt.min(SECONDARY_RETRY_DELAYS_SECS.len().saturating_sub(1))],
+                )))
+            }),
     }
 }
 
@@ -1028,9 +1036,12 @@ fn parse_retry_after(stderr: &str) -> Option<Duration> {
     Some(Duration::from_secs(seconds))
 }
 
-/// Applies ±50% jitter to a client-side fallback backoff so three agents that
-/// hit the same rate limit at the same moment don't all wake up at the same time.
-/// Only used when the server does not provide an explicit `Retry-After`.
+fn capped_delay(delay: Duration) -> Duration {
+    delay.min(MAX_RETRY_DELAY)
+}
+
+/// Applies ±50% jitter so concurrent agents that hit the same rate limit
+/// don't all wake up at the same instant.
 fn jittered_delay(base: Duration) -> Duration {
     let base_millis = u64::try_from(base.as_millis()).unwrap_or(u64::MAX);
     if base_millis == 0 {
@@ -1089,6 +1100,64 @@ mod tests {
     #[test]
     fn jittered_delay_noops_for_zero_base() {
         assert_eq!(jittered_delay(Duration::ZERO), Duration::ZERO);
+    }
+
+    #[test]
+    fn retry_duration_is_capped_at_max() {
+        let parsed = parse_retry_after("HTTP 429\nRetry-After: 3000").unwrap();
+        assert_eq!(parsed, Duration::from_secs(3000));
+        assert_eq!(capped_delay(parsed), MAX_RETRY_DELAY);
+    }
+
+    #[test]
+    fn secondary_rate_limit_uses_short_backoff() {
+        let stderr = "secondary rate limit hit";
+        let delay = resolve_rate_limit_delay(RateLimitKind::Secondary, 0, stderr).unwrap();
+        let base = Duration::from_secs(SECONDARY_RETRY_DELAYS_SECS[0]);
+        assert!(
+            delay >= base / 2 && delay <= base + base / 2,
+            "secondary fallback delay {delay:?} outside jittered range of {base:?}"
+        );
+    }
+
+    #[test]
+    fn primary_rate_limit_cap_limits_large_values() {
+        assert_eq!(capped_delay(Duration::from_secs(2861)), MAX_RETRY_DELAY);
+        assert_eq!(capped_delay(Duration::from_secs(120)), Duration::from_secs(120));
+    }
+
+    #[test]
+    fn jitter_varies_across_calls() {
+        let base = Duration::from_secs(90);
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..100 {
+            seen.insert(jittered_delay(base).as_millis());
+        }
+        assert!(seen.len() >= 2, "jittered_delay produced no variation across 100 calls");
+    }
+
+    #[test]
+    fn cap_applies_to_parsed_retry_after() {
+        let large = parse_retry_after("Retry-After: 5000").unwrap();
+        assert_eq!(capped_delay(large), MAX_RETRY_DELAY);
+
+        let small = parse_retry_after("Retry-After: 60").unwrap();
+        assert_eq!(capped_delay(small), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn zero_or_negative_reset_time_produces_small_delay() {
+        assert_eq!(capped_delay(Duration::from_secs(5)), Duration::from_secs(5));
+        assert_eq!(capped_delay(Duration::ZERO), Duration::ZERO);
+    }
+
+    #[test]
+    fn parse_retry_after_extracts_value_from_stderr() {
+        assert_eq!(
+            parse_retry_after("HTTP 429\nRetry-After: 120"),
+            Some(Duration::from_secs(120))
+        );
+        assert_eq!(parse_retry_after("no header here"), None);
     }
 
     #[test]
