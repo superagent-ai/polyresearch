@@ -3535,3 +3535,166 @@ async fn scenario_preflight_dirty_tree_aborts_lead() {
         "error should mention uncommitted changes: {err_msg}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #102: Experiment metric trust boundary fixes
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn scenario_contribute_no_revert() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("contrib-no-revert");
+    repo.init_git();
+
+    let agent_cmd = mock_agent_command("no_improvement_with_changes");
+    repo.write_full_setup("lead", "test-node-nr", &agent_cmd);
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    let (issue, comments) = make_approved_thesis(95, "No revert test", "lead");
+    let github = Arc::new(ScenarioGitHub::new("contributor"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(95, comments);
+
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-nr");
+    }
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        true,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(
+        &ctx,
+        &ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "contribute should succeed with no_improvement_with_changes: {result:?}"
+    );
+
+    let worktree_dir = repo.path.join(".worktrees");
+    if worktree_dir.exists() {
+        for entry in fs::read_dir(&worktree_dir).unwrap().flatten() {
+            let mock_js = entry.path().join("src/mock.js");
+            if mock_js.exists() {
+                let content = fs::read_to_string(&mock_js).unwrap();
+                assert!(
+                    content.contains("mock change"),
+                    "agent changes should be preserved in the worktree even when observation is no_improvement"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn recovery_harness_runs_prereq_command() {
+    use polyresearch::agent;
+
+    let dir = env::temp_dir().join(format!(
+        "prereq-recovery-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let candidate = dir.join("candidate");
+    let baseline = dir.join("baseline");
+    fs::create_dir_all(&candidate).unwrap();
+    fs::create_dir_all(&baseline).unwrap();
+
+    fs::write(
+        candidate.join("PREPARE.md"),
+        "# Evaluation\n\neval_cores: 1\neval_memory_gb: 1.0\nprereq_command: touch .built\n",
+    )
+    .unwrap();
+    fs::write(
+        baseline.join("PREPARE.md"),
+        "# Evaluation\n\neval_cores: 1\neval_memory_gb: 1.0\nprereq_command: touch .built\n",
+    )
+    .unwrap();
+
+    let harness_script = "#!/bin/bash\nif [ -f .built ]; then echo 'METRIC=42.0'; else echo 'NO_BUILD'; exit 1; fi\n";
+    let candidate_polydir = candidate.join(".polyresearch");
+    let baseline_polydir = baseline.join(".polyresearch");
+    fs::create_dir_all(&candidate_polydir).unwrap();
+    fs::create_dir_all(&baseline_polydir).unwrap();
+    fs::write(candidate_polydir.join("run.sh"), harness_script).unwrap();
+    fs::write(baseline_polydir.join("run.sh"), harness_script).unwrap();
+
+    let result = agent::run_harness_directly(&candidate, &baseline, false);
+    assert!(result.is_ok(), "harness should succeed: {result:?}");
+    let recovered = result.unwrap();
+    assert!(
+        recovered.is_some(),
+        "should recover metric when prereq creates required file"
+    );
+    let metric = recovered.unwrap();
+    assert!(
+        (metric.metric - 42.0).abs() < f64::EPSILON,
+        "candidate metric should be 42.0, got {}",
+        metric.metric
+    );
+    assert!(
+        metric.baseline.is_some(),
+        "baseline metric should be present"
+    );
+
+    assert!(
+        candidate.join(".built").exists(),
+        "prereq should have created .built in candidate tree"
+    );
+    assert!(
+        baseline.join(".built").exists(),
+        "prereq should have created .built in baseline tree"
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn parse_prepare_key_used_by_recovery() {
+    use polyresearch::agent;
+
+    let dir = env::temp_dir().join(format!(
+        "prereq-parse-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("PREPARE.md"),
+        "# Evaluation\n\neval_cores: 1\nprereq_command: npm run build\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        agent::parse_prepare_key(&dir, "prereq_command"),
+        Some("npm run build".to_string())
+    );
+    assert_eq!(agent::parse_prepare_key(&dir, "nonexistent"), None);
+
+    fs::remove_dir_all(dir).unwrap();
+}

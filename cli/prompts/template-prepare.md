@@ -6,10 +6,13 @@ Consider defining more than one evaluation criterion. Optimizing for a single nu
 
 eval_cores: 1
 eval_memory_gb: 1.0
+prereq_command:
 
 ## Setup
 
 Install dependencies and prepare the evaluation environment.
+
+If the project has a build step (e.g. TypeScript compilation), set `prereq_command` above to the build command (e.g. `npm run build`). The CLI runs this before the evaluation harness during recovery, ensuring it measures compiled output rather than stale artifacts.
 
 ## Run command
 

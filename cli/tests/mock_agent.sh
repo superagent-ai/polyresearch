@@ -1,6 +1,7 @@
 #!/bin/bash
 # Mock agent for scenario tests.
-# Controlled by MOCK_AGENT_RESULT: improved, no_improvement, crashed, fail, hang
+# Controlled by MOCK_AGENT_RESULT: improved, no_improvement, crashed, fail, hang,
+#   no_improvement_with_changes
 RESULT_DIR="$PWD/.polyresearch"
 mkdir -p "$RESULT_DIR"
 
@@ -16,6 +17,13 @@ RESULT
         cat > "$RESULT_DIR/result.json" <<'RESULT'
 {"metric":0.89,"baseline":0.90,"observation":"no_improvement","summary":"mock no change"}
 RESULT
+        ;;
+    no_improvement_with_changes)
+        cat > "$RESULT_DIR/result.json" <<'RESULT'
+{"metric":0.89,"baseline":0.90,"observation":"no_improvement","summary":"mock no change but kept edits"}
+RESULT
+        mkdir -p src
+        echo "// mock change $(date +%s)" >> src/mock.js
         ;;
     crashed)
         cat > "$RESULT_DIR/result.json" <<'RESULT'
