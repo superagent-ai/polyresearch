@@ -4064,28 +4064,6 @@ fn execute_decision_auto_releases_on_repeated_non_improvement() {
 
     assert_eq!(result.outcome, polyresearch::comments::Outcome::NonImprovement);
     assert!(github.is_pr_closed(190), "PR should be closed");
-
-    let release = ProtocolComment::Release {
-        thesis: 90,
-        node: thesis.active_claims[0].node.clone(),
-        reason: polyresearch::comments::ReleaseReason::NoImprovement,
-    };
-    github.seed_issue_comments(90, vec![IssueComment {
-        id: 99999,
-        body: release.render(),
-        user: CommentUser { login: "lead".to_string() },
-        created_at: chrono::Utc::now(),
-        updated_at: None,
-    }]);
-
-    let issue_bodies = github.comment_bodies_on(90);
-    let has_release = issue_bodies
-        .iter()
-        .any(|b| b.contains("polyresearch:release") && b.contains("no_improvement"));
-    assert!(
-        has_release,
-        "release comment should be posted after threshold; got: {issue_bodies:?}"
-    );
 }
 
 #[test]
