@@ -1005,10 +1005,10 @@ fn resolve_rate_limit_delay(kind: RateLimitKind, attempt: usize, stderr: &str) -
         RateLimitKind::Secondary => parse_retry_after(stderr)
             .map(|d| capped_delay(server_jittered_delay(d)))
             .or_else(|| {
-                Some(jittered_delay(Duration::from_secs(
+                Some(capped_delay(jittered_delay(Duration::from_secs(
                     SECONDARY_RETRY_DELAYS_SECS
                         [attempt.min(SECONDARY_RETRY_DELAYS_SECS.len().saturating_sub(1))],
-                )))
+                ))))
             }),
     }
 }
@@ -1135,6 +1135,14 @@ mod tests {
             delay >= base / 2 && delay <= base + base / 2,
             "secondary fallback delay {delay:?} outside jittered range of {base:?}"
         );
+        let last_attempt = SECONDARY_RETRY_DELAYS_SECS.len() - 1;
+        for _ in 0..100 {
+            let d = resolve_rate_limit_delay(RateLimitKind::Secondary, last_attempt, stderr).unwrap();
+            assert!(
+                d <= MAX_RETRY_DELAY,
+                "secondary fallback delay {d:?} exceeded MAX_RETRY_DELAY at max attempt"
+            );
+        }
     }
 
     #[test]
