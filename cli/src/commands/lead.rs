@@ -60,6 +60,11 @@ pub async fn run(ctx: &AppContext, args: &LeadArgs) -> Result<()> {
                          Lead agent may not have generated enough theses.",
                         repo_state.queue_depth, config.min_queue_depth
                     );
+                    if !once {
+                        eprintln!("Restarting agent to refill queue in {sleep_secs}s...");
+                        tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+                        continue;
+                    }
                 }
                 break;
             }
