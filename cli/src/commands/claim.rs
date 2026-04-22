@@ -1,6 +1,7 @@
 use color_eyre::eyre::{Result, eyre};
 use serde::Serialize;
 
+use crate::agent;
 use crate::cli::IssueArgs;
 use crate::commands::duties;
 use crate::commands::guards::require_claimable_thesis;
@@ -9,6 +10,7 @@ use crate::commands::{
 };
 use crate::comments::ProtocolComment;
 use crate::state::{RepositoryState, ThesisState};
+use crate::worker;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ClaimOutput {
@@ -89,6 +91,13 @@ pub(crate) fn claim_selected_thesis(
             thesis.issue.number,
             &thesis.issue.title,
             &default_branch,
+        )?;
+        let prior_attempts = worker::format_prior_attempts(thesis);
+        agent::write_thesis_context(
+            &workspace.worktree_path,
+            &thesis.issue.title,
+            thesis.issue.body.as_deref().unwrap_or(""),
+            &prior_attempts,
         )?;
         (
             workspace.branch,

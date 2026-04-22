@@ -1043,6 +1043,18 @@ async fn claim_creates_worktree_by_default() {
         expected_branch
     );
     assert_eq!(mock.posted_issue_comments.lock().unwrap().len(), 1);
+
+    let thesis_md = worktree_path.join(".polyresearch/thesis.md");
+    assert!(
+        thesis_md.exists(),
+        "expected .polyresearch/thesis.md at {}",
+        thesis_md.display()
+    );
+    let thesis_content = std::fs::read_to_string(&thesis_md).unwrap();
+    assert!(
+        thesis_content.contains(&format!("# Thesis: {}", fixture.issue.title)),
+        "thesis.md should contain the thesis title"
+    );
 }
 
 #[tokio::test]
