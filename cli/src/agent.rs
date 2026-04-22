@@ -380,9 +380,52 @@ pub fn experiment_prompt() -> &'static str {
     include_str!("../prompts/experiment.md")
 }
 
+pub fn contribute_workflow_prompt() -> &'static str {
+    include_str!("../prompts/contribute-workflow.md")
+}
+
+pub fn lead_workflow_prompt() -> &'static str {
+    include_str!("../prompts/lead-workflow.md")
+}
+
 pub fn thesis_generation_prompt(count: usize) -> String {
     let base = include_str!("../prompts/thesis-generation.md");
     format!("{base}\n\nGenerate exactly {count} thesis proposals.")
+}
+
+pub fn spawn_workflow_agent(
+    agent_command: &str,
+    work_dir: &Path,
+    prompt: &str,
+    verbose: bool,
+) -> Result<()> {
+    let parts = shell_words(agent_command);
+    if parts.is_empty() {
+        return Err(eyre!("agent command is empty"));
+    }
+
+    let mut cmd = Command::new(&parts[0]);
+    cmd.args(&parts[1..]);
+    cmd.current_dir(work_dir);
+    cmd.arg(prompt);
+
+    eprintln!(
+        "Spawning workflow agent in {}...",
+        work_dir.display(),
+    );
+    let output = cmd.output().wrap_err("failed to spawn workflow agent")?;
+
+    if !output.status.success() {
+        log_subprocess_failure(
+            "Workflow agent",
+            &output,
+            verbose,
+            Some(agent_command),
+            Some(work_dir),
+        );
+    }
+
+    Ok(())
 }
 
 struct HarnessSpec {
