@@ -17,15 +17,23 @@ Your working directory is the project root, checked out to the default branch. Y
 
 ## The loop
 
+You MUST complete ALL steps (1 through 6) in every iteration. Do not exit after any individual step. If a step has nothing to do (e.g. no PRs to decide), skip it and proceed to the next step. Never abort an iteration because one step failed — log the error and continue to the next step.
+
+Keeping the queue at or above `min_queue_depth` is the primary goal of every iteration. Steps 1-3 are housekeeping; step 4 (queue check and generation) is the critical deliverable.
+
 LOOP FOREVER:
 
 ### 1. Sync the ledger
 
 Run `polyresearch sync`. This updates results.tsv with any missing experiment rows and pushes. If sync fails because you are not on the default branch, run `git checkout <default-branch>` first. If it fails because of a non-fast-forward, run `git pull origin <default-branch> --ff-only` and retry.
 
+If sync fails after retries, log the error and proceed to step 2.
+
 ### 2. Policy-check open PRs
 
 Run `polyresearch duties`. Look for policy-check duties. For each one, run `polyresearch policy-check <pr>`. The CLI checks whether the PR only touches files within the editable surface and posts the result.
+
+If there are no policy-check duties, proceed to step 3.
 
 ### 3. Decide ready PRs
 
@@ -33,7 +41,11 @@ Look for decide duties. For each ready PR, run `polyresearch decide <pr>`. The C
 
 If decide fails because of merge conflicts, the CLI will attempt a rebase. If that also fails, the PR will be closed as stale — this is expected. The contributor can rebase and resubmit.
 
-### 4. Check the queue
+If there are no decide duties, proceed to step 4.
+
+### 4. Check the queue and generate theses
+
+This is the most important step. You MUST reach this step every iteration.
 
 Run `polyresearch status`. Read the queue depth (approved, unclaimed theses). Read PROGRAM.md for `min_queue_depth`.
 
@@ -43,6 +55,9 @@ If the queue is below `min_queue_depth`:
 3. Generate thesis proposals: think of specific, actionable ideas that differ from what has already been tried. Do not repeat approaches marked as no_improvement or crashed.
 4. For each proposal, run: `polyresearch generate --title "<title>" --body "<body>"`
 5. Generate only enough theses to bring the queue back to `min_queue_depth`. Do not over-generate.
+6. After generating, run `polyresearch status` again to confirm queue depth is now at or above `min_queue_depth`.
+
+If the queue is already at or above `min_queue_depth`, proceed to step 5.
 
 ### 5. Handle audit findings
 
@@ -51,7 +66,15 @@ If `polyresearch audit` reports findings:
 - **Suspicious (duplicates)**: usually harmless. Acknowledge if they block thesis generation.
 - **Stuck claims**: if a claim has been active for over 24 hours with no attempt, release it: `polyresearch admin release-claim <issue> --node <node> --reason timeout`.
 
-### 6. Sleep and repeat
+### 6. Verify and finish the iteration
+
+Before sleeping or exiting, confirm that this iteration is complete:
+- Sync was attempted (step 1)
+- All policy-check duties were processed (step 2)
+- All decide duties were processed (step 3)
+- Queue depth was checked and generation was attempted if needed (step 4)
+
+If you skipped the queue check (step 4) for any reason, go back and run it now.
 
 Sleep 60 seconds, then go back to step 1.
 
@@ -61,3 +84,4 @@ Sleep 60 seconds, then go back to step 1.
 - Never create worktrees or modify code. Your job is coordination, not experimentation.
 - Stay on the default branch. All your git operations (sync, push) happen on the default branch.
 - If `git pull` fails because of unstaged changes, run `git stash` first, then pull, then `git stash pop`.
+- If any step errors, do not stop. Log the error and move to the next step. The queue check in step 4 must always run.
