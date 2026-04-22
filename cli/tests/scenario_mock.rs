@@ -21,6 +21,8 @@ struct ScenarioState {
     closed_prs: Vec<u64>,
     merged_prs: Vec<u64>,
     assigned_issues: Vec<(u64, Vec<String>)>,
+    deleted_refs: Vec<String>,
+    merge_attempt_counts: HashMap<u64, usize>,
 }
 
 #[allow(dead_code)]
@@ -45,6 +47,8 @@ impl ScenarioGitHub {
                 closed_prs: Vec::new(),
                 merged_prs: Vec::new(),
                 assigned_issues: Vec::new(),
+                deleted_refs: Vec::new(),
+                merge_attempt_counts: HashMap::new(),
             }),
         }
     }
@@ -144,6 +148,12 @@ impl ScenarioGitHub {
         if let Some(pr) = s.pull_requests.iter_mut().find(|pr| pr.number == pr_number) {
             pr.mergeable = Some(status.to_string());
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn is_branch_deleted(&self, branch: &str) -> bool {
+        let s = self.state.lock().unwrap();
+        s.deleted_refs.contains(&branch.to_string())
     }
 
     pub fn comment_bodies_on(&self, issue_or_pr: u64) -> Vec<String> {
@@ -373,8 +383,12 @@ impl GitHubApi for ScenarioGitHub {
 
     fn merge_pull_request(&self, pr_number: u64) -> Result<serde_json::Value> {
         let mut s = self.state.lock().unwrap();
+        let attempt = s.merge_attempt_counts.entry(pr_number).or_insert(0);
+        *attempt += 1;
+        let current_attempt = *attempt;
+
         if let Some(pr) = s.pull_requests.iter().find(|pr| pr.number == pr_number) {
-            if pr.mergeable.as_deref() == Some("CONFLICTING") {
+            if pr.mergeable.as_deref() == Some("CONFLICTING") && current_attempt <= 1 {
                 return Err(eyre!("405 Method Not Allowed: pull request is not mergeable"));
             }
         }
@@ -384,5 +398,11 @@ impl GitHubApi for ScenarioGitHub {
             pr.merged_at = Some(chrono::Utc::now());
         }
         Ok(serde_json::json!({"merged": true}))
+    }
+
+    fn delete_ref(&self, ref_name: &str) -> Result<()> {
+        let mut s = self.state.lock().unwrap();
+        s.deleted_refs.push(ref_name.to_string());
+        Ok(())
     }
 }

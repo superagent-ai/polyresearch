@@ -922,9 +922,11 @@ fn execute_decision_non_improvement_zero_conf_keeps_thesis_open() {
 
     let result = commands::decide::execute_decision(
         &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        None,
         70,
         70,
         "sha".to_string(),
+        "thesis/70-test",
         polyresearch::comments::Outcome::NonImprovement,
         0,
         0,
@@ -940,6 +942,10 @@ fn execute_decision_non_improvement_zero_conf_keeps_thesis_open() {
     assert!(
         !github.is_issue_closed(70),
         "thesis should stay open in zero-conf non_improvement"
+    );
+    assert!(
+        github.is_branch_deleted("thesis/70-test"),
+        "branch should be deleted on non_improvement"
     );
 }
 
@@ -964,9 +970,11 @@ fn execute_decision_disagreement_zero_conf_closes_thesis() {
 
     let result = commands::decide::execute_decision(
         &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        None,
         71,
         71,
         "sha".to_string(),
+        "thesis/71-test",
         polyresearch::comments::Outcome::Disagreement,
         0,
         0,
@@ -982,6 +990,10 @@ fn execute_decision_disagreement_zero_conf_closes_thesis() {
     assert!(
         github.is_issue_closed(71),
         "thesis should be closed for disagreement even in zero-conf"
+    );
+    assert!(
+        github.is_branch_deleted("thesis/71-test"),
+        "branch should be deleted on disagreement"
     );
 }
 
@@ -1006,9 +1018,11 @@ fn execute_decision_accepted_merges_and_closes() {
 
     let result = commands::decide::execute_decision(
         &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        None,
         72,
         72,
         "sha".to_string(),
+        "thesis/72-test",
         polyresearch::comments::Outcome::Accepted,
         0,
         0,
@@ -1180,9 +1194,11 @@ fn execute_decision_falls_back_on_merge_failure() {
 
     let result = commands::decide::execute_decision(
         &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        None,
         73,
         73,
         "sha-conflict".to_string(),
+        "thesis/73-test",
         polyresearch::comments::Outcome::Accepted,
         5,
         0,
@@ -1226,6 +1242,355 @@ fn execute_decision_falls_back_on_merge_failure() {
     assert!(
         !has_accepted,
         "should NOT have posted accepted decision on failed merge"
+    );
+    assert!(
+        github.is_branch_deleted("thesis/73-test"),
+        "branch should be deleted on stale fallback"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Merge recovery and branch cleanup tests (issue #97)
+// ---------------------------------------------------------------------------
+
+/// Set up a bare "remote" and a working clone with a thesis branch that
+/// diverges from an advanced main. Returns (clone_path, bare_path) both
+/// inside the given `parent` directory. The caller owns the `parent`
+/// `ScenarioRepo` whose Drop cleans everything up.
+fn setup_diverged_repo(
+    parent: &ScenarioRepo,
+    conflict: bool,
+) -> (PathBuf, PathBuf) {
+    let bare_path = parent.path.join("remote.git");
+    let clone_path = parent.path.join("work");
+
+    fs::create_dir_all(&bare_path).unwrap();
+    run_git(&bare_path, &["init", "--bare"]);
+
+    // Clone from the parent dir so git creates the "work" subdirectory
+    run_git(
+        &parent.path,
+        &["clone", &bare_path.to_string_lossy(), "work"],
+    );
+    run_git(&clone_path, &["config", "user.name", "Test"]);
+    run_git(&clone_path, &["config", "user.email", "test@test.com"]);
+    fs::write(clone_path.join("README.md"), "initial\n").unwrap();
+    run_git(&clone_path, &["add", "README.md"]);
+    run_git(&clone_path, &["commit", "-m", "init"]);
+    run_git(&clone_path, &["branch", "-M", "main"]);
+    run_git(&clone_path, &["push", "-u", "origin", "main"]);
+
+    // Create thesis branch with changes
+    run_git(&clone_path, &["checkout", "-b", "thesis/99-test"]);
+    if conflict {
+        fs::write(clone_path.join("README.md"), "thesis change\n").unwrap();
+        run_git(&clone_path, &["add", "README.md"]);
+    } else {
+        fs::write(clone_path.join("feature.txt"), "thesis work\n").unwrap();
+        run_git(&clone_path, &["add", "feature.txt"]);
+    }
+    run_git(&clone_path, &["commit", "-m", "thesis work"]);
+    run_git(&clone_path, &["push", "-u", "origin", "thesis/99-test"]);
+
+    // Advance main (simulating another thesis merged)
+    run_git(&clone_path, &["checkout", "main"]);
+    if conflict {
+        fs::write(clone_path.join("README.md"), "main advance conflicts\n").unwrap();
+        run_git(&clone_path, &["add", "README.md"]);
+    } else {
+        fs::write(clone_path.join("other.txt"), "another thesis\n").unwrap();
+        run_git(&clone_path, &["add", "other.txt"]);
+    }
+    run_git(&clone_path, &["commit", "-m", "advance main"]);
+    run_git(&clone_path, &["push", "origin", "main"]);
+
+    (clone_path, bare_path)
+}
+
+#[test]
+fn execute_decision_rebase_and_retry_on_merge_conflict() {
+    let parent = ScenarioRepo::new("rebase-retry");
+    let (clone_path, _bare_path) = setup_diverged_repo(&parent, false);
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_pull_request(PullRequest {
+        number: 80,
+        title: "Candidate".to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        head_ref_name: "thesis/99-test".to_string(),
+        head_ref_oid: Some("sha-rebase".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: chrono::Utc::now(),
+        closed_at: None,
+        merged_at: None,
+        author: None,
+        url: None,
+        mergeable: Some("CONFLICTING".to_string()),
+    });
+
+    let result = commands::decide::execute_decision(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        Some(&clone_path),
+        80,
+        80,
+        "sha-rebase".to_string(),
+        "thesis/99-test",
+        polyresearch::comments::Outcome::Accepted,
+        0,
+        0,
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.outcome,
+        polyresearch::comments::Outcome::Accepted,
+        "PR should be accepted after rebase-and-retry"
+    );
+    assert!(
+        github.is_pr_merged(80),
+        "PR should be merged after successful rebase"
+    );
+    assert!(
+        github.is_issue_closed(80),
+        "thesis should be closed on accepted"
+    );
+    assert!(
+        !github.is_branch_deleted("thesis/99-test"),
+        "branch should NOT be deleted on successful merge"
+    );
+}
+
+#[test]
+fn execute_decision_stale_fallback_when_rebase_fails() {
+    let parent = ScenarioRepo::new("rebase-conflict");
+    let (clone_path, _bare_path) = setup_diverged_repo(&parent, true);
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_pull_request(PullRequest {
+        number: 81,
+        title: "Candidate".to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        head_ref_name: "thesis/99-test".to_string(),
+        head_ref_oid: Some("sha-conflict".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: chrono::Utc::now(),
+        closed_at: None,
+        merged_at: None,
+        author: None,
+        url: None,
+        mergeable: Some("CONFLICTING".to_string()),
+    });
+
+    let result = commands::decide::execute_decision(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        Some(&clone_path),
+        81,
+        81,
+        "sha-conflict".to_string(),
+        "thesis/99-test",
+        polyresearch::comments::Outcome::Accepted,
+        3,
+        0,
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.outcome,
+        polyresearch::comments::Outcome::Stale,
+        "outcome should be Stale when rebase fails due to true conflict"
+    );
+    assert!(
+        !github.is_pr_merged(81),
+        "conflicting PR should NOT be merged"
+    );
+    assert!(
+        github.is_pr_closed(81),
+        "conflicting PR should be closed as stale"
+    );
+    assert!(
+        github.is_branch_deleted("thesis/99-test"),
+        "branch should be deleted on stale fallback"
+    );
+}
+
+#[test]
+fn execute_decision_branch_cleanup_on_non_improvement() {
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_pull_request(PullRequest {
+        number: 82,
+        title: "Candidate".to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        head_ref_name: "thesis/82-opt".to_string(),
+        head_ref_oid: Some("sha-noimprov".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: chrono::Utc::now(),
+        closed_at: None,
+        merged_at: None,
+        author: None,
+        url: None,
+        mergeable: None,
+    });
+
+    let result = commands::decide::execute_decision(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        None,
+        82,
+        82,
+        "sha-noimprov".to_string(),
+        "thesis/82-opt",
+        polyresearch::comments::Outcome::NonImprovement,
+        0,
+        0,
+    )
+    .unwrap();
+
+    assert_eq!(result.outcome, polyresearch::comments::Outcome::NonImprovement);
+    assert!(
+        github.is_pr_closed(82),
+        "PR should be closed on non_improvement"
+    );
+    assert!(
+        github.is_branch_deleted("thesis/82-opt"),
+        "remote branch should be deleted on non_improvement so thesis can be retried"
+    );
+
+    // Verify the thesis can create a new PR (branch is gone)
+    let new_pr = github
+        .create_pull_request("thesis/82-opt", "New attempt", "retry", "main")
+        .unwrap();
+    assert!(new_pr.number > 0, "should create a new PR without error");
+}
+
+#[test]
+fn execute_decision_branch_cleanup_on_stale() {
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_pull_request(PullRequest {
+        number: 83,
+        title: "Candidate".to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        head_ref_name: "thesis/83-stale".to_string(),
+        head_ref_oid: Some("sha-stale".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: chrono::Utc::now(),
+        closed_at: None,
+        merged_at: None,
+        author: None,
+        url: None,
+        mergeable: None,
+    });
+
+    let result = commands::decide::execute_decision(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        None,
+        83,
+        83,
+        "sha-stale".to_string(),
+        "thesis/83-stale",
+        polyresearch::comments::Outcome::Stale,
+        0,
+        0,
+    )
+    .unwrap();
+
+    assert_eq!(result.outcome, polyresearch::comments::Outcome::Stale);
+    assert!(
+        github.is_pr_closed(83),
+        "PR should be closed on stale"
+    );
+    assert!(
+        github.is_branch_deleted("thesis/83-stale"),
+        "remote branch should be deleted on stale so thesis can be retried"
+    );
+
+    // Verify thesis can create a new PR
+    let new_pr = github
+        .create_pull_request("thesis/83-stale", "New attempt", "retry", "main")
+        .unwrap();
+    assert!(new_pr.number > 0, "should create a new PR without error");
+}
+
+#[test]
+fn execute_decision_concurrent_merge_scenario() {
+    let parent = ScenarioRepo::new("concurrent");
+    let (clone_path, _bare_path) = setup_diverged_repo(&parent, false);
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+
+    // First thesis PR: merges directly (no conflict)
+    github.seed_pull_request(PullRequest {
+        number: 84,
+        title: "First thesis".to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        head_ref_name: "thesis/84-first".to_string(),
+        head_ref_oid: Some("sha-first".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: chrono::Utc::now(),
+        closed_at: None,
+        merged_at: None,
+        author: None,
+        url: None,
+        mergeable: None,
+    });
+
+    // Second thesis PR: CONFLICTING because first thesis advanced main
+    github.seed_pull_request(PullRequest {
+        number: 85,
+        title: "Second thesis".to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        head_ref_name: "thesis/99-test".to_string(),
+        head_ref_oid: Some("sha-second".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: chrono::Utc::now(),
+        closed_at: None,
+        merged_at: None,
+        author: None,
+        url: None,
+        mergeable: Some("CONFLICTING".to_string()),
+    });
+
+    // Merge first thesis directly
+    let result1 = commands::decide::execute_decision(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        Some(&clone_path),
+        84,
+        84,
+        "sha-first".to_string(),
+        "thesis/84-first",
+        polyresearch::comments::Outcome::Accepted,
+        0,
+        0,
+    )
+    .unwrap();
+    assert_eq!(result1.outcome, polyresearch::comments::Outcome::Accepted);
+    assert!(github.is_pr_merged(84));
+
+    // Second thesis should succeed via rebase-and-retry
+    let result2 = commands::decide::execute_decision(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        Some(&clone_path),
+        85,
+        85,
+        "sha-second".to_string(),
+        "thesis/99-test",
+        polyresearch::comments::Outcome::Accepted,
+        0,
+        0,
+    )
+    .unwrap();
+    assert_eq!(
+        result2.outcome,
+        polyresearch::comments::Outcome::Accepted,
+        "second thesis should be accepted via rebase-and-retry, not discarded as stale"
+    );
+    assert!(
+        github.is_pr_merged(85),
+        "second PR should be merged after rebase"
     );
 }
 

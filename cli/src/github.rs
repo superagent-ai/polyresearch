@@ -150,6 +150,7 @@ pub trait GitHubApi: Send + Sync {
     ) -> Result<PullRequest>;
     fn close_pull_request(&self, pr_number: u64) -> Result<serde_json::Value>;
     fn merge_pull_request(&self, pr_number: u64) -> Result<serde_json::Value>;
+    fn delete_ref(&self, ref_name: &str) -> Result<()>;
 }
 
 impl GitHubClient {
@@ -401,6 +402,21 @@ impl GitHubClient {
         )
     }
 
+    pub fn delete_ref(&self, ref_name: &str) -> Result<()> {
+        let endpoint = format!(
+            "repos/{}/{}/git/refs/heads/{ref_name}",
+            self.repo.owner, self.repo.name
+        );
+        let mut command = Command::new("gh");
+        command
+            .arg("api")
+            .arg("--method")
+            .arg("DELETE")
+            .arg(&endpoint);
+        run_text_command(command, false)?;
+        Ok(())
+    }
+
     fn gh_json_typed<T, const N: usize>(&self, args: [&str; N]) -> Result<T>
     where
         T: DeserializeOwned,
@@ -533,6 +549,10 @@ impl GitHubApi for GitHubClient {
 
     fn merge_pull_request(&self, pr_number: u64) -> Result<serde_json::Value> {
         GitHubClient::merge_pull_request(self, pr_number)
+    }
+
+    fn delete_ref(&self, ref_name: &str) -> Result<()> {
+        GitHubClient::delete_ref(self, ref_name)
     }
 }
 

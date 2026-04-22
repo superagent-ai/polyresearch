@@ -289,6 +289,10 @@ impl GitHubApi for MockGitHubClient {
         self.merged_prs.lock().unwrap().push(pr_number);
         Ok(serde_json::json!({"merged": true}))
     }
+
+    fn delete_ref(&self, _ref_name: &str) -> Result<()> {
+        Ok(())
+    }
 }
 
 struct TestRepo {
