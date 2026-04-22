@@ -240,6 +240,7 @@ pub fn create_thesis_worktree(
     repo_root: &PathBuf,
     issue_number: u64,
     title: &str,
+    default_branch: &str,
 ) -> Result<ThesisWorkspace> {
     let slug = slugify(title);
     let branch = format!("thesis/{issue_number}-{slug}");
@@ -267,7 +268,7 @@ pub fn create_thesis_worktree(
     let worktree_path_arg = worktree_path.to_string_lossy().into_owned();
     run_git(
         repo_root,
-        &["worktree", "add", "-b", &branch, &worktree_path_arg, "main"],
+        &["worktree", "add", "-b", &branch, &worktree_path_arg, default_branch],
     )?;
 
     Ok(ThesisWorkspace {

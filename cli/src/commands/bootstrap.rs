@@ -209,7 +209,10 @@ pub fn write_templates(repo_root: &Path, goal: Option<&str>, login: &str) -> Res
     let program_path = repo_root.join("PROGRAM.md");
     if !program_path.exists() {
         let base = include_str!("../../prompts/template-program.md");
-        let versioned = base.replace("{{VERSION}}", env!("CARGO_PKG_VERSION"));
+        let detected_branch = detect_default_branch(repo_root);
+        let versioned = base
+            .replace("{{VERSION}}", env!("CARGO_PKG_VERSION"))
+            .replace("{{DEFAULT_BRANCH}}", &detected_branch);
         let with_login = versioned
             .replace(
                 "lead_github_login: replace-me",
@@ -396,6 +399,39 @@ pub fn commit_and_push_setup_files(repo_root: &Path) -> Result<()> {
         Err(err) => eprintln!("Committed setup files locally. Push failed (run `git push` manually): {err}"),
     }
     Ok(())
+}
+
+fn detect_default_branch(repo_root: &Path) -> String {
+    let output = Command::new("git")
+        .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
+        .current_dir(repo_root)
+        .output()
+        .ok();
+    if let Some(output) = output {
+        if output.status.success() {
+            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let branch = branch.strip_prefix("origin/").unwrap_or(&branch).to_string();
+            if !branch.is_empty() {
+                return branch;
+            }
+        }
+    }
+
+    let output = Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(repo_root)
+        .output()
+        .ok();
+    if let Some(output) = output {
+        if output.status.success() {
+            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !branch.is_empty() {
+                return branch;
+            }
+        }
+    }
+
+    "main".to_string()
 }
 
 pub fn normalize_program_md(repo_root: &Path) -> Result<()> {

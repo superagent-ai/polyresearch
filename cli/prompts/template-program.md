@@ -1,6 +1,7 @@
 # Research Program
 
 cli_version: {{VERSION}}
+default_branch: {{DEFAULT_BRANCH}}
 lead_github_login: replace-me
 maintainer_github_login: replace-me
 metric_tolerance: 0.01

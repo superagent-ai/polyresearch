@@ -157,7 +157,8 @@ pub(crate) fn decide_with_peer_review(
     }
 
     let tolerance = ctx.config.tolerance()?;
-    let main_head = crate::commands::run_git(&ctx.repo_root, &["rev-parse", "main"])?;
+    let default_branch = ctx.config.resolve_default_branch(&ctx.repo_root)?;
+    let main_head = crate::commands::run_git(&ctx.repo_root, &["rev-parse", &default_branch])?;
     if pr_state
         .reviews
         .iter()

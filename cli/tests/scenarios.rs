@@ -42,23 +42,35 @@ impl ScenarioRepo {
     }
 
     fn init_git(&self) {
+        self.init_git_on_branch("main");
+    }
+
+    fn init_git_on_branch(&self, branch: &str) {
         run_git(&self.path, &["init"]);
         run_git(&self.path, &["config", "user.name", "Test"]);
         run_git(&self.path, &["config", "user.email", "test@test.com"]);
         fs::write(self.path.join("README.md"), "test\n").unwrap();
         run_git(&self.path, &["add", "README.md"]);
         run_git(&self.path, &["commit", "-m", "init"]);
-        run_git(&self.path, &["branch", "-M", "main"]);
+        run_git(&self.path, &["branch", "-M", branch]);
     }
 
     fn write_program_md(&self, lead: &str) {
+        self.write_program_md_with_branch(lead, None);
+    }
+
+    fn write_program_md_with_branch(&self, lead: &str, default_branch: Option<&str>) {
+        let branch_line = match default_branch {
+            Some(b) => format!("default_branch: {b}\n"),
+            None => String::new(),
+        };
         fs::write(
             self.path.join("PROGRAM.md"),
             format!(
                 r#"# Research Program
 
 cli_version: {version}
-lead_github_login: {lead}
+{branch_line}lead_github_login: {lead}
 maintainer_github_login: {lead}
 metric_tolerance: 0.01
 metric_direction: higher_is_better
@@ -2224,4 +2236,238 @@ async fn scenario_decide_idempotent_no_duplicate_comment() {
         "should have exactly one unique decision comment on PR #163, found {}: {:?}",
         unique_decisions.len(), unique_decisions
     );
+}
+
+// ---------------------------------------------------------------------------
+// Default branch scenarios (issue #95)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn scenario_sync_accepts_master_default_branch() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("sync-master");
+    repo.init_git_on_branch("master");
+    repo.write_program_md_with_branch("lead", Some("master"));
+    repo.write_prepare_md();
+    repo.write_results_tsv();
+    repo.write_node_config("test-node", "echo noop");
+    repo.commit_all("setup");
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Sync,
+    );
+
+    let result = commands::sync::run(&ctx).await;
+    assert!(result.is_ok(), "sync should succeed on master with default_branch: master: {result:?}");
+}
+
+#[tokio::test]
+async fn scenario_sync_rejects_wrong_branch_with_config() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("sync-wrong-branch");
+    repo.init_git_on_branch("master");
+    repo.write_program_md_with_branch("lead", Some("master"));
+    repo.write_prepare_md();
+    repo.write_results_tsv();
+    repo.write_node_config("test-node", "echo noop");
+    repo.commit_all("setup");
+
+    run_git(&repo.path, &["checkout", "-b", "feature-branch"]);
+
+    let now = chrono::Utc::now();
+    let issue = Issue {
+        number: 1,
+        title: "Test thesis".to_string(),
+        body: Some("Test".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label { name: "thesis".to_string() }],
+        created_at: now - chrono::Duration::hours(2),
+        closed_at: None,
+        author: Some(Author { login: "lead".to_string() }),
+        url: None,
+    };
+    let approval_comment = IssueComment {
+        id: 100,
+        body: ProtocolComment::Approval { thesis: 1 }.render(),
+        user: CommentUser { login: "lead".to_string() },
+        created_at: now - chrono::Duration::hours(1),
+        updated_at: None,
+    };
+    let claim_comment = IssueComment {
+        id: 101,
+        body: ProtocolComment::Claim { thesis: 1, node: "worker".to_string() }.render(),
+        user: CommentUser { login: "contrib".to_string() },
+        created_at: now - chrono::Duration::minutes(50),
+        updated_at: None,
+    };
+    let attempt_comment = IssueComment {
+        id: 102,
+        body: ProtocolComment::Attempt {
+            thesis: 1,
+            branch: "thesis/1-test".to_string(),
+            metric: 0.95,
+            baseline_metric: Some(0.90),
+            observation: polyresearch::comments::Observation::Improved,
+            summary: "Test".to_string(),
+            annotations: None,
+        }.render(),
+        user: CommentUser { login: "contrib".to_string() },
+        created_at: now - chrono::Duration::minutes(40),
+        updated_at: None,
+    };
+
+    let pr = PullRequest {
+        number: 2,
+        title: "Thesis #1: Test thesis".to_string(),
+        body: Some("References #1".to_string()),
+        state: "MERGED".to_string(),
+        head_ref_name: "thesis/1-test".to_string(),
+        head_ref_oid: Some("abc".to_string()),
+        base_ref_name: Some("master".to_string()),
+        created_at: now - chrono::Duration::minutes(30),
+        closed_at: None,
+        merged_at: Some(now - chrono::Duration::minutes(20)),
+        author: Some(Author { login: "contrib".to_string() }),
+        url: None,
+        mergeable: None,
+    };
+    let policy_pass_comment = IssueComment {
+        id: 199,
+        body: ProtocolComment::PolicyPass {
+            thesis: 1,
+            candidate_sha: "abc".to_string(),
+        }.render(),
+        user: CommentUser { login: "lead".to_string() },
+        created_at: now - chrono::Duration::minutes(18),
+        updated_at: None,
+    };
+    let decision_comment = IssueComment {
+        id: 200,
+        body: ProtocolComment::Decision {
+            thesis: 1,
+            candidate_sha: "abc".to_string(),
+            outcome: polyresearch::comments::Outcome::Accepted,
+            confirmations: 0,
+        }.render(),
+        user: CommentUser { login: "lead".to_string() },
+        created_at: now - chrono::Duration::minutes(15),
+        updated_at: None,
+    };
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(1, vec![approval_comment, claim_comment, attempt_comment]);
+    github.seed_pull_request(pr);
+    github.seed_pr_comments(2, vec![policy_pass_comment, decision_comment]);
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Sync,
+    );
+
+    let result = commands::sync::run(&ctx).await;
+    assert!(result.is_err(), "sync should reject when not on default branch");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(err_msg.contains("master"), "error should mention 'master' branch, got: {err_msg}");
+}
+
+#[test]
+fn create_thesis_worktree_uses_config_default_branch() {
+    let repo = ScenarioRepo::new("worktree-master");
+    repo.init_git_on_branch("master");
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// test\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "add src"]);
+
+    let workspace = commands::create_thesis_worktree(
+        &repo.path,
+        99,
+        "Test worktree on master",
+        "master",
+    )
+    .unwrap();
+
+    assert!(workspace.worktree_path.exists(), "worktree should exist");
+    assert!(workspace.branch.starts_with("thesis/99-"), "branch should have thesis prefix");
+
+    let worktree_branch = commands::current_branch(&workspace.worktree_path).unwrap();
+    assert_eq!(worktree_branch, workspace.branch, "worktree should be on thesis branch");
+
+    let _ = commands::run_git(&repo.path, &[
+        "worktree", "remove", "--force",
+        &workspace.worktree_path.to_string_lossy(),
+    ]);
+}
+
+#[tokio::test]
+async fn scenario_bootstrap_writes_default_branch() {
+    let repo = ScenarioRepo::new("boot-default-branch");
+    repo.init_git_on_branch("master");
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        github,
+        "lead",
+        false,
+        Commands::Bootstrap(BootstrapArgs {
+            url: "https://github.com/test/repo".to_string(),
+            fork: None,
+            no_fork: true,
+            goal: Some("Test goal".to_string()),
+            yes: false,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    commands::bootstrap::scaffold(
+        &ctx,
+        &BootstrapArgs {
+            url: "https://github.com/test/repo".to_string(),
+            fork: None,
+            no_fork: true,
+            goal: Some("Test goal".to_string()),
+            yes: false,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .unwrap();
+
+    let program = fs::read_to_string(repo.path.join("PROGRAM.md")).unwrap();
+    assert!(
+        program.contains("default_branch:"),
+        "PROGRAM.md should contain default_branch field, got:\n{program}"
+    );
+}
+
+#[test]
+fn resolve_default_branch_returns_config_value() {
+    let repo = ScenarioRepo::new("resolve-config");
+    repo.init_git_on_branch("master");
+    repo.write_program_md_with_branch("lead", Some("master"));
+
+    let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
+    let branch = config.resolve_default_branch(&repo.path).unwrap();
+    assert_eq!(branch, "master", "should return config value");
+}
+
+#[test]
+fn resolve_default_branch_falls_back_to_main() {
+    let repo = ScenarioRepo::new("resolve-fallback");
+    repo.init_git_on_branch("main");
+    repo.write_program_md("lead");
+
+    let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
+    let branch = config.resolve_default_branch(&repo.path).unwrap();
+    assert_eq!(branch, "main", "should fall back to 'main' when not set and git detection unavailable");
 }
