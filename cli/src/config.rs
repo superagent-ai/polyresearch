@@ -397,18 +397,29 @@ impl ProtocolConfig {
         if let Some(branch) = &self.default_branch {
             return Ok(branch.clone());
         }
-        let output = std::process::Command::new("git")
-            .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
-            .current_dir(repo_root)
-            .output()
-            .wrap_err("failed to detect default branch")?;
-        if output.status.success() {
-            let branch = String::from_utf8(output.stdout)?.trim().to_string();
-            let branch = branch.strip_prefix("origin/").unwrap_or(&branch).to_string();
-            return Ok(branch);
-        }
-        Ok("main".to_string())
+        Ok(detect_default_branch_from_git(repo_root))
     }
+}
+
+/// Detect the repository's default branch from git remote metadata.
+/// Checks `refs/remotes/origin/HEAD` first, then falls back to `"main"`.
+pub fn detect_default_branch_from_git(repo_root: &Path) -> String {
+    let output = std::process::Command::new("git")
+        .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
+        .current_dir(repo_root)
+        .output()
+        .ok();
+    if let Some(output) = output {
+        if output.status.success() {
+            let raw = String::from_utf8_lossy(&output.stdout);
+            let branch = raw.trim();
+            let branch = branch.strip_prefix("origin/").unwrap_or(branch);
+            if !branch.is_empty() {
+                return branch.to_string();
+            }
+        }
+    }
+    "main".to_string()
 }
 
 #[derive(Debug, Clone)]

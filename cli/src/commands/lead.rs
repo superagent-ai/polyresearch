@@ -91,12 +91,12 @@ pub fn sync_if_stale(ctx: &AppContext, repo_state: &RepositoryState, default_bra
     }
 
     let current = commands::current_branch(&ctx.repo_root)?;
-    if current != default_branch && current != "main" {
+    if current != default_branch {
         eprintln!("Warning: not on {default_branch} branch, skipping sync commit");
         return Ok(());
     }
 
-    commands::run_git(&ctx.repo_root, &["pull", "--rebase"])?;
+    commands::run_git(&ctx.repo_root, &["pull", "origin", default_branch, "--ff-only"])?;
 
     let mut ledger = Ledger::load(&ctx.repo_root)?;
     let missing = ledger.missing_rows(repo_state);

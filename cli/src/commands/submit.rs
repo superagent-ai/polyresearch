@@ -44,6 +44,7 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
         push_current_branch(&ctx.repo_root)?;
     }
 
+    let default_branch = ctx.config.resolve_default_branch(&ctx.repo_root)?;
     let pr = if ctx.cli.dry_run {
         None
     } else {
@@ -60,7 +61,7 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
                     args.issue, improved_attempt.metric, improved_attempt.summary
                 ),
             },
-            "main",
+            &default_branch,
         )?)
     };
 
