@@ -809,6 +809,51 @@ mod tests {
     }
 
     #[test]
+    fn contribute_prompt_once_flag() {
+        let prompt = contribute_workflow_prompt(true, 60, None, 75);
+        assert!(
+            prompt.contains("ONE iteration"),
+            "once prompt must instruct a single iteration"
+        );
+    }
+
+    #[test]
+    fn contribute_prompt_sleep_secs() {
+        let prompt = contribute_workflow_prompt(false, 120, None, 75);
+        assert!(
+            prompt.contains("Sleep 120 seconds"),
+            "continuous prompt must include the sleep duration"
+        );
+    }
+
+    #[test]
+    fn contribute_prompt_max_parallel() {
+        let prompt = contribute_workflow_prompt(false, 60, Some(3), 75);
+        assert!(
+            prompt.contains("3 thesis"),
+            "prompt must include the max-parallel limit"
+        );
+    }
+
+    #[test]
+    fn contribute_prompt_capacity() {
+        let prompt = contribute_workflow_prompt(false, 60, None, 50);
+        assert!(
+            prompt.contains("50%"),
+            "prompt must include the capacity percentage"
+        );
+    }
+
+    #[test]
+    fn lead_prompt_sleep_secs() {
+        let prompt = lead_workflow_prompt(false, 45);
+        assert!(
+            prompt.contains("Sleep 45 seconds"),
+            "continuous lead prompt must include the sleep duration"
+        );
+    }
+
+    #[test]
     fn lead_prompt_once_requires_all_steps() {
         let prompt = lead_workflow_prompt(true, 60);
         assert!(

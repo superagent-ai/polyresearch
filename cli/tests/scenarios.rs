@@ -111,21 +111,8 @@ Test scenario goal.
     }
 
     fn write_node_config(&self, node_id: &str, agent_command: &str) {
-        self.write_node_config_with_timeout(node_id, agent_command, None);
-    }
-
-    fn write_node_config_with_timeout(
-        &self,
-        node_id: &str,
-        agent_command: &str,
-        timeout_secs: Option<u64>,
-    ) {
-        let timeout_line = match timeout_secs {
-            Some(t) => format!("timeout_secs = {t}\n"),
-            None => String::new(),
-        };
         let content = format!(
-            "node_id = \"{node_id}\"\ncapacity = 75\n\n[agent]\ncommand = \"{agent_command}\"\n{timeout_line}"
+            "node_id = \"{node_id}\"\ncapacity = 75\n\n[agent]\ncommand = \"{agent_command}\"\n"
         );
         fs::write(self.path.join(".polyresearch-node.toml"), content).unwrap();
     }
@@ -135,19 +122,6 @@ Test scenario goal.
         self.write_prepare_md();
         self.write_results_tsv();
         self.write_node_config(node_id, agent_command);
-    }
-
-    fn write_full_setup_with_timeout(
-        &self,
-        lead: &str,
-        node_id: &str,
-        agent_command: &str,
-        timeout_secs: u64,
-    ) {
-        self.write_program_md(lead);
-        self.write_prepare_md();
-        self.write_results_tsv();
-        self.write_node_config_with_timeout(node_id, agent_command, Some(timeout_secs));
     }
 
     fn commit_all(&self, message: &str) {
@@ -688,8 +662,13 @@ async fn scenario_contribute_agent_failure() {
     .await;
 
     assert!(
-        result.is_ok(),
-        "contribute should succeed even on agent failure: {result:?}"
+        result.is_err(),
+        "contribute --once should propagate agent failure"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("status"),
+        "error should mention exit status: {err_msg}"
     );
 }
 
@@ -798,17 +777,17 @@ async fn scenario_lead_accept_pr() {
         }),
     );
 
-    let result = commands::lead::run(
-        &ctx,
-        &LeadArgs {
-            once: true,
-            sleep_secs: 0,
-            overrides: NodeOverrides::default(),
-        },
+    let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        &config,
     )
-    .await;
+    .await
+    .unwrap();
 
-    assert!(result.is_ok(), "lead should succeed: {result:?}");
+    let result = commands::lead::decide_ready_prs(&ctx, &config, &repo_state);
+
+    assert!(result.is_ok(), "decide_ready_prs should succeed: {result:?}");
     assert!(github.is_pr_merged(50), "PR #50 should be merged");
     assert!(
         github.is_issue_closed(40),
@@ -926,17 +905,17 @@ async fn scenario_lead_reject_non_improvement() {
         }),
     );
 
-    let result = commands::lead::run(
-        &ctx,
-        &LeadArgs {
-            once: true,
-            sleep_secs: 0,
-            overrides: NodeOverrides::default(),
-        },
+    let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        &config,
     )
-    .await;
+    .await
+    .unwrap();
 
-    assert!(result.is_ok(), "lead should succeed: {result:?}");
+    let result = commands::lead::decide_ready_prs(&ctx, &config, &repo_state);
+
+    assert!(result.is_ok(), "decide_ready_prs should succeed: {result:?}");
     assert!(github.is_pr_closed(51), "PR #51 should be closed");
     assert!(
         !github.is_issue_closed(41),
@@ -1101,6 +1080,103 @@ fn execute_decision_accepted_merges_and_closes() {
 }
 
 // ---------------------------------------------------------------------------
+// Lead hybrid loop error handling (issue #126)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn scenario_lead_once_error_propagation() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("lead-once-err");
+    repo.init_git();
+
+    let agent_cmd = mock_agent_command("fail");
+    repo.write_full_setup("lead", "lead-node-err", &agent_cmd);
+    repo.commit_all("setup");
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Lead(LeadArgs {
+            once: true,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::lead::run(
+        &ctx,
+        &LeadArgs {
+            once: true,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "lead --once should propagate agent failure"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("status"),
+        "error should mention exit status: {err_msg}"
+    );
+}
+
+#[tokio::test]
+async fn scenario_lead_continuous_recovery() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("lead-recover");
+    repo.init_git();
+
+    let agent_cmd = mock_agent_command("fail_once");
+    repo.write_full_setup("lead", "lead-node-rec", &agent_cmd);
+    // Set min_queue_depth to 0 so the lead loop doesn't restart the agent
+    // trying to fill the queue after recovery.
+    let program = fs::read_to_string(repo.path.join("PROGRAM.md")).unwrap();
+    fs::write(
+        repo.path.join("PROGRAM.md"),
+        program.replace("min_queue_depth: 5", "min_queue_depth: 0"),
+    )
+    .unwrap();
+    repo.commit_all("setup");
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Lead(LeadArgs {
+            once: false,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::lead::run(
+        &ctx,
+        &LeadArgs {
+            once: false,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "continuous lead mode should recover after transient agent failure: {result:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Conflicting PR handling (issue #80)
 // ---------------------------------------------------------------------------
 
@@ -1204,17 +1280,17 @@ async fn scenario_lead_closes_conflicting_pr_as_stale() {
         }),
     );
 
-    let result = commands::lead::run(
-        &ctx,
-        &LeadArgs {
-            once: true,
-            sleep_secs: 0,
-            overrides: NodeOverrides::default(),
-        },
+    let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        &config,
     )
-    .await;
+    .await
+    .unwrap();
 
-    assert!(result.is_ok(), "lead should succeed: {result:?}");
+    let result = commands::lead::decide_ready_prs(&ctx, &config, &repo_state);
+
+    assert!(result.is_ok(), "decide_ready_prs should succeed: {result:?}");
     assert!(
         !github.is_pr_merged(55),
         "conflicting PR #55 should NOT be merged"
@@ -2490,7 +2566,7 @@ async fn scenario_contribute_agent_failure_recovers() {
     let repo = ScenarioRepo::new("contrib-fail-recover");
     repo.init_git();
 
-    let agent_cmd = mock_agent_command("fail");
+    let agent_cmd = mock_agent_command("fail_once");
     repo.write_full_setup("lead", "test-node-fr", &agent_cmd);
     fs::create_dir_all(repo.path.join("src")).unwrap();
     fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
@@ -2512,7 +2588,7 @@ async fn scenario_contribute_agent_failure_recovers() {
         true,
         Commands::Contribute(ContributeArgs {
             url: None,
-            once: true,
+            once: false,
             max_parallel: Some(1),
             sleep_secs: 0,
             overrides: NodeOverrides::default(),
@@ -2523,7 +2599,7 @@ async fn scenario_contribute_agent_failure_recovers() {
         &ctx,
         &ContributeArgs {
             url: None,
-            once: true,
+            once: false,
             max_parallel: Some(1),
             sleep_secs: 0,
             overrides: NodeOverrides::default(),
@@ -2533,7 +2609,7 @@ async fn scenario_contribute_agent_failure_recovers() {
 
     assert!(
         result.is_ok(),
-        "contribute should handle agent failure gracefully: {result:?}"
+        "continuous mode should recover after transient agent failure: {result:?}"
     );
 }
 
@@ -3202,76 +3278,18 @@ fn resolve_default_branch_falls_back_to_main() {
     );
 }
 
-#[tokio::test]
-async fn scenario_contribute_timeout_kills_agent() {
-    let _guard = EnvGuard::lock_clean();
-    let repo = ScenarioRepo::new("contrib-timeout");
-    repo.init_git();
-
-    let agent_cmd = mock_agent_command("hang");
-    repo.write_full_setup_with_timeout("lead", "test-node-timeout", &agent_cmd, 3);
-    fs::create_dir_all(repo.path.join("src")).unwrap();
-    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
-    repo.commit_all("setup");
-
-    let (issue, comments) = make_approved_thesis(95, "Timeout experiment", "lead");
-    let github = Arc::new(ScenarioGitHub::new("contributor"));
-    github.seed_issue(issue);
-    github.seed_issue_comments(95, comments);
-
-    unsafe {
-        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-timeout");
-    }
-
-    let ctx = make_scenario_ctx(
-        repo.path.clone(),
-        Arc::clone(&github) as Arc<dyn GitHubApi>,
-        "lead",
-        false,
-        Commands::Contribute(ContributeArgs {
-            url: None,
-            once: true,
-            max_parallel: Some(1),
-            sleep_secs: 0,
-            overrides: NodeOverrides::default(),
-        }),
-    );
-
-    let result = commands::contribute::run(
-        &ctx,
-        &ContributeArgs {
-            url: None,
-            once: true,
-            max_parallel: Some(1),
-            sleep_secs: 0,
-            overrides: NodeOverrides::default(),
-        },
-    )
-    .await;
-
-    assert!(
-        result.is_ok(),
-        "contribute should handle agent timeout gracefully: {result:?}"
-    );
-
-    let posted = github.posted_comments();
-    let has_release_timeout = posted
-        .iter()
-        .any(|(_, body)| body.contains("polyresearch:release") && body.contains("timeout"));
-    assert!(
-        has_release_timeout,
-        "expected a release comment with reason=timeout, got: {posted:?}"
-    );
-}
+// scenario_contribute_timeout_kills_agent was removed: the hybrid architecture
+// delegates timeout handling to the workflow agent via the prompt, so
+// spawn_workflow_agent has no Rust-level timeout to test.
 
 #[tokio::test]
-async fn scenario_contribute_fast_agent_unaffected_by_timeout() {
+async fn scenario_contribute_succeeds_with_fast_agent() {
     let _guard = EnvGuard::lock_clean();
     let repo = ScenarioRepo::new("contrib-fast");
     repo.init_git();
 
     let agent_cmd = mock_agent_command("improved");
-    repo.write_full_setup_with_timeout("lead", "test-node-fast", &agent_cmd, 60);
+    repo.write_full_setup("lead", "test-node-fast", &agent_cmd);
     fs::create_dir_all(repo.path.join("src")).unwrap();
     fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
     repo.commit_all("setup");

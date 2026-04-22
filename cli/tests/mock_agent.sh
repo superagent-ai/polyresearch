@@ -1,7 +1,7 @@
 #!/bin/bash
 # Mock agent for scenario tests.
-# Controlled by MOCK_AGENT_RESULT: improved, no_improvement, crashed, fail, hang,
-#   no_improvement_with_changes
+# Controlled by MOCK_AGENT_RESULT: improved, no_improvement, crashed, fail,
+#   fail_once, hang, no_improvement_with_changes
 RESULT_DIR="$PWD/.polyresearch"
 mkdir -p "$RESULT_DIR"
 
@@ -32,6 +32,17 @@ RESULT
         ;;
     fail)
         exit 1
+        ;;
+    fail_once)
+        COUNTER_FILE="${RESULT_DIR}/.mock-run-count"
+        COUNT=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
+        COUNT=$((COUNT + 1))
+        echo "$COUNT" > "$COUNTER_FILE"
+        # Threshold is 2 because the preflight smoke test consumes one invocation.
+        if [ "$COUNT" -le 2 ]; then
+            exit 1
+        fi
+        exit 0
         ;;
     hang)
         sleep 999999
