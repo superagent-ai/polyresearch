@@ -3535,3 +3535,205 @@ async fn scenario_preflight_dirty_tree_aborts_lead() {
         "error should mention uncommitted changes: {err_msg}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Crash cooldown scenarios (issue #104)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn scenario_crash_cooldown_filters_claimable_theses() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("crash-cooldown");
+    repo.init_git();
+    repo.write_full_setup("lead", "test-node", "echo noop");
+    repo.commit_all("setup");
+
+    let now = chrono::Utc::now();
+
+    // Thesis #1: approved, with two claim+crash cycles from "test-node".
+    let (issue1, mut comments1) = make_approved_thesis(70, "Crashy thesis", "lead");
+
+    // First claim+release cycle.
+    comments1.push(IssueComment {
+        id: 7001,
+        body: ProtocolComment::Claim {
+            thesis: 70,
+            node: "test-node".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: now - chrono::Duration::seconds(60),
+        updated_at: None,
+    });
+    comments1.push(IssueComment {
+        id: 7002,
+        body: ProtocolComment::Release {
+            thesis: 70,
+            node: "test-node".to_string(),
+            reason: polyresearch::comments::ReleaseReason::InfraFailure,
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: now - chrono::Duration::seconds(50),
+        updated_at: None,
+    });
+
+    // Second claim+release cycle.
+    comments1.push(IssueComment {
+        id: 7003,
+        body: ProtocolComment::Claim {
+            thesis: 70,
+            node: "test-node".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: now - chrono::Duration::seconds(40),
+        updated_at: None,
+    });
+    comments1.push(IssueComment {
+        id: 7004,
+        body: ProtocolComment::Release {
+            thesis: 70,
+            node: "test-node".to_string(),
+            reason: polyresearch::comments::ReleaseReason::InfraFailure,
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: now - chrono::Duration::seconds(10),
+        updated_at: None,
+    });
+
+    // Thesis #2: approved, no crash history.
+    let (issue2, comments2) = make_approved_thesis(71, "Healthy thesis", "lead");
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_issue(issue1);
+    github.seed_issue_comments(70, comments1);
+    github.seed_issue(issue2);
+    github.seed_issue_comments(71, comments2);
+
+    let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        &config,
+    )
+    .await
+    .unwrap();
+
+    // With a 60s base cooldown, thesis #70 (2 crashes, last 10s ago, cooldown = 120s)
+    // should be excluded.
+    let claimable = polyresearch::commands::contribute::claimable_theses(
+        &repo_state,
+        "test-node",
+        60,
+    );
+    let claimable_numbers: Vec<u64> = claimable.iter().map(|t| t.issue.number).collect();
+    assert!(
+        !claimable_numbers.contains(&70),
+        "thesis #70 should be excluded due to crash cooldown, got: {claimable_numbers:?}"
+    );
+    assert!(
+        claimable_numbers.contains(&71),
+        "thesis #71 should be claimable (no crashes), got: {claimable_numbers:?}"
+    );
+
+    // With base_cooldown_secs = 0, cooldown is disabled; both should be claimable.
+    let claimable_no_cooldown = polyresearch::commands::contribute::claimable_theses(
+        &repo_state,
+        "test-node",
+        0,
+    );
+    let numbers_no_cooldown: Vec<u64> =
+        claimable_no_cooldown.iter().map(|t| t.issue.number).collect();
+    assert!(
+        numbers_no_cooldown.contains(&70),
+        "thesis #70 should be claimable with zero cooldown, got: {numbers_no_cooldown:?}"
+    );
+    assert!(
+        numbers_no_cooldown.contains(&71),
+        "thesis #71 should be claimable with zero cooldown, got: {numbers_no_cooldown:?}"
+    );
+}
+
+#[tokio::test]
+async fn scenario_crash_cooldown_per_node() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("crash-cooldown-per-node");
+    repo.init_git();
+    repo.write_full_setup("lead", "node-a", "echo noop");
+    repo.commit_all("setup");
+
+    let now = chrono::Utc::now();
+
+    // Thesis with claim+InfraFailure release cycle from "node-a" only.
+    let (issue, mut comments) = make_approved_thesis(75, "Per-node thesis", "lead");
+    comments.push(IssueComment {
+        id: 7501,
+        body: ProtocolComment::Claim {
+            thesis: 75,
+            node: "node-a".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: now - chrono::Duration::seconds(15),
+        updated_at: None,
+    });
+    comments.push(IssueComment {
+        id: 7502,
+        body: ProtocolComment::Release {
+            thesis: 75,
+            node: "node-a".to_string(),
+            reason: polyresearch::comments::ReleaseReason::InfraFailure,
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: now - chrono::Duration::seconds(5),
+        updated_at: None,
+    });
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(75, comments);
+
+    let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        &config,
+    )
+    .await
+    .unwrap();
+
+    // node-a should be blocked by cooldown.
+    let claimable_a = polyresearch::commands::contribute::claimable_theses(
+        &repo_state,
+        "node-a",
+        60,
+    );
+    assert!(
+        !claimable_a.iter().any(|t| t.issue.number == 75),
+        "node-a should be blocked by crash cooldown on thesis #75"
+    );
+
+    // node-b should NOT be blocked -- the crash is local to node-a.
+    let claimable_b = polyresearch::commands::contribute::claimable_theses(
+        &repo_state,
+        "node-b",
+        60,
+    );
+    assert!(
+        claimable_b.iter().any(|t| t.issue.number == 75),
+        "node-b should be able to claim thesis #75 (crash was node-a's)"
+    );
+}
