@@ -124,34 +124,11 @@ pub fn write_node_config(
     node: &str,
     overrides: &crate::cli::NodeOverrides,
 ) -> Result<()> {
-    let existing = NodeConfig::load(repo_root).ok();
-    let existing_budget = existing
-        .as_ref()
-        .map(|config| config.api_budget)
-        .unwrap_or_else(|| NodeConfig::load_api_budget(repo_root));
-    let existing_request_delay_ms = existing
-        .as_ref()
-        .map(|config| config.request_delay_ms)
-        .unwrap_or_else(|| NodeConfig::load_request_delay_ms(repo_root));
-    let existing_capacity = existing
-        .as_ref()
-        .map(|config| config.capacity)
-        .unwrap_or(crate::config::DEFAULT_CAPACITY);
-    let existing_agent = existing.as_ref().map(|config| config.agent.clone());
-    NodeConfig::new(
-        node.to_string(),
-        overrides.capacity.unwrap_or(existing_capacity),
-        overrides.api_budget.unwrap_or(existing_budget),
-        overrides.request_delay.unwrap_or(existing_request_delay_ms),
-        overrides
-            .agent_command
-            .as_ref()
-            .map(|cmd| crate::config::AgentConfig {
-                command: cmd.clone(),
-            })
-            .or(existing_agent),
-    )
-    .save(repo_root)
+    let mut config = NodeConfig::load(repo_root).unwrap_or_else(|_| {
+        NodeConfig::new(node, crate::config::DEFAULT_CAPACITY, crate::config::DEFAULT_API_BUDGET, crate::config::DEFAULT_REQUEST_DELAY_MS, None)
+    });
+    config.node_id = node.to_string();
+    config.with_overrides(overrides).save(repo_root)
 }
 
 pub fn ensure_node_config(repo_root: &Path) -> Result<()> {

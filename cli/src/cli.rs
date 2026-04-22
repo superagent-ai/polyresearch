@@ -67,6 +67,19 @@ pub struct NodeOverrides {
 
     #[arg(long)]
     pub agent_command: Option<String>,
+
+    #[arg(long)]
+    pub agent_timeout: Option<u64>,
+}
+
+impl NodeOverrides {
+    pub fn has_any(&self) -> bool {
+        self.capacity.is_some()
+            || self.api_budget.is_some()
+            || self.request_delay.is_some()
+            || self.agent_command.is_some()
+            || self.agent_timeout.is_some()
+    }
 }
 
 #[derive(Debug, Args, Clone)]

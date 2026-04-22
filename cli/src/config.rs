@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_API_BUDGET: u64 = 5_000;
 pub const DEFAULT_REQUEST_DELAY_MS: u64 = 100;
 pub const DEFAULT_CAPACITY: u8 = 75;
+pub const DEFAULT_AGENT_TIMEOUT_SECS: u64 = 600;
 pub const NODE_ID_ENV_VAR: &str = "POLYRESEARCH_NODE_ID";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,14 +25,21 @@ pub enum MetricDirection {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentConfig {
     pub command: String,
+    #[serde(default = "default_agent_timeout_secs")]
+    pub timeout_secs: u64,
 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             command: "claude -p --dangerously-skip-permissions".to_string(),
+            timeout_secs: DEFAULT_AGENT_TIMEOUT_SECS,
         }
     }
+}
+
+fn default_agent_timeout_secs() -> u64 {
+    DEFAULT_AGENT_TIMEOUT_SECS
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -147,9 +155,10 @@ impl NodeConfig {
             self.request_delay_ms = normalize_request_delay_ms(d);
         }
         if let Some(ref cmd) = overrides.agent_command {
-            self.agent = AgentConfig {
-                command: cmd.clone(),
-            };
+            self.agent.command = cmd.clone();
+        }
+        if let Some(t) = overrides.agent_timeout {
+            self.agent.timeout_secs = t;
         }
         self
     }
@@ -1117,18 +1126,20 @@ Do something.
             api_budget: Some(9000),
             request_delay: Some(300),
             agent_command: Some("my-agent run".to_string()),
+            agent_timeout: Some(120),
         };
         let updated = config.with_overrides(&overrides);
         assert_eq!(updated.capacity, 80);
         assert_eq!(updated.api_budget, 9000);
         assert_eq!(updated.request_delay_ms, 300);
         assert_eq!(updated.agent.command, "my-agent run");
+        assert_eq!(updated.agent.timeout_secs, 120);
         assert_eq!(updated.node_id, "n");
     }
 
     #[test]
     fn with_overrides_empty_leaves_unchanged() {
-        let config = NodeConfig::new("n", 50, 3000, 200, Some(AgentConfig { command: "original".to_string() }));
+        let config = NodeConfig::new("n", 50, 3000, 200, Some(AgentConfig { command: "original".to_string(), ..Default::default() }));
         let overrides = crate::cli::NodeOverrides::default();
         let updated = config.clone().with_overrides(&overrides);
         assert_eq!(updated, config);
@@ -1143,6 +1154,52 @@ Do something.
         };
         let updated = config.with_overrides(&overrides);
         assert_eq!(updated.capacity, DEFAULT_CAPACITY);
+    }
+
+    #[test]
+    fn agent_config_default_timeout() {
+        let agent = AgentConfig::default();
+        assert_eq!(agent.timeout_secs, DEFAULT_AGENT_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn with_overrides_applies_agent_timeout() {
+        let config = NodeConfig::new("n", DEFAULT_CAPACITY, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS, None);
+        let overrides = crate::cli::NodeOverrides {
+            agent_timeout: Some(120),
+            ..Default::default()
+        };
+        let updated = config.with_overrides(&overrides);
+        assert_eq!(updated.agent.timeout_secs, 120);
+        assert_eq!(updated.agent.command, AgentConfig::default().command);
+    }
+
+    #[test]
+    fn agent_config_toml_roundtrip_with_timeout() {
+        let toml_str = r#"
+node_id = "test"
+capacity = 75
+
+[agent]
+command = "my-agent"
+timeout_secs = 300
+"#;
+        let config: NodeConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.agent.timeout_secs, 300);
+        assert_eq!(config.agent.command, "my-agent");
+    }
+
+    #[test]
+    fn agent_config_toml_default_timeout_when_omitted() {
+        let toml_str = r#"
+node_id = "test"
+capacity = 75
+
+[agent]
+command = "my-agent"
+"#;
+        let config: NodeConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.agent.timeout_secs, DEFAULT_AGENT_TIMEOUT_SECS);
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {

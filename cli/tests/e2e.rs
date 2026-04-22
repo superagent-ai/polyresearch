@@ -2464,6 +2464,36 @@ fn node_config_agent_section_defaults_when_absent() {
     assert!(config.agent.command.contains("claude"));
 }
 
+#[test]
+fn write_node_config_persists_agent_timeout_override() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("config-agent-timeout-override");
+    let overrides = NodeOverrides {
+        agent_timeout: Some(120),
+        ..Default::default()
+    };
+    commands::write_node_config(&repo.path, "test-node", &overrides).unwrap();
+
+    let config = polyresearch::config::NodeConfig::load(&repo.path).unwrap();
+    assert_eq!(config.agent.timeout_secs, 120);
+}
+
+#[test]
+fn write_node_config_persists_agent_timeout_with_command() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("config-agent-timeout-cmd");
+    let overrides = NodeOverrides {
+        agent_command: Some("my-agent run".to_string()),
+        agent_timeout: Some(300),
+        ..Default::default()
+    };
+    commands::write_node_config(&repo.path, "test-node", &overrides).unwrap();
+
+    let config = polyresearch::config::NodeConfig::load(&repo.path).unwrap();
+    assert_eq!(config.agent.command, "my-agent run");
+    assert_eq!(config.agent.timeout_secs, 300);
+}
+
 // --- Agent module tests ---
 
 #[test]
@@ -2819,6 +2849,7 @@ fn worker_context_carries_protected_globs() {
         protected_globs: vec!["docs/**".to_string(), "config/".to_string()],
         metric_direction: polyresearch::config::MetricDirection::HigherIsBetter,
         verbose: false,
+        agent_timeout_secs: polyresearch::config::DEFAULT_AGENT_TIMEOUT_SECS,
     };
 
     assert_eq!(wctx.protected_globs.len(), 2);
@@ -4251,6 +4282,7 @@ fn worker_setup_failure_returns_issue_number_for_release() {
         protected_globs: vec![],
         metric_direction: MetricDirection::HigherIsBetter,
         verbose: false,
+        agent_timeout_secs: polyresearch::config::DEFAULT_AGENT_TIMEOUT_SECS,
     };
 
     let tw = worker::ThesisWorker::new(wctx, String::new());
