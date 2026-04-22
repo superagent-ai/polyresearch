@@ -27,6 +27,7 @@ use polyresearch::state::{
     AttemptRecord, ClaimRecord, DecisionRecord, PullRequestState, ReleaseRecord, RepositoryState,
     ReviewRecord, ThesisPhase, ThesisState,
 };
+use polyresearch::validation::{AuditFinding, AuditScope, AuditSeverity};
 use polyresearch::worker;
 use polyresearch::agent;
 use serde::Deserialize;
@@ -899,7 +900,7 @@ async fn generate_is_blocked_by_dirty_audit() {
     assert!(
         error
             .to_string()
-            .contains("cannot proceed while audit findings are present")
+            .contains("critical audit finding(s) are present")
     );
 }
 
@@ -4417,6 +4418,121 @@ async fn contribute_counts_resumable_theses_as_available_work() {
         result.is_ok(),
         "contribute should count already-claimed thesis as resumable work: {result:?}"
     );
+}
+
+#[test]
+fn ensure_clean_audit_passes_with_only_suspicious_findings() {
+    let mut repo_state = make_repo_state(vec![], 0, 0, None);
+    repo_state.audit_findings.push(AuditFinding {
+        scope: AuditScope::Issue { number: 1 },
+        severity: AuditSeverity::Suspicious,
+        message: "duplicate attempt branch recorded more than once".to_string(),
+        comment_id: Some(123),
+        author: Some("alice".to_string()),
+        created_at: Some(chrono::Utc::now()),
+    });
+    let result = commands::guards::ensure_clean_audit(&repo_state, "generate theses");
+    assert!(result.is_ok(), "suspicious findings should not block: {result:?}");
+}
+
+#[test]
+fn ensure_clean_audit_passes_with_only_info_findings() {
+    let mut repo_state = make_repo_state(vec![], 0, 0, None);
+    repo_state.audit_findings.push(AuditFinding {
+        scope: AuditScope::Repository,
+        severity: AuditSeverity::Info,
+        message: "results.tsv is stale compared with canonical history".to_string(),
+        comment_id: None,
+        author: None,
+        created_at: None,
+    });
+    let result = commands::guards::ensure_clean_audit(&repo_state, "generate theses");
+    assert!(result.is_ok(), "info findings should not block: {result:?}");
+}
+
+#[test]
+fn ensure_clean_audit_blocks_on_invalid_findings() {
+    let mut repo_state = make_repo_state(vec![], 0, 0, None);
+    repo_state.audit_findings.push(AuditFinding {
+        scope: AuditScope::Issue { number: 1 },
+        severity: AuditSeverity::Invalid,
+        message: "approval comment from non-lead actor".to_string(),
+        comment_id: Some(456),
+        author: Some("mallory".to_string()),
+        created_at: Some(chrono::Utc::now()),
+    });
+    let result = commands::guards::ensure_clean_audit(&repo_state, "generate theses");
+    assert!(result.is_err(), "invalid findings must block");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(err_msg.contains("1 critical audit finding"));
+}
+
+#[test]
+fn ensure_clean_audit_blocks_on_invalid_even_with_non_blocking_present() {
+    let mut repo_state = make_repo_state(vec![], 0, 0, None);
+    repo_state.audit_findings.push(AuditFinding {
+        scope: AuditScope::Issue { number: 1 },
+        severity: AuditSeverity::Suspicious,
+        message: "duplicate policy-pass comment".to_string(),
+        comment_id: Some(100),
+        author: Some("alice".to_string()),
+        created_at: Some(chrono::Utc::now()),
+    });
+    repo_state.audit_findings.push(AuditFinding {
+        scope: AuditScope::Repository,
+        severity: AuditSeverity::Info,
+        message: "results.tsv is stale".to_string(),
+        comment_id: None,
+        author: None,
+        created_at: None,
+    });
+    repo_state.audit_findings.push(AuditFinding {
+        scope: AuditScope::Issue { number: 2 },
+        severity: AuditSeverity::Invalid,
+        message: "decision comment from non-lead actor".to_string(),
+        comment_id: Some(200),
+        author: Some("mallory".to_string()),
+        created_at: Some(chrono::Utc::now()),
+    });
+    let result = commands::guards::ensure_clean_audit(&repo_state, "proceed");
+    assert!(result.is_err(), "must block when invalid findings are present");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(err_msg.contains("1 critical audit finding"));
+}
+
+#[test]
+fn stale_results_tsv_finding_is_info_severity() {
+    let finding = AuditFinding {
+        scope: AuditScope::Repository,
+        severity: AuditSeverity::Info,
+        message: "results.tsv is stale compared with canonical history".to_string(),
+        comment_id: None,
+        author: None,
+        created_at: None,
+    };
+    assert!(!finding.severity.is_blocking());
+    assert!(finding.comment_id.is_none());
+}
+
+#[test]
+fn computed_findings_without_comment_id_do_not_block_when_info() {
+    let mut repo_state = make_repo_state(vec![], 0, 0, None);
+    repo_state.audit_findings.push(AuditFinding {
+        scope: AuditScope::Repository,
+        severity: AuditSeverity::Info,
+        message: "computed finding with no comment_id".to_string(),
+        comment_id: None,
+        author: None,
+        created_at: None,
+    });
+    let blocking_count = repo_state
+        .audit_findings
+        .iter()
+        .filter(|f| f.severity.is_blocking())
+        .count();
+    assert_eq!(blocking_count, 0);
+    let result = commands::guards::ensure_clean_audit(&repo_state, "generate theses");
+    assert!(result.is_ok(), "info findings with null comment_id should not block: {result:?}");
 }
 
 fn load_issue_fixture(name: &str) -> IssueFixture {

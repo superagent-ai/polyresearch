@@ -18,6 +18,7 @@ struct StatusOutput {
     ledger_current: bool,
     invalid_count: usize,
     suspicious_count: usize,
+    info_count: usize,
     maintainer_pending_count: usize,
     maintainer_rejected_count: usize,
     maintainer_items: Vec<String>,
@@ -42,6 +43,11 @@ pub async fn run(ctx: &AppContext, args: &StatusArgs) -> Result<()> {
         .iter()
         .filter(|finding| matches!(finding.severity, AuditSeverity::Suspicious))
         .count();
+    let info_count = repo_state
+        .audit_findings
+        .iter()
+        .filter(|finding| matches!(finding.severity, AuditSeverity::Info))
+        .count();
     let maintainer_items = maintainer_items(&repo_state, ctx.config.auto_approve);
     let maintainer_pending_count = maintainer_items
         .iter()
@@ -62,6 +68,7 @@ pub async fn run(ctx: &AppContext, args: &StatusArgs) -> Result<()> {
         ledger_current: ledger.is_current(&repo_state),
         invalid_count,
         suspicious_count,
+        info_count,
         maintainer_pending_count,
         maintainer_rejected_count,
         maintainer_items,
@@ -88,8 +95,8 @@ pub async fn run(ctx: &AppContext, args: &StatusArgs) -> Result<()> {
             best,
             if value.ledger_current { "yes" } else { "no" }
         ) + &format!(
-            "\nAudit findings: {} invalid, {} suspicious",
-            value.invalid_count, value.suspicious_count
+            "\nAudit findings: {} invalid, {} suspicious, {} info",
+            value.invalid_count, value.suspicious_count, value.info_count
         );
         if value.auto_approve {
             text.push_str("\nMaintainer gate: auto-approve enabled");
