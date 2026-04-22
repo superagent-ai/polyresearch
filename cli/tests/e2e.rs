@@ -6231,6 +6231,255 @@ fn load_pr_fixture(name: &str) -> PullRequestFixture {
     serde_json::from_str(include_fixture(name)).unwrap()
 }
 
+// ===========================================================================
+// Submit: editable-surface guard (#119)
+// ===========================================================================
+
+#[test]
+fn check_editable_surface_detects_violations() {
+    let repo = TestRepo::new("surface-violations");
+    init_git_repo(&repo.path);
+
+    run_git(&repo.path, &["remote", "add", "origin", repo.path.to_str().unwrap()]);
+
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/index.js"), "// editable\n").unwrap();
+    run_git(&repo.path, &["add", "src/index.js"]);
+    run_git(&repo.path, &["commit", "-m", "add src"]);
+    run_git(&repo.path, &["fetch", "origin"]);
+
+    run_git(&repo.path, &["checkout", "-b", "thesis/42-test"]);
+    fs::write(repo.path.join("src/index.js"), "// edited\n").unwrap();
+    fs::write(repo.path.join("results.tsv"), "data\n").unwrap();
+    run_git(&repo.path, &["add", "src/index.js", "results.tsv"]);
+    run_git(&repo.path, &["commit", "-m", "agent commit"]);
+
+    let program = ProgramSpec {
+        can_modify: vec!["src/".to_string()],
+        cannot_modify: vec!["results.tsv".to_string()],
+    };
+
+    let violations =
+        commands::submit::check_editable_surface(&repo.path, &program, "main").unwrap();
+
+    assert!(
+        violations.contains(&"results.tsv".to_string()),
+        "results.tsv should be a violation, got: {violations:?}"
+    );
+    assert!(
+        !violations.iter().any(|f| f.starts_with("src/")),
+        "src/ files should NOT be violations, got: {violations:?}"
+    );
+}
+
+#[test]
+fn check_editable_surface_passes_clean_branch() {
+    let repo = TestRepo::new("surface-clean");
+    init_git_repo(&repo.path);
+
+    run_git(&repo.path, &["remote", "add", "origin", repo.path.to_str().unwrap()]);
+
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/index.js"), "// editable\n").unwrap();
+    run_git(&repo.path, &["add", "src/index.js"]);
+    run_git(&repo.path, &["commit", "-m", "add src"]);
+    run_git(&repo.path, &["fetch", "origin"]);
+
+    run_git(&repo.path, &["checkout", "-b", "thesis/43-clean"]);
+    fs::write(repo.path.join("src/index.js"), "// improved\n").unwrap();
+    run_git(&repo.path, &["add", "src/index.js"]);
+    run_git(&repo.path, &["commit", "-m", "improve src"]);
+
+    let program = ProgramSpec {
+        can_modify: vec!["src/".to_string()],
+        cannot_modify: vec!["results.tsv".to_string()],
+    };
+
+    let violations =
+        commands::submit::check_editable_surface(&repo.path, &program, "main").unwrap();
+
+    assert!(
+        violations.is_empty(),
+        "branch with only editable files should have no violations, got: {violations:?}"
+    );
+}
+
+#[test]
+fn check_editable_surface_catches_files_outside_editable_surface() {
+    let repo = TestRepo::new("surface-outside");
+    init_git_repo(&repo.path);
+
+    run_git(&repo.path, &["remote", "add", "origin", repo.path.to_str().unwrap()]);
+
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// start\n").unwrap();
+    run_git(&repo.path, &["add", "."]);
+    run_git(&repo.path, &["commit", "-m", "initial"]);
+    run_git(&repo.path, &["fetch", "origin"]);
+
+    run_git(&repo.path, &["checkout", "-b", "thesis/44-outside"]);
+    fs::write(repo.path.join("src/main.js"), "// changed\n").unwrap();
+    fs::write(repo.path.join("PREPARE.md"), "# do not touch\n").unwrap();
+    fs::write(repo.path.join("random.txt"), "stray file\n").unwrap();
+    run_git(&repo.path, &["add", "."]);
+    run_git(&repo.path, &["commit", "-m", "mixed commit"]);
+
+    let program = ProgramSpec {
+        can_modify: vec!["src/".to_string()],
+        cannot_modify: vec!["PREPARE.md".to_string()],
+    };
+
+    let violations =
+        commands::submit::check_editable_surface(&repo.path, &program, "main").unwrap();
+
+    assert!(
+        violations.contains(&"PREPARE.md".to_string()),
+        "PREPARE.md (explicitly protected) should be a violation, got: {violations:?}"
+    );
+    assert!(
+        violations.contains(&"random.txt".to_string()),
+        "random.txt (outside editable surface) should be a violation, got: {violations:?}"
+    );
+    assert_eq!(violations.len(), 2, "should have exactly 2 violations, got: {violations:?}");
+}
+
+#[test]
+fn strip_violating_files_restores_base_version() {
+    let repo = TestRepo::new("strip-restore");
+    init_git_repo(&repo.path);
+
+    run_git(&repo.path, &["remote", "add", "origin", repo.path.to_str().unwrap()]);
+
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/index.js"), "// editable\n").unwrap();
+    fs::write(repo.path.join("results.tsv"), "original\n").unwrap();
+    run_git(&repo.path, &["add", "."]);
+    run_git(&repo.path, &["commit", "-m", "initial"]);
+    run_git(&repo.path, &["fetch", "origin"]);
+
+    run_git(&repo.path, &["checkout", "-b", "thesis/50-strip"]);
+    fs::write(repo.path.join("src/index.js"), "// improved\n").unwrap();
+    fs::write(repo.path.join("results.tsv"), "modified by agent\n").unwrap();
+    run_git(&repo.path, &["add", "."]);
+    run_git(&repo.path, &["commit", "-m", "agent commit"]);
+
+    commands::submit::strip_violating_files(
+        &repo.path,
+        &["results.tsv".to_string()],
+        "main",
+    )
+    .unwrap();
+
+    let content = fs::read_to_string(repo.path.join("results.tsv")).unwrap();
+    assert_eq!(
+        content, "original\n",
+        "results.tsv should be restored to base version"
+    );
+
+    let src_content = fs::read_to_string(repo.path.join("src/index.js")).unwrap();
+    assert_eq!(
+        src_content, "// improved\n",
+        "editable file should be untouched"
+    );
+
+    let diff = commands::run_git(&repo.path, &["diff", "--name-only", "origin/main...HEAD"]).unwrap();
+    assert!(
+        !diff.contains("results.tsv"),
+        "results.tsv should no longer appear in the branch diff"
+    );
+    assert!(
+        diff.contains("src/index.js"),
+        "src/index.js should still appear in the branch diff"
+    );
+}
+
+#[test]
+fn strip_violating_files_removes_new_file() {
+    let repo = TestRepo::new("strip-new-file");
+    init_git_repo(&repo.path);
+
+    run_git(&repo.path, &["remote", "add", "origin", repo.path.to_str().unwrap()]);
+
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/index.js"), "// start\n").unwrap();
+    run_git(&repo.path, &["add", "."]);
+    run_git(&repo.path, &["commit", "-m", "initial"]);
+    run_git(&repo.path, &["fetch", "origin"]);
+
+    run_git(&repo.path, &["checkout", "-b", "thesis/51-newfile"]);
+    fs::write(repo.path.join("src/index.js"), "// improved\n").unwrap();
+    fs::write(repo.path.join("stray.txt"), "should not be here\n").unwrap();
+    run_git(&repo.path, &["add", "."]);
+    run_git(&repo.path, &["commit", "-m", "agent commit with stray"]);
+
+    commands::submit::strip_violating_files(
+        &repo.path,
+        &["stray.txt".to_string()],
+        "main",
+    )
+    .unwrap();
+
+    assert!(
+        !repo.path.join("stray.txt").exists(),
+        "stray.txt should be removed from working tree"
+    );
+
+    let diff = commands::run_git(&repo.path, &["diff", "--name-only", "origin/main...HEAD"]).unwrap();
+    assert!(
+        !diff.contains("stray.txt"),
+        "stray.txt should no longer appear in the branch diff"
+    );
+    assert!(
+        diff.contains("src/index.js"),
+        "src/index.js should still appear in the branch diff"
+    );
+}
+
+#[test]
+fn submit_strips_violations_and_preserves_editable_changes() {
+    let repo = TestRepo::new("strip-e2e");
+    init_git_repo(&repo.path);
+
+    run_git(&repo.path, &["remote", "add", "origin", repo.path.to_str().unwrap()]);
+
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/app.js"), "// original\n").unwrap();
+    fs::write(repo.path.join("results.tsv"), "baseline\n").unwrap();
+    run_git(&repo.path, &["add", "."]);
+    run_git(&repo.path, &["commit", "-m", "initial"]);
+    run_git(&repo.path, &["fetch", "origin"]);
+
+    run_git(&repo.path, &["checkout", "-b", "thesis/52-e2e"]);
+    fs::write(repo.path.join("src/app.js"), "// optimized\n").unwrap();
+    fs::write(repo.path.join("results.tsv"), "modified\n").unwrap();
+    fs::write(repo.path.join("new-outside.txt"), "stray\n").unwrap();
+    run_git(&repo.path, &["add", "."]);
+    run_git(&repo.path, &["commit", "-m", "agent mixed commit"]);
+
+    let program = ProgramSpec {
+        can_modify: vec!["src/".to_string()],
+        cannot_modify: vec!["results.tsv".to_string()],
+    };
+
+    let violations =
+        commands::submit::check_editable_surface(&repo.path, &program, "main").unwrap();
+    assert_eq!(violations.len(), 2, "should detect both violations: {violations:?}");
+
+    commands::submit::strip_violating_files(&repo.path, &violations, "main").unwrap();
+
+    let final_diff =
+        commands::run_git(&repo.path, &["diff", "--name-only", "origin/main...HEAD"]).unwrap();
+    let changed_files: Vec<&str> = final_diff.lines().collect();
+    assert_eq!(
+        changed_files,
+        vec!["src/app.js"],
+        "only editable files should remain in the diff after stripping"
+    );
+
+    let app_content = fs::read_to_string(repo.path.join("src/app.js")).unwrap();
+    assert_eq!(app_content, "// optimized\n", "editable change must be preserved");
+}
+
 fn include_fixture(name: &str) -> &'static str {
     match name {
         "duplicate_claim_issue.json" => include_str!("fixtures/duplicate_claim_issue.json"),
