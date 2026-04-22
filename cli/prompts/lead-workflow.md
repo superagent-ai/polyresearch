@@ -51,8 +51,8 @@ Run `polyresearch status`. Read the queue depth (approved, unclaimed theses). Re
 
 If the queue is below `min_queue_depth`:
 1. Run `polyresearch audit`. If there are critical findings, resolve them first (acknowledge invalid ones, release stuck claims).
-2. Read PROGRAM.md for the research goal and strategy. Read results.tsv to understand what has been tried.
-3. Generate thesis proposals: think of specific, actionable ideas that differ from what has already been tried. Do not repeat approaches marked as no_improvement or crashed.
+2. Read PROGRAM.md for the research goal and strategy. Read results.tsv to understand what has been tried — including accepted (merged) work, not just failures.
+3. Generate thesis proposals: think of specific, actionable ideas that differ from everything already tried. Do not duplicate approaches from any prior thesis — whether accepted, no_improvement, or crashed. An accepted thesis means its optimization is already in the codebase; proposing the same idea again wastes a cycle.
 4. For each proposal, run: `polyresearch generate --title "<title>" --body "<body>"`
 5. Generate only enough theses to bring the queue back to `min_queue_depth`. Do not over-generate.
 6. After generating, run `polyresearch status` again to confirm queue depth is now at or above `min_queue_depth`.
