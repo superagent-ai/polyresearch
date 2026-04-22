@@ -386,7 +386,7 @@ pub fn commit_and_push_setup_files(repo_root: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let mut add_args: Vec<&str> = vec!["add", "--"];
+    let mut add_args: Vec<&str> = vec!["add", "-f", "--"];
     add_args.extend(&setup_paths);
     commands::run_git(&repo, &add_args)?;
 
