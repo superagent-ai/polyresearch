@@ -7,7 +7,7 @@ use color_eyre::eyre::{Context, Result, eyre};
 use crate::cli::BootstrapArgs;
 use crate::commands::{self, AppContext};
 use crate::config::NodeConfig;
-use crate::github::RepoRef;
+use crate::github::{GitHubClient, RepoRef};
 
 pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
     let (repo_root, login) = scaffold(ctx, args)?;
@@ -139,28 +139,6 @@ fn get_current_login() -> Result<String> {
     Ok(login)
 }
 
-fn enable_issues(owner: &str, name: &str) {
-    eprintln!("Enabling GitHub Issues on {owner}/{name}...");
-    let result = Command::new("gh")
-        .args([
-            "api",
-            &format!("repos/{owner}/{name}"),
-            "--method",
-            "PATCH",
-            "-f",
-            "has_issues=true",
-        ])
-        .output();
-    match result {
-        Ok(output) if output.status.success() => {}
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("Warning: could not enable Issues: {stderr}");
-        }
-        Err(e) => eprintln!("Warning: could not enable Issues: {e}"),
-    }
-}
-
 fn fork_and_clone(upstream: &RepoRef, fork_owner: &str, repo_root: &Path) -> Result<()> {
     if repo_root.join(".git").exists() {
         eprintln!("Repository already exists, skipping clone.");
@@ -206,7 +184,14 @@ fn fork_and_clone(upstream: &RepoRef, fork_owner: &str, repo_root: &Path) -> Res
     )
     .ok();
 
-    enable_issues(fork_owner, &upstream.name);
+    let fork_repo = RepoRef {
+        owner: fork_owner.to_string(),
+        name: upstream.name.clone(),
+    };
+    eprintln!("Enabling GitHub Issues on {}...", fork_repo.slug());
+    if let Err(e) = GitHubClient::new(fork_repo).enable_issues() {
+        eprintln!("Warning: could not enable Issues: {e}");
+    }
 
     Ok(())
 }
