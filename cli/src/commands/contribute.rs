@@ -61,6 +61,8 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
 
     eprintln!("Contributing as node `{node_id}`");
 
+    crate::preflight::run_all(&agent_command, &ctx.repo_root)?;
+
     loop {
         match run_iteration(
             &local_ctx,

@@ -7,6 +7,7 @@ pub mod github;
 pub mod github_debug;
 pub mod hardware;
 pub mod ledger;
+pub mod preflight;
 pub mod state;
 pub mod throttle;
 pub mod tui;

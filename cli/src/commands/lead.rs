@@ -32,6 +32,8 @@ pub async fn run(ctx: &AppContext, args: &LeadArgs) -> Result<()> {
 
     eprintln!("Running lead loop as `{login}`");
 
+    crate::preflight::run_all(&agent_command, &ctx.repo_root)?;
+
     loop {
         match run_iteration(ctx, &config, &program, &default_branch, &agent_command).await {
             Ok(()) => {}
