@@ -203,23 +203,9 @@ async fn run_iteration(
     let eval_cores = parse_eval_footprint_cores(&ctx.repo_root);
     let eval_memory_gb = parse_eval_footprint_memory(&ctx.repo_root);
 
+    let claimable_ignoring_cooldown = claimable_theses(&repo_state, node_id, 0);
     let claimable = claimable_theses(&repo_state, node_id, args.sleep_secs);
-    let now = Utc::now();
-    let cooldown_skipped = repo_state
-        .theses
-        .iter()
-        .filter(|t| {
-            t.issue.state == "OPEN"
-                && t.approved
-                && matches!(t.phase, ThesisPhase::Approved)
-                && t.active_claims.is_empty()
-                && !t
-                    .releases
-                    .iter()
-                    .any(|r| r.node == node_id && r.reason == ReleaseReason::NoImprovement)
-                && is_crash_cooldown(t, node_id, args.sleep_secs, now)
-        })
-        .count();
+    let cooldown_skipped = claimable_ignoring_cooldown.len() - claimable.len();
     if cooldown_skipped > 0 {
         eprintln!("{cooldown_skipped} thesis(es) skipped due to crash cooldown");
     }
