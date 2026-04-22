@@ -544,7 +544,7 @@ pub fn calculate_parallelism(
     let by_cores = if eval_cores == 0 {
         budget_cores
     } else {
-        (budget_cores / eval_cores).max(1)
+        budget_cores / eval_cores
     };
     let by_memory = if eval_memory_gb <= 0.0 {
         by_cores
@@ -552,7 +552,7 @@ pub fn calculate_parallelism(
         (effective_memory / eval_memory_gb).floor() as usize
     };
 
-    let mut target = by_cores.min(by_memory.max(1));
+    let mut target = by_cores.min(by_memory);
 
     if let Some(max) = max_parallel {
         target = target.min(max);
@@ -599,8 +599,8 @@ mod tests {
     }
 
     #[test]
-    fn parallelism_at_least_one_when_work_exists() {
-        assert_eq!(calculate_parallelism(1, 0.5, 0.1, 4, 8.0, None, 1), 1);
+    fn parallelism_returns_zero_when_budget_insufficient() {
+        assert_eq!(calculate_parallelism(1, 0.5, 0.1, 4, 8.0, None, 1), 0);
     }
 
     #[test]

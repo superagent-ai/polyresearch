@@ -2672,7 +2672,7 @@ fn worker_parallelism_formula_basics() {
     );
     assert_eq!(
         worker::calculate_parallelism(1, 0.5, 0.1, 4, 8.0, None, 1),
-        1
+        0
     );
 }
 
