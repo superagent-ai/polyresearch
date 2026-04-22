@@ -205,7 +205,7 @@ async fn run_iteration(
 
     let claimable_ignoring_cooldown = claimable_theses(&repo_state, node_id, 0);
     let claimable = claimable_theses(&repo_state, node_id, args.sleep_secs);
-    let cooldown_skipped = claimable_ignoring_cooldown.len() - claimable.len();
+    let cooldown_skipped = claimable_ignoring_cooldown.len().saturating_sub(claimable.len());
     if cooldown_skipped > 0 {
         eprintln!("{cooldown_skipped} thesis(es) skipped due to crash cooldown");
     }
