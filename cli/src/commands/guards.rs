@@ -133,10 +133,15 @@ pub fn require_decidable_pr<'a>(
 }
 
 pub fn ensure_clean_audit(repo_state: &RepositoryState, action: &str) -> Result<()> {
-    if !repo_state.audit_findings.is_empty() {
+    let blocking_count = repo_state
+        .audit_findings
+        .iter()
+        .filter(|f| f.severity.is_blocking())
+        .count();
+    if blocking_count > 0 {
         return Err(eyre!(
-            "cannot {} while audit findings are present; run `polyresearch audit` and resolve them through `polyresearch admin ...` first",
-            action
+            "cannot {} while {} critical audit finding(s) are present; run `polyresearch audit` and resolve them through `polyresearch admin ...` first",
+            action, blocking_count
         ));
     }
     Ok(())

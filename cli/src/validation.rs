@@ -14,6 +14,13 @@ use crate::state::parse_thesis_number_from_branch;
 pub enum AuditSeverity {
     Invalid,
     Suspicious,
+    Info,
+}
+
+impl AuditSeverity {
+    pub fn is_blocking(&self) -> bool {
+        matches!(self, AuditSeverity::Invalid)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -936,6 +943,70 @@ mod tests {
                 .message
                 .contains("slash approve comment from non-maintainer actor")
         );
+    }
+
+    #[test]
+    fn severity_is_blocking_only_for_invalid() {
+        assert!(AuditSeverity::Invalid.is_blocking());
+        assert!(!AuditSeverity::Suspicious.is_blocking());
+        assert!(!AuditSeverity::Info.is_blocking());
+    }
+
+    #[test]
+    fn invalid_issue_like_produces_invalid_severity() {
+        let envelope = ProtocolEnvelope {
+            id: 1,
+            author: "alice".to_string(),
+            created_at: chrono::Utc::now(),
+            protocol: None,
+        };
+        let finding = invalid_issue_like(
+            AuditScope::Issue { number: 1 },
+            &envelope,
+            "test",
+        );
+        assert!(matches!(finding.severity, AuditSeverity::Invalid));
+        assert!(finding.severity.is_blocking());
+    }
+
+    #[test]
+    fn suspicious_issue_like_produces_suspicious_severity() {
+        let envelope = ProtocolEnvelope {
+            id: 1,
+            author: "alice".to_string(),
+            created_at: chrono::Utc::now(),
+            protocol: None,
+        };
+        let finding = suspicious_issue_like(
+            AuditScope::Issue { number: 1 },
+            &envelope,
+            "test",
+        );
+        assert!(matches!(finding.severity, AuditSeverity::Suspicious));
+        assert!(!finding.severity.is_blocking());
+    }
+
+    #[test]
+    fn duplicate_attempt_branch_is_suspicious_not_invalid() {
+        let fixture: IssueFixture = serde_json::from_str(include_str!(
+            "../tests/fixtures/duplicate_attempt_branch_issue.json"
+        ))
+        .unwrap();
+        let config = test_config(&fixture.lead_github_login, None);
+        let comments = envelopes(fixture.comments);
+        let validation = validate_issue(&fixture.issue, &comments, &config, None);
+
+        assert_eq!(validation.findings.len(), 1);
+        assert!(
+            validation.findings[0]
+                .message
+                .contains("duplicate attempt branch recorded more than once")
+        );
+        assert!(matches!(
+            validation.findings[0].severity,
+            AuditSeverity::Suspicious
+        ));
+        assert!(!validation.findings[0].severity.is_blocking());
     }
 
     fn envelopes(comments: Vec<IssueComment>) -> Vec<ProtocolEnvelope> {

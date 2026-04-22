@@ -55,6 +55,12 @@ fn draw_summary(
         .iter()
         .filter(|finding| matches!(finding.severity, AuditSeverity::Suspicious))
         .count();
+    let info_count = app
+        .repo_state
+        .audit_findings
+        .iter()
+        .filter(|finding| matches!(finding.severity, AuditSeverity::Info))
+        .count();
     let maintainer_pending = app
         .repo_state
         .theses
@@ -100,7 +106,7 @@ fn draw_summary(
         })
         .sum::<usize>();
     let text = format!(
-        "Repo: {} | Theses: {} | Queue: {}/{} | Best: {} | Nodes: {} | results.tsv current: {} | Findings: {} invalid / {} suspicious | Maintainer: {}",
+        "Repo: {} | Theses: {} | Queue: {}/{} | Best: {} | Nodes: {} | results.tsv current: {} | Findings: {} invalid / {} suspicious / {} info | Maintainer: {}",
         ctx.repo.slug(),
         app.repo_state.theses.len(),
         app.repo_state.queue_depth,
@@ -118,6 +124,7 @@ fn draw_summary(
         },
         invalid_count,
         suspicious_count,
+        info_count,
         if ctx.config.auto_approve {
             "auto".to_string()
         } else {
@@ -304,6 +311,7 @@ fn render_finding(finding: &AuditFinding) -> ListItem<'static> {
     let severity = match finding.severity {
         AuditSeverity::Invalid => "invalid",
         AuditSeverity::Suspicious => "suspicious",
+        AuditSeverity::Info => "info",
     };
     ListItem::new(format!("[{severity}] {scope}: {}", finding.message))
 }
@@ -312,5 +320,6 @@ fn short_finding(finding: &AuditFinding) -> String {
     match finding.severity {
         AuditSeverity::Invalid => format!("invalid: {}", finding.message),
         AuditSeverity::Suspicious => format!("suspicious: {}", finding.message),
+        AuditSeverity::Info => format!("info: {}", finding.message),
     }
 }

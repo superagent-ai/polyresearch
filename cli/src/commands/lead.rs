@@ -256,9 +256,18 @@ async fn generate_if_needed(
         }
     }
 
-    if !repo_state.audit_findings.is_empty() {
-        eprintln!("Skipping thesis generation: audit findings present");
+    let blocking_count = repo_state
+        .audit_findings
+        .iter()
+        .filter(|f| f.severity.is_blocking())
+        .count();
+    if blocking_count > 0 {
+        eprintln!("Skipping thesis generation: {blocking_count} critical audit finding(s) present");
         return Ok(());
+    }
+    let non_blocking = repo_state.audit_findings.len() - blocking_count;
+    if non_blocking > 0 {
+        eprintln!("Note: {non_blocking} non-blocking audit finding(s) present (run `polyresearch audit`)");
     }
 
     let needed = config.min_queue_depth.saturating_sub(repo_state.queue_depth);
