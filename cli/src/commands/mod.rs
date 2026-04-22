@@ -107,25 +107,31 @@ pub fn exit_with(code: i32, message: impl Into<String>) -> Result<()> {
     .into())
 }
 
-pub fn read_node_config(repo_root: &PathBuf) -> Result<NodeConfig> {
+pub fn read_node_config(repo_root: &Path) -> Result<NodeConfig> {
     NodeConfig::load(repo_root)
 }
 
-pub fn read_node_id(repo_root: &PathBuf) -> Result<String> {
+pub fn read_node_id(repo_root: &Path) -> Result<String> {
     Ok(read_node_config(repo_root)?.node_id)
 }
 
-pub fn write_node_id(repo_root: &PathBuf, node: &str) -> Result<()> {
+pub fn write_node_id(repo_root: &Path, node: &str) -> Result<()> {
     write_node_config(repo_root, node, &crate::cli::NodeOverrides::default())
 }
 
 pub fn write_node_config(
-    repo_root: &PathBuf,
+    repo_root: &Path,
     node: &str,
     overrides: &crate::cli::NodeOverrides,
 ) -> Result<()> {
     let mut config = NodeConfig::load(repo_root).unwrap_or_else(|_| {
-        NodeConfig::new(node, crate::config::DEFAULT_CAPACITY, crate::config::DEFAULT_API_BUDGET, crate::config::DEFAULT_REQUEST_DELAY_MS, None)
+        NodeConfig::new(
+            node,
+            crate::config::DEFAULT_CAPACITY,
+            crate::config::DEFAULT_API_BUDGET,
+            crate::config::DEFAULT_REQUEST_DELAY_MS,
+            None,
+        )
     });
     config.node_id = node.to_string();
     config.with_overrides(overrides).save(repo_root)
@@ -151,7 +157,7 @@ pub fn ensure_node_config(repo_root: &Path) -> Result<()> {
             .collect()
     };
     let node_id = format!("{hostname}-{suffix}");
-    write_node_config(&repo_root.to_path_buf(), &node_id, &crate::cli::NodeOverrides::default())?;
+    write_node_config(repo_root, &node_id, &crate::cli::NodeOverrides::default())?;
     eprintln!("Initialized node as `{node_id}`");
     Ok(())
 }
@@ -206,7 +212,7 @@ pub struct ThesisWorkspace {
     pub worktree_path: PathBuf,
 }
 
-pub fn thesis_worktree_path(repo_root: &PathBuf, issue_number: u64, title: &str) -> PathBuf {
+pub fn thesis_worktree_path(repo_root: &Path, issue_number: u64, title: &str) -> PathBuf {
     let slug = slugify(title);
     repo_root
         .join(".worktrees")
@@ -245,7 +251,14 @@ pub fn create_thesis_worktree(
     let worktree_path_arg = worktree_path.to_string_lossy().into_owned();
     run_git(
         repo_root,
-        &["worktree", "add", "-b", &branch, &worktree_path_arg, default_branch],
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &branch,
+            &worktree_path_arg,
+            default_branch,
+        ],
     )?;
 
     Ok(ThesisWorkspace {

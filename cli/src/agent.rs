@@ -20,8 +20,16 @@ fn tail_str(s: &str, max_bytes: usize) -> &str {
     &s[s.ceil_char_boundary(cut)..]
 }
 
-fn log_subprocess_failure(label: &str, output: &Output, verbose: bool, command_line: Option<&str>, work_dir: Option<&Path>) {
-    let code = output.status.code()
+fn log_subprocess_failure(
+    label: &str,
+    output: &Output,
+    verbose: bool,
+    command_line: Option<&str>,
+    work_dir: Option<&Path>,
+) {
+    let code = output
+        .status
+        .code()
         .map(|c| c.to_string())
         .unwrap_or_else(|| "signal".into());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -121,7 +129,11 @@ pub fn spawn_experiment(
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    eprintln!("Spawning agent in {} (timeout {}s)...", worktree_path.display(), timeout.as_secs());
+    eprintln!(
+        "Spawning agent in {} (timeout {}s)...",
+        worktree_path.display(),
+        timeout.as_secs()
+    );
     let mut child = cmd.spawn().wrap_err("failed to spawn agent")?;
 
     let stdout_pipe = child.stdout.take();
@@ -134,7 +146,11 @@ pub fn spawn_experiment(
         match child.try_wait().wrap_err("failed to poll agent process")? {
             Some(_status) => break false,
             None if Instant::now() >= deadline => {
-                eprintln!("Agent timed out after {}s, killing pid {}...", timeout.as_secs(), child.id());
+                eprintln!(
+                    "Agent timed out after {}s, killing pid {}...",
+                    timeout.as_secs(),
+                    child.id()
+                );
                 let _ = child.kill();
                 let _ = child.wait();
                 break true;
@@ -147,13 +163,27 @@ pub fn spawn_experiment(
         return Ok(AgentOutcome::TimedOut);
     }
 
-    let stdout = stdout_thread.and_then(|h| h.join().ok()).unwrap_or_default();
-    let stderr = stderr_thread.and_then(|h| h.join().ok()).unwrap_or_default();
+    let stdout = stdout_thread
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+    let stderr = stderr_thread
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
     let status = child.wait().wrap_err("failed to wait on agent")?;
-    let output = Output { status, stdout, stderr };
+    let output = Output {
+        status,
+        stdout,
+        stderr,
+    };
 
     if !output.status.success() {
-        log_subprocess_failure("Agent", &output, verbose, Some(agent_command), Some(worktree_path));
+        log_subprocess_failure(
+            "Agent",
+            &output,
+            verbose,
+            Some(agent_command),
+            Some(worktree_path),
+        );
     }
 
     let result_path = worktree_path.join(".polyresearch/result.json");
@@ -192,15 +222,15 @@ pub fn recover_from_logs(worktree_path: &Path) -> Option<RecoveredMetric> {
 
     for entry in log_files {
         if let Ok(contents) = fs::read_to_string(entry.path()) {
-            if let Some(caps) = ops_per_sec_re.captures(&contents) {
-                if let Ok(val) = caps[1].parse::<f64>() {
-                    last_metric = Some(val);
-                }
+            if let Some(caps) = ops_per_sec_re.captures(&contents)
+                && let Ok(val) = caps[1].parse::<f64>()
+            {
+                last_metric = Some(val);
             }
-            if let Some(caps) = metric_re.captures(&contents) {
-                if let Ok(val) = caps[1].parse::<f64>() {
-                    last_metric = Some(val);
-                }
+            if let Some(caps) = metric_re.captures(&contents)
+                && let Ok(val) = caps[1].parse::<f64>()
+            {
+                last_metric = Some(val);
             }
         }
     }
@@ -251,18 +281,26 @@ pub fn spawn_thesis_generation(
     cmd.arg(prompt);
 
     eprintln!("Spawning agent for thesis generation...");
-    let output = cmd.output().wrap_err("failed to spawn agent for thesis generation")?;
+    let output = cmd
+        .output()
+        .wrap_err("failed to spawn agent for thesis generation")?;
 
     if !output.status.success() {
-        log_subprocess_failure("Thesis generation agent", &output, verbose, Some(agent_command), Some(worktree_path));
+        log_subprocess_failure(
+            "Thesis generation agent",
+            &output,
+            verbose,
+            Some(agent_command),
+            Some(worktree_path),
+        );
     }
 
     let proposals_path = worktree_path.join(".polyresearch/thesis-proposals.json");
     if proposals_path.exists() {
         let contents = fs::read_to_string(&proposals_path)
             .wrap_err("failed to read .polyresearch/thesis-proposals.json")?;
-        let proposals: Vec<ThesisProposal> = serde_json::from_str(&contents)
-            .wrap_err("failed to parse thesis-proposals.json")?;
+        let proposals: Vec<ThesisProposal> =
+            serde_json::from_str(&contents).wrap_err("failed to parse thesis-proposals.json")?;
         return Ok(proposals);
     }
 
@@ -276,8 +314,7 @@ pub fn write_thesis_context(
     prior_attempts: &str,
 ) -> Result<()> {
     let dir = worktree_path.join(".polyresearch");
-    fs::create_dir_all(&dir)
-        .wrap_err_with(|| format!("failed to create {}", dir.display()))?;
+    fs::create_dir_all(&dir).wrap_err_with(|| format!("failed to create {}", dir.display()))?;
 
     let mut content = format!("# Thesis: {thesis_title}\n\n{thesis_body}\n");
     if !prior_attempts.is_empty() {
@@ -285,8 +322,7 @@ pub fn write_thesis_context(
     }
 
     let path = dir.join("thesis.md");
-    fs::write(&path, &content)
-        .wrap_err_with(|| format!("failed to write {}", path.display()))?;
+    fs::write(&path, &content).wrap_err_with(|| format!("failed to write {}", path.display()))?;
     Ok(())
 }
 
@@ -313,7 +349,10 @@ fn find_harness(worktree_path: &Path) -> Option<HarnessSpec> {
 
     for &(relative_path, runner) in candidates {
         if worktree_path.join(relative_path).exists() {
-            return Some(HarnessSpec { runner, relative_path });
+            return Some(HarnessSpec {
+                runner,
+                relative_path,
+            });
         }
     }
 
@@ -330,7 +369,13 @@ fn run_harness_in(harness: &HarnessSpec, work_dir: &Path, verbose: bool) -> Resu
 
     if !output.status.success() {
         let cmd_line = format!("{} {}", harness.runner, script_path.display());
-        log_subprocess_failure("Evaluation harness", &output, verbose, Some(&cmd_line), Some(work_dir));
+        log_subprocess_failure(
+            "Evaluation harness",
+            &output,
+            verbose,
+            Some(&cmd_line),
+            Some(work_dir),
+        );
         return Ok(None);
     }
 
@@ -338,20 +383,18 @@ fn run_harness_in(harness: &HarnessSpec, work_dir: &Path, verbose: bool) -> Resu
     let metric_re = Regex::new(r"(?m)^METRIC=(\d+\.?\d*)$").ok();
     let ops_re = Regex::new(r"ops_per_sec=(\d+\.?\d*)").ok();
 
-    if let Some(re) = &metric_re {
-        if let Some(caps) = re.captures(&stdout) {
-            if let Ok(val) = caps[1].parse::<f64>() {
-                return Ok(Some(val));
-            }
-        }
+    if let Some(re) = &metric_re
+        && let Some(caps) = re.captures(&stdout)
+        && let Ok(val) = caps[1].parse::<f64>()
+    {
+        return Ok(Some(val));
     }
 
-    if let Some(re) = &ops_re {
-        if let Some(caps) = re.captures(&stdout) {
-            if let Ok(val) = caps[1].parse::<f64>() {
-                return Ok(Some(val));
-            }
-        }
+    if let Some(re) = &ops_re
+        && let Some(caps) = re.captures(&stdout)
+        && let Ok(val) = caps[1].parse::<f64>()
+    {
+        return Ok(Some(val));
     }
 
     Ok(None)
@@ -406,7 +449,8 @@ mod tests {
 
     #[test]
     fn parses_experiment_result() {
-        let json = r#"{"metric": 0.95, "baseline": 0.90, "observation": "improved", "summary": "test"}"#;
+        let json =
+            r#"{"metric": 0.95, "baseline": 0.90, "observation": "improved", "summary": "test"}"#;
         let result: ExperimentResult = serde_json::from_str(json).unwrap();
         assert!(result.is_improved());
         assert!((result.metric - 0.95).abs() < f64::EPSILON);
@@ -441,7 +485,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("recover-logs-{}", std::process::id()));
         let poly_dir = dir.join(".polyresearch");
         fs::create_dir_all(&poly_dir).unwrap();
-        fs::write(poly_dir.join("run-001.log"), "starting...\nops_per_sec=42.5\ndone").unwrap();
+        fs::write(
+            poly_dir.join("run-001.log"),
+            "starting...\nops_per_sec=42.5\ndone",
+        )
+        .unwrap();
 
         let result = recover_from_logs(&dir);
         assert!(result.is_some());
@@ -457,7 +505,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("recover-metric-{}", std::process::id()));
         let poly_dir = dir.join(".polyresearch");
         fs::create_dir_all(&poly_dir).unwrap();
-        fs::write(poly_dir.join("run-002.log"), "setup done\nMETRIC=99.5\ncomplete").unwrap();
+        fs::write(
+            poly_dir.join("run-002.log"),
+            "setup done\nMETRIC=99.5\ncomplete",
+        )
+        .unwrap();
 
         let result = recover_from_logs(&dir);
         assert!(result.is_some());

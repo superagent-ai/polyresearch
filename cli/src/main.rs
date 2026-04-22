@@ -1,5 +1,5 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::Arc;
 
@@ -36,8 +36,8 @@ async fn main() -> Result<()> {
 
     if needs_deferred_setup {
         let repo_root = discover_repo_root(&cwd).unwrap_or(cwd);
-        let request_delay_ms = request_delay_override
-            .unwrap_or_else(|| NodeConfig::load_request_delay_ms(&repo_root));
+        let request_delay_ms =
+            request_delay_override.unwrap_or_else(|| NodeConfig::load_request_delay_ms(&repo_root));
         throttle::init(request_delay_ms);
         let repo = RepoRef::discover(cli.repo.as_deref(), &repo_root)
             .ok()
@@ -46,8 +46,8 @@ async fn main() -> Result<()> {
                 name: String::new(),
             });
         let github: Arc<dyn GitHubApi> = Arc::new(GitHubClient::new(repo.clone()));
-        let api_budget = api_budget_override
-            .unwrap_or_else(|| NodeConfig::load_api_budget(&repo_root));
+        let api_budget =
+            api_budget_override.unwrap_or_else(|| NodeConfig::load_api_budget(&repo_root));
         let config = ProtocolConfig::default();
         let program = ProgramSpec {
             can_modify: Vec::new(),
@@ -68,13 +68,12 @@ async fn main() -> Result<()> {
     }
 
     let repo_root = discover_repo_root(&cwd)?;
-    let request_delay_ms = request_delay_override
-        .unwrap_or_else(|| NodeConfig::load_request_delay_ms(&repo_root));
+    let request_delay_ms =
+        request_delay_override.unwrap_or_else(|| NodeConfig::load_request_delay_ms(&repo_root));
     throttle::init(request_delay_ms);
     let repo = RepoRef::discover(cli.repo.as_deref(), &repo_root)?;
     let github: Arc<dyn GitHubApi> = Arc::new(GitHubClient::new(repo.clone()));
-    let api_budget = api_budget_override
-        .unwrap_or_else(|| NodeConfig::load_api_budget(&repo_root));
+    let api_budget = api_budget_override.unwrap_or_else(|| NodeConfig::load_api_budget(&repo_root));
     let config = ProtocolConfig::load(&repo_root)?;
     config.check_cli_version(env!("CARGO_PKG_VERSION"))?;
     let program = ProgramSpec::load(&repo_root, &config)?;
@@ -105,7 +104,7 @@ async fn run_and_handle_exit(ctx: AppContext) -> Result<()> {
     }
 }
 
-fn discover_repo_root(start: &PathBuf) -> Result<PathBuf> {
+fn discover_repo_root(start: &Path) -> Result<PathBuf> {
     for candidate in start.ancestors() {
         let path = candidate.to_path_buf();
         if path.join(".git").exists() || path.join("PROGRAM.md").exists() {

@@ -44,16 +44,16 @@ fn run_event_loop(
     loop {
         terminal.draw(|frame| views::draw(frame, &app, ctx))?;
 
-        if event::poll(Duration::from_millis(250))? {
-            if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') => break,
-                    KeyCode::Down => app.next(),
-                    KeyCode::Up => app.previous(),
-                    KeyCode::Enter => app.toggle_detail(),
-                    KeyCode::Char('r') => app.refresh(ctx)?,
-                    _ => {}
-                }
+        if event::poll(Duration::from_millis(250))?
+            && let Event::Key(key) = event::read()?
+        {
+            match key.code {
+                KeyCode::Char('q') => break,
+                KeyCode::Down => app.next(),
+                KeyCode::Up => app.previous(),
+                KeyCode::Enter => app.toggle_detail(),
+                KeyCode::Char('r') => app.refresh(ctx)?,
+                _ => {}
             }
         }
     }

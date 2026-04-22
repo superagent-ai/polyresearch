@@ -84,8 +84,12 @@ pub(crate) fn claim_selected_thesis(
         (branch, worktree_path)
     } else {
         let default_branch = ctx.config.resolve_default_branch(&ctx.repo_root)?;
-        let workspace =
-            create_thesis_worktree(&ctx.repo_root, thesis.issue.number, &thesis.issue.title, &default_branch)?;
+        let workspace = create_thesis_worktree(
+            &ctx.repo_root,
+            thesis.issue.number,
+            &thesis.issue.title,
+            &default_branch,
+        )?;
         (
             workspace.branch,
             workspace.worktree_path.display().to_string(),

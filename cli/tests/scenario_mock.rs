@@ -79,10 +79,7 @@ impl ScenarioGitHub {
 
     pub fn seed_pr_comments(&self, pr_number: u64, comments: Vec<IssueComment>) {
         let mut s = self.state.lock().unwrap();
-        s.pr_comments
-            .entry(pr_number)
-            .or_default()
-            .extend(comments);
+        s.pr_comments.entry(pr_number).or_default().extend(comments);
     }
 
     pub fn seed_pr_files(&self, pr_number: u64, files: Vec<PullRequestFile>) {
@@ -129,7 +126,11 @@ impl ScenarioGitHub {
     #[allow(dead_code)]
     pub fn created_issues(&self) -> Vec<Issue> {
         let s = self.state.lock().unwrap();
-        s.issues.iter().filter(|i| i.number >= 100).cloned().collect()
+        s.issues
+            .iter()
+            .filter(|i| i.number >= 100)
+            .cloned()
+            .collect()
     }
 
     #[allow(dead_code)]
@@ -326,18 +327,12 @@ impl GitHubApi for ScenarioGitHub {
 
     fn list_pull_request_comments(&self, pr_number: u64) -> Result<Vec<IssueComment>> {
         let s = self.state.lock().unwrap();
-        Ok(s.pr_comments
-            .get(&pr_number)
-            .cloned()
-            .unwrap_or_default())
+        Ok(s.pr_comments.get(&pr_number).cloned().unwrap_or_default())
     }
 
     fn list_pull_request_files(&self, pr_number: u64) -> Result<Vec<PullRequestFile>> {
         let s = self.state.lock().unwrap();
-        Ok(s.pr_files
-            .get(&pr_number)
-            .cloned()
-            .unwrap_or_default())
+        Ok(s.pr_files.get(&pr_number).cloned().unwrap_or_default())
     }
 
     fn create_pull_request(
@@ -389,7 +384,9 @@ impl GitHubApi for ScenarioGitHub {
 
         if let Some(pr) = s.pull_requests.iter().find(|pr| pr.number == pr_number) {
             if pr.mergeable.as_deref() == Some("CONFLICTING") && current_attempt <= 1 {
-                return Err(eyre!("405 Method Not Allowed: pull request is not mergeable"));
+                return Err(eyre!(
+                    "405 Method Not Allowed: pull request is not mergeable"
+                ));
             }
         }
         s.merged_prs.push(pr_number);

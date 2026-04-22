@@ -7,18 +7,14 @@ use std::process::Command;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use polyresearch::cli::{
-    BootstrapArgs, Cli, Commands, ContributeArgs, LeadArgs, NodeOverrides,
-};
+use polyresearch::cli::{BootstrapArgs, Cli, Commands, ContributeArgs, LeadArgs, NodeOverrides};
 use polyresearch::commands::{self, AppContext};
 use polyresearch::comments::ProtocolComment;
-use polyresearch::config::{
-    DEFAULT_API_BUDGET, ProgramSpec, ProtocolConfig,
-};
-use polyresearch::state::RepositoryState;
+use polyresearch::config::{DEFAULT_API_BUDGET, ProgramSpec, ProtocolConfig};
 use polyresearch::github::{
     Author, CommentUser, GitHubApi, Issue, IssueComment, Label, PullRequest, RepoRef,
 };
+use polyresearch::state::RepositoryState;
 
 use scenario_mock::ScenarioGitHub;
 
@@ -323,7 +319,10 @@ async fn scenario_bootstrap_fresh() {
 
     assert!(repo.path.join("PROGRAM.md").exists(), "PROGRAM.md created");
     assert!(repo.path.join("PREPARE.md").exists(), "PREPARE.md created");
-    assert!(repo.path.join("results.tsv").exists(), "results.tsv created");
+    assert!(
+        repo.path.join("results.tsv").exists(),
+        "results.tsv created"
+    );
     assert!(
         repo.path.join(".polyresearch-node.toml").exists(),
         "node config created"
@@ -558,7 +557,9 @@ async fn scenario_contribute_improved() {
     github.seed_issue(issue);
     github.seed_issue_comments(10, comments);
 
-    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node"); }
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node");
+    }
 
     let ctx = make_scenario_ctx(
         repo.path.clone(),
@@ -606,7 +607,9 @@ async fn scenario_contribute_no_improvement() {
     github.seed_issue(issue);
     github.seed_issue_comments(20, comments);
 
-    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-ni"); }
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-ni");
+    }
 
     let ctx = make_scenario_ctx(
         repo.path.clone(),
@@ -654,7 +657,9 @@ async fn scenario_contribute_agent_failure() {
     github.seed_issue(issue);
     github.seed_issue_comments(30, comments);
 
-    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-fail"); }
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-fail");
+    }
 
     let ctx = make_scenario_ctx(
         repo.path.clone(),
@@ -682,7 +687,10 @@ async fn scenario_contribute_agent_failure() {
     )
     .await;
 
-    assert!(result.is_ok(), "contribute should succeed even on agent failure: {result:?}");
+    assert!(
+        result.is_ok(),
+        "contribute should succeed even on agent failure: {result:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -771,9 +779,12 @@ async fn scenario_lead_accept_pr() {
     github.seed_issue_comments(40, issue_comments);
     github.seed_pull_request(pr);
     github.seed_pr_comments(50, pr_comments);
-    github.seed_pr_files(50, vec![polyresearch::github::PullRequestFile {
-        filename: "src/inference.js".to_string(),
-    }]);
+    github.seed_pr_files(
+        50,
+        vec![polyresearch::github::PullRequestFile {
+            filename: "src/inference.js".to_string(),
+        }],
+    );
 
     let ctx = make_scenario_ctx(
         repo.path.clone(),
@@ -808,7 +819,10 @@ async fn scenario_lead_accept_pr() {
     let has_decision = pr_bodies
         .iter()
         .any(|b| b.contains("polyresearch:decision") && b.contains("accepted"));
-    assert!(has_decision, "should have posted accepted decision on PR #50");
+    assert!(
+        has_decision,
+        "should have posted accepted decision on PR #50"
+    );
 }
 
 #[tokio::test]
@@ -893,9 +907,12 @@ async fn scenario_lead_reject_non_improvement() {
     github.seed_issue_comments(41, issue_comments);
     github.seed_pull_request(pr);
     github.seed_pr_comments(51, pr_comments);
-    github.seed_pr_files(51, vec![polyresearch::github::PullRequestFile {
-        filename: "src/quantize.js".to_string(),
-    }]);
+    github.seed_pr_files(
+        51,
+        vec![polyresearch::github::PullRequestFile {
+            filename: "src/quantize.js".to_string(),
+        }],
+    );
 
     let ctx = make_scenario_ctx(
         repo.path.clone(),
@@ -972,7 +989,10 @@ fn execute_decision_non_improvement_zero_conf_keeps_thesis_open() {
     )
     .unwrap();
 
-    assert_eq!(result.outcome, polyresearch::comments::Outcome::NonImprovement);
+    assert_eq!(
+        result.outcome,
+        polyresearch::comments::Outcome::NonImprovement
+    );
     assert_eq!(result.confirmations, 0);
     assert!(
         github.is_pr_closed(70),
@@ -1020,7 +1040,10 @@ fn execute_decision_disagreement_zero_conf_closes_thesis() {
     )
     .unwrap();
 
-    assert_eq!(result.outcome, polyresearch::comments::Outcome::Disagreement);
+    assert_eq!(
+        result.outcome,
+        polyresearch::comments::Outcome::Disagreement
+    );
     assert_eq!(result.confirmations, 0);
     assert!(
         github.is_pr_closed(71),
@@ -1162,9 +1185,12 @@ async fn scenario_lead_closes_conflicting_pr_as_stale() {
     github.seed_issue_comments(45, issue_comments);
     github.seed_pull_request(pr);
     github.seed_pr_comments(55, pr_comments);
-    github.seed_pr_files(55, vec![polyresearch::github::PullRequestFile {
-        filename: "src/hot_path.js".to_string(),
-    }]);
+    github.seed_pr_files(
+        55,
+        vec![polyresearch::github::PullRequestFile {
+            filename: "src/hot_path.js".to_string(),
+        }],
+    );
 
     let ctx = make_scenario_ctx(
         repo.path.clone(),
@@ -1243,7 +1269,10 @@ fn execute_decision_falls_back_on_merge_failure() {
         0,
     );
 
-    assert!(result.is_ok(), "should not propagate merge error: {result:?}");
+    assert!(
+        result.is_ok(),
+        "should not propagate merge error: {result:?}"
+    );
     let result = result.unwrap();
     assert_eq!(
         result.outcome,
@@ -1296,10 +1325,7 @@ fn execute_decision_falls_back_on_merge_failure() {
 /// diverges from an advanced main. Returns (clone_path, bare_path) both
 /// inside the given `parent` directory. The caller owns the `parent`
 /// `ScenarioRepo` whose Drop cleans everything up.
-fn setup_diverged_repo(
-    parent: &ScenarioRepo,
-    conflict: bool,
-) -> (PathBuf, PathBuf) {
+fn setup_diverged_repo(parent: &ScenarioRepo, conflict: bool) -> (PathBuf, PathBuf) {
     let bare_path = parent.path.join("remote.git");
     let clone_path = parent.path.join("work");
 
@@ -1498,7 +1524,10 @@ fn execute_decision_branch_cleanup_on_non_improvement() {
     )
     .unwrap();
 
-    assert_eq!(result.outcome, polyresearch::comments::Outcome::NonImprovement);
+    assert_eq!(
+        result.outcome,
+        polyresearch::comments::Outcome::NonImprovement
+    );
     assert!(
         github.is_pr_closed(82),
         "PR should be closed on non_improvement"
@@ -1548,10 +1577,7 @@ fn execute_decision_branch_cleanup_on_stale() {
     .unwrap();
 
     assert_eq!(result.outcome, polyresearch::comments::Outcome::Stale);
-    assert!(
-        github.is_pr_closed(83),
-        "PR should be closed on stale"
-    );
+    assert!(github.is_pr_closed(83), "PR should be closed on stale");
     assert!(
         github.is_branch_deleted("thesis/83-stale"),
         "remote branch should be deleted on stale so thesis can be retried"
@@ -1841,26 +1867,61 @@ async fn scenario_decide_peer_review_accepted() {
     let reviews = vec![
         make_review_claim_comment(8001, 80, "reviewer-a", "reviewer-a", 25),
         make_review_claim_comment(8002, 80, "reviewer-b", "reviewer-b", 24),
-        make_review_comment(8003, 80, "reviewer-a", "reviewer-a", 0.95, 0.90, polyresearch::comments::Observation::Improved, &main_sha, Some("env1"), 20),
-        make_review_comment(8004, 80, "reviewer-b", "reviewer-b", 0.955, 0.90, polyresearch::comments::Observation::Improved, &main_sha, Some("env1"), 19),
+        make_review_comment(
+            8003,
+            80,
+            "reviewer-a",
+            "reviewer-a",
+            0.95,
+            0.90,
+            polyresearch::comments::Observation::Improved,
+            &main_sha,
+            Some("env1"),
+            20,
+        ),
+        make_review_comment(
+            8004,
+            80,
+            "reviewer-b",
+            "reviewer-b",
+            0.955,
+            0.90,
+            polyresearch::comments::Observation::Improved,
+            &main_sha,
+            Some("env1"),
+            19,
+        ),
     ];
 
-    let (issue, issue_comments, pr, pr_comments) =
-        make_peer_review_setup(80, 180, "lead", reviews);
+    let (issue, issue_comments, pr, pr_comments) = make_peer_review_setup(80, 180, "lead", reviews);
 
     let github = Arc::new(ScenarioGitHub::new("lead"));
     github.seed_issue(issue);
     github.seed_issue_comments(80, issue_comments);
     github.seed_pull_request(pr);
     github.seed_pr_comments(180, pr_comments);
-    github.seed_pr_files(180, vec![polyresearch::github::PullRequestFile {
-        filename: "src/test.js".to_string(),
-    }]);
+    github.seed_pr_files(
+        180,
+        vec![polyresearch::github::PullRequestFile {
+            filename: "src/test.js".to_string(),
+        }],
+    );
 
-    let ctx = make_peer_review_ctx(&repo, Arc::clone(&github) as Arc<dyn GitHubApi>, "lead", 180, 2);
-    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 180 }).await.unwrap();
+    let ctx = make_peer_review_ctx(
+        &repo,
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        180,
+        2,
+    );
+    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 180 })
+        .await
+        .unwrap();
 
-    assert!(github.is_pr_merged(180), "PR should be merged for accepted peer review");
+    assert!(
+        github.is_pr_merged(180),
+        "PR should be merged for accepted peer review"
+    );
     assert!(github.is_issue_closed(80), "thesis should be closed");
 }
 
@@ -1884,12 +1945,33 @@ async fn scenario_decide_peer_review_non_improvement() {
     let reviews = vec![
         make_review_claim_comment(8101, 81, "reviewer-a", "reviewer-a", 25),
         make_review_claim_comment(8102, 81, "reviewer-b", "reviewer-b", 24),
-        make_review_comment(8103, 81, "reviewer-a", "reviewer-a", 0.89, 0.90, polyresearch::comments::Observation::NoImprovement, &main_sha, Some("env1"), 20),
-        make_review_comment(8104, 81, "reviewer-b", "reviewer-b", 0.885, 0.90, polyresearch::comments::Observation::NoImprovement, &main_sha, Some("env1"), 19),
+        make_review_comment(
+            8103,
+            81,
+            "reviewer-a",
+            "reviewer-a",
+            0.89,
+            0.90,
+            polyresearch::comments::Observation::NoImprovement,
+            &main_sha,
+            Some("env1"),
+            20,
+        ),
+        make_review_comment(
+            8104,
+            81,
+            "reviewer-b",
+            "reviewer-b",
+            0.885,
+            0.90,
+            polyresearch::comments::Observation::NoImprovement,
+            &main_sha,
+            Some("env1"),
+            19,
+        ),
     ];
 
-    let (issue, issue_comments, pr, pr_comments) =
-        make_peer_review_setup(81, 181, "lead", reviews);
+    let (issue, issue_comments, pr, pr_comments) = make_peer_review_setup(81, 181, "lead", reviews);
 
     let github = Arc::new(ScenarioGitHub::new("lead"));
     github.seed_issue(issue);
@@ -1897,11 +1979,22 @@ async fn scenario_decide_peer_review_non_improvement() {
     github.seed_pull_request(pr);
     github.seed_pr_comments(181, pr_comments);
 
-    let ctx = make_peer_review_ctx(&repo, Arc::clone(&github) as Arc<dyn GitHubApi>, "lead", 181, 2);
-    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 181 }).await.unwrap();
+    let ctx = make_peer_review_ctx(
+        &repo,
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        181,
+        2,
+    );
+    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 181 })
+        .await
+        .unwrap();
 
     assert!(github.is_pr_closed(181), "PR should be closed");
-    assert!(github.is_issue_closed(81), "thesis should be closed with peer review non_improvement");
+    assert!(
+        github.is_issue_closed(81),
+        "thesis should be closed with peer review non_improvement"
+    );
 }
 
 #[tokio::test]
@@ -1924,12 +2017,33 @@ async fn scenario_decide_peer_review_disagreement_mixed_obs() {
     let reviews = vec![
         make_review_claim_comment(8201, 82, "reviewer-a", "reviewer-a", 25),
         make_review_claim_comment(8202, 82, "reviewer-b", "reviewer-b", 24),
-        make_review_comment(8203, 82, "reviewer-a", "reviewer-a", 0.95, 0.90, polyresearch::comments::Observation::Improved, &main_sha, Some("env1"), 20),
-        make_review_comment(8204, 82, "reviewer-b", "reviewer-b", 0.89, 0.90, polyresearch::comments::Observation::NoImprovement, &main_sha, Some("env1"), 19),
+        make_review_comment(
+            8203,
+            82,
+            "reviewer-a",
+            "reviewer-a",
+            0.95,
+            0.90,
+            polyresearch::comments::Observation::Improved,
+            &main_sha,
+            Some("env1"),
+            20,
+        ),
+        make_review_comment(
+            8204,
+            82,
+            "reviewer-b",
+            "reviewer-b",
+            0.89,
+            0.90,
+            polyresearch::comments::Observation::NoImprovement,
+            &main_sha,
+            Some("env1"),
+            19,
+        ),
     ];
 
-    let (issue, issue_comments, pr, pr_comments) =
-        make_peer_review_setup(82, 182, "lead", reviews);
+    let (issue, issue_comments, pr, pr_comments) = make_peer_review_setup(82, 182, "lead", reviews);
 
     let github = Arc::new(ScenarioGitHub::new("lead"));
     github.seed_issue(issue);
@@ -1937,14 +2051,31 @@ async fn scenario_decide_peer_review_disagreement_mixed_obs() {
     github.seed_pull_request(pr);
     github.seed_pr_comments(182, pr_comments);
 
-    let ctx = make_peer_review_ctx(&repo, Arc::clone(&github) as Arc<dyn GitHubApi>, "lead", 182, 2);
-    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 182 }).await.unwrap();
+    let ctx = make_peer_review_ctx(
+        &repo,
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        182,
+        2,
+    );
+    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 182 })
+        .await
+        .unwrap();
 
-    assert!(github.is_pr_closed(182), "PR should be closed on disagreement");
-    assert!(github.is_issue_closed(82), "thesis should be closed on disagreement with peer review");
+    assert!(
+        github.is_pr_closed(182),
+        "PR should be closed on disagreement"
+    );
+    assert!(
+        github.is_issue_closed(82),
+        "thesis should be closed on disagreement with peer review"
+    );
 
     let bodies = github.comment_bodies_on(182);
-    assert!(bodies.iter().any(|b| b.contains("disagreement")), "should post disagreement decision");
+    assert!(
+        bodies.iter().any(|b| b.contains("disagreement")),
+        "should post disagreement decision"
+    );
 }
 
 #[tokio::test]
@@ -1958,12 +2089,33 @@ async fn scenario_decide_peer_review_stale_base() {
     let reviews = vec![
         make_review_claim_comment(8301, 83, "reviewer-a", "reviewer-a", 25),
         make_review_claim_comment(8302, 83, "reviewer-b", "reviewer-b", 24),
-        make_review_comment(8303, 83, "reviewer-a", "reviewer-a", 0.95, 0.90, polyresearch::comments::Observation::Improved, "stale-old-sha", Some("env1"), 20),
-        make_review_comment(8304, 83, "reviewer-b", "reviewer-b", 0.95, 0.90, polyresearch::comments::Observation::Improved, "stale-old-sha", Some("env1"), 19),
+        make_review_comment(
+            8303,
+            83,
+            "reviewer-a",
+            "reviewer-a",
+            0.95,
+            0.90,
+            polyresearch::comments::Observation::Improved,
+            "stale-old-sha",
+            Some("env1"),
+            20,
+        ),
+        make_review_comment(
+            8304,
+            83,
+            "reviewer-b",
+            "reviewer-b",
+            0.95,
+            0.90,
+            polyresearch::comments::Observation::Improved,
+            "stale-old-sha",
+            Some("env1"),
+            19,
+        ),
     ];
 
-    let (issue, issue_comments, pr, pr_comments) =
-        make_peer_review_setup(83, 183, "lead", reviews);
+    let (issue, issue_comments, pr, pr_comments) = make_peer_review_setup(83, 183, "lead", reviews);
 
     let github = Arc::new(ScenarioGitHub::new("lead"));
     github.seed_issue(issue);
@@ -1971,14 +2123,28 @@ async fn scenario_decide_peer_review_stale_base() {
     github.seed_pull_request(pr);
     github.seed_pr_comments(183, pr_comments);
 
-    let ctx = make_peer_review_ctx(&repo, Arc::clone(&github) as Arc<dyn GitHubApi>, "lead", 183, 2);
-    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 183 }).await.unwrap();
+    let ctx = make_peer_review_ctx(
+        &repo,
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        183,
+        2,
+    );
+    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 183 })
+        .await
+        .unwrap();
 
     assert!(github.is_pr_closed(183), "PR should be closed on stale");
-    assert!(!github.is_issue_closed(83), "thesis should stay open on stale decision");
+    assert!(
+        !github.is_issue_closed(83),
+        "thesis should stay open on stale decision"
+    );
 
     let bodies = github.comment_bodies_on(183);
-    assert!(bodies.iter().any(|b| b.contains("stale")), "should post stale decision");
+    assert!(
+        bodies.iter().any(|b| b.contains("stale")),
+        "should post stale decision"
+    );
 }
 
 #[tokio::test]
@@ -2001,12 +2167,33 @@ async fn scenario_decide_peer_review_env_disagreement() {
     let reviews = vec![
         make_review_claim_comment(8401, 84, "reviewer-a", "reviewer-a", 25),
         make_review_claim_comment(8402, 84, "reviewer-b", "reviewer-b", 24),
-        make_review_comment(8403, 84, "reviewer-a", "reviewer-a", 0.95, 0.90, polyresearch::comments::Observation::Improved, &main_sha, Some("env-aaa"), 20),
-        make_review_comment(8404, 84, "reviewer-b", "reviewer-b", 0.95, 0.90, polyresearch::comments::Observation::Improved, &main_sha, Some("env-bbb"), 19),
+        make_review_comment(
+            8403,
+            84,
+            "reviewer-a",
+            "reviewer-a",
+            0.95,
+            0.90,
+            polyresearch::comments::Observation::Improved,
+            &main_sha,
+            Some("env-aaa"),
+            20,
+        ),
+        make_review_comment(
+            8404,
+            84,
+            "reviewer-b",
+            "reviewer-b",
+            0.95,
+            0.90,
+            polyresearch::comments::Observation::Improved,
+            &main_sha,
+            Some("env-bbb"),
+            19,
+        ),
     ];
 
-    let (issue, issue_comments, pr, pr_comments) =
-        make_peer_review_setup(84, 184, "lead", reviews);
+    let (issue, issue_comments, pr, pr_comments) = make_peer_review_setup(84, 184, "lead", reviews);
 
     let github = Arc::new(ScenarioGitHub::new("lead"));
     github.seed_issue(issue);
@@ -2014,12 +2201,26 @@ async fn scenario_decide_peer_review_env_disagreement() {
     github.seed_pull_request(pr);
     github.seed_pr_comments(184, pr_comments);
 
-    let ctx = make_peer_review_ctx(&repo, Arc::clone(&github) as Arc<dyn GitHubApi>, "lead", 184, 2);
-    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 184 }).await.unwrap();
+    let ctx = make_peer_review_ctx(
+        &repo,
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        184,
+        2,
+    );
+    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 184 })
+        .await
+        .unwrap();
 
-    assert!(github.is_pr_closed(184), "PR should be closed on env disagreement");
+    assert!(
+        github.is_pr_closed(184),
+        "PR should be closed on env disagreement"
+    );
     let bodies = github.comment_bodies_on(184);
-    assert!(bodies.iter().any(|b| b.contains("disagreement")), "should post disagreement decision");
+    assert!(
+        bodies.iter().any(|b| b.contains("disagreement")),
+        "should post disagreement decision"
+    );
 }
 
 #[tokio::test]
@@ -2043,13 +2244,45 @@ async fn scenario_decide_peer_review_infra_majority() {
         make_review_claim_comment(8501, 85, "reviewer-a", "reviewer-a", 25),
         make_review_claim_comment(8502, 85, "reviewer-b", "reviewer-b", 24),
         make_review_claim_comment(8503, 85, "reviewer-c", "reviewer-c", 23),
-        make_review_comment(8504, 85, "reviewer-a", "reviewer-a", 0.95, 0.90, polyresearch::comments::Observation::Improved, &main_sha, Some("env1"), 20),
-        make_review_comment(8505, 85, "reviewer-b", "reviewer-b", 0.0, 0.90, polyresearch::comments::Observation::Crashed, &main_sha, Some("env1"), 19),
-        make_review_comment(8506, 85, "reviewer-c", "reviewer-c", 0.0, 0.90, polyresearch::comments::Observation::InfraFailure, &main_sha, Some("env1"), 18),
+        make_review_comment(
+            8504,
+            85,
+            "reviewer-a",
+            "reviewer-a",
+            0.95,
+            0.90,
+            polyresearch::comments::Observation::Improved,
+            &main_sha,
+            Some("env1"),
+            20,
+        ),
+        make_review_comment(
+            8505,
+            85,
+            "reviewer-b",
+            "reviewer-b",
+            0.0,
+            0.90,
+            polyresearch::comments::Observation::Crashed,
+            &main_sha,
+            Some("env1"),
+            19,
+        ),
+        make_review_comment(
+            8506,
+            85,
+            "reviewer-c",
+            "reviewer-c",
+            0.0,
+            0.90,
+            polyresearch::comments::Observation::InfraFailure,
+            &main_sha,
+            Some("env1"),
+            18,
+        ),
     ];
 
-    let (issue, issue_comments, pr, pr_comments) =
-        make_peer_review_setup(85, 185, "lead", reviews);
+    let (issue, issue_comments, pr, pr_comments) = make_peer_review_setup(85, 185, "lead", reviews);
 
     let github = Arc::new(ScenarioGitHub::new("lead"));
     github.seed_issue(issue);
@@ -2057,14 +2290,31 @@ async fn scenario_decide_peer_review_infra_majority() {
     github.seed_pull_request(pr);
     github.seed_pr_comments(185, pr_comments);
 
-    let ctx = make_peer_review_ctx(&repo, Arc::clone(&github) as Arc<dyn GitHubApi>, "lead", 185, 3);
-    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 185 }).await.unwrap();
+    let ctx = make_peer_review_ctx(
+        &repo,
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        185,
+        3,
+    );
+    commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 185 })
+        .await
+        .unwrap();
 
-    assert!(github.is_pr_closed(185), "PR should be closed on infra_failure");
-    assert!(!github.is_issue_closed(85), "thesis should stay open on infra_failure");
+    assert!(
+        github.is_pr_closed(185),
+        "PR should be closed on infra_failure"
+    );
+    assert!(
+        !github.is_issue_closed(85),
+        "thesis should stay open on infra_failure"
+    );
 
     let bodies = github.comment_bodies_on(185);
-    assert!(bodies.iter().any(|b| b.contains("infra_failure")), "should post infra_failure decision");
+    assert!(
+        bodies.iter().any(|b| b.contains("infra_failure")),
+        "should post infra_failure decision"
+    );
 }
 
 #[tokio::test]
@@ -2086,11 +2336,21 @@ async fn scenario_decide_peer_review_insufficient_reviews() {
 
     let reviews = vec![
         make_review_claim_comment(8601, 86, "reviewer-a", "reviewer-a", 25),
-        make_review_comment(8602, 86, "reviewer-a", "reviewer-a", 0.95, 0.90, polyresearch::comments::Observation::Improved, &main_sha, Some("env1"), 20),
+        make_review_comment(
+            8602,
+            86,
+            "reviewer-a",
+            "reviewer-a",
+            0.95,
+            0.90,
+            polyresearch::comments::Observation::Improved,
+            &main_sha,
+            Some("env1"),
+            20,
+        ),
     ];
 
-    let (issue, issue_comments, pr, pr_comments) =
-        make_peer_review_setup(86, 186, "lead", reviews);
+    let (issue, issue_comments, pr, pr_comments) = make_peer_review_setup(86, 186, "lead", reviews);
 
     let github = Arc::new(ScenarioGitHub::new("lead"));
     github.seed_issue(issue);
@@ -2098,9 +2358,20 @@ async fn scenario_decide_peer_review_insufficient_reviews() {
     github.seed_pull_request(pr);
     github.seed_pr_comments(186, pr_comments);
 
-    let ctx = make_peer_review_ctx(&repo, Arc::clone(&github) as Arc<dyn GitHubApi>, "lead", 186, 2);
-    let err = commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 186 }).await.unwrap_err();
-    assert!(err.to_string().contains("only has 1 review"), "should error on insufficient reviews, got: {err}");
+    let ctx = make_peer_review_ctx(
+        &repo,
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        186,
+        2,
+    );
+    let err = commands::decide::run(&ctx, &polyresearch::cli::PrArgs { pr: 186 })
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("only has 1 review"),
+        "should error on insufficient reviews, got: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2124,7 +2395,9 @@ async fn scenario_contribute_agent_crash_releases_claim() {
     github.seed_issue(issue);
     github.seed_issue_comments(90, comments);
 
-    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-crash"); }
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-crash");
+    }
 
     let ctx = make_scenario_ctx(
         repo.path.clone(),
@@ -2152,7 +2425,10 @@ async fn scenario_contribute_agent_crash_releases_claim() {
     )
     .await;
 
-    assert!(result.is_ok(), "contribute should handle agent crash gracefully: {result:?}");
+    assert!(
+        result.is_ok(),
+        "contribute should handle agent crash gracefully: {result:?}"
+    );
 }
 
 #[tokio::test]
@@ -2172,7 +2448,9 @@ async fn scenario_contribute_no_improvement_releases() {
     github.seed_issue(issue);
     github.seed_issue_comments(91, comments);
 
-    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-ni2"); }
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-ni2");
+    }
 
     let ctx = make_scenario_ctx(
         repo.path.clone(),
@@ -2200,7 +2478,10 @@ async fn scenario_contribute_no_improvement_releases() {
     )
     .await;
 
-    assert!(result.is_ok(), "contribute should succeed with no_improvement: {result:?}");
+    assert!(
+        result.is_ok(),
+        "contribute should succeed with no_improvement: {result:?}"
+    );
 }
 
 #[tokio::test]
@@ -2220,7 +2501,9 @@ async fn scenario_contribute_agent_failure_recovers() {
     github.seed_issue(issue);
     github.seed_issue_comments(92, comments);
 
-    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-fr"); }
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-fr");
+    }
 
     let ctx = make_scenario_ctx(
         repo.path.clone(),
@@ -2248,7 +2531,10 @@ async fn scenario_contribute_agent_failure_recovers() {
     )
     .await;
 
-    assert!(result.is_ok(), "contribute should handle agent failure gracefully: {result:?}");
+    assert!(
+        result.is_ok(),
+        "contribute should handle agent failure gracefully: {result:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2272,7 +2558,9 @@ async fn scenario_contribute_lower_is_better() {
     github.seed_issue(issue);
     github.seed_issue_comments(93, comments);
 
-    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-lib"); }
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-lib");
+    }
 
     let mut ctx = make_scenario_ctx(
         repo.path.clone(),
@@ -2301,19 +2589,17 @@ async fn scenario_contribute_lower_is_better() {
     )
     .await;
 
-    assert!(result.is_ok(), "contribute should succeed with lower_is_better: {result:?}");
+    assert!(
+        result.is_ok(),
+        "contribute should succeed with lower_is_better: {result:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
 // Lead/contribute separation (issue #94)
 // ---------------------------------------------------------------------------
 
-fn seed_decidable_pr(
-    github: &ScenarioGitHub,
-    thesis_num: u64,
-    pr_num: u64,
-    lead: &str,
-) {
+fn seed_decidable_pr(github: &ScenarioGitHub, thesis_num: u64, pr_num: u64, lead: &str) {
     let now = chrono::Utc::now();
     let (issue, mut issue_comments) = make_approved_thesis(thesis_num, "Decidable thesis", lead);
 
@@ -2386,9 +2672,12 @@ fn seed_decidable_pr(
     github.seed_issue_comments(thesis_num, issue_comments);
     github.seed_pull_request(pr);
     github.seed_pr_comments(pr_num, pr_comments);
-    github.seed_pr_files(pr_num, vec![polyresearch::github::PullRequestFile {
-        filename: "src/decidable.js".to_string(),
-    }]);
+    github.seed_pr_files(
+        pr_num,
+        vec![polyresearch::github::PullRequestFile {
+            filename: "src/decidable.js".to_string(),
+        }],
+    );
 }
 
 #[tokio::test]
@@ -2406,7 +2695,9 @@ async fn scenario_contribute_does_not_decide() {
     let github = Arc::new(ScenarioGitHub::new("lead"));
     seed_decidable_pr(&github, 60, 160, "lead");
 
-    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-nd"); }
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-nd");
+    }
 
     let ctx = make_scenario_ctx(
         repo.path.clone(),
@@ -2444,26 +2735,26 @@ async fn scenario_contribute_does_not_decide() {
         !has_decision,
         "contribute must NOT post decision comments, but found: {pr_bodies:?}"
     );
-    assert!(
-        !github.is_pr_merged(160),
-        "contribute must NOT merge PRs"
-    );
+    assert!(!github.is_pr_merged(160), "contribute must NOT merge PRs");
 
     let config = ProtocolConfig::load(&repo.path).unwrap();
-    let repo_state = RepositoryState::derive(
-        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
-        &config,
-    )
-    .await
-    .unwrap();
+    let repo_state = RepositoryState::derive(&(Arc::clone(&github) as Arc<dyn GitHubApi>), &config)
+        .await
+        .unwrap();
     commands::lead::decide_ready_prs(&ctx, &config, &repo_state).unwrap();
 
     let pr_bodies = github.comment_bodies_on(160);
     let has_decision = pr_bodies
         .iter()
         .any(|b| b.contains("polyresearch:decision") && b.contains("accepted"));
-    assert!(has_decision, "lead::decide_ready_prs should post accepted decision");
-    assert!(github.is_pr_merged(160), "lead::decide_ready_prs should merge the PR");
+    assert!(
+        has_decision,
+        "lead::decide_ready_prs should post accepted decision"
+    );
+    assert!(
+        github.is_pr_merged(160),
+        "lead::decide_ready_prs should merge the PR"
+    );
 }
 
 #[tokio::test]
@@ -2481,7 +2772,9 @@ async fn scenario_contribute_does_not_sync() {
     let github = Arc::new(ScenarioGitHub::new("lead"));
     seed_decidable_pr(&github, 61, 161, "lead");
 
-    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-ns"); }
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-ns");
+    }
 
     let header = fs::read_to_string(repo.path.join("results.tsv")).unwrap();
 
@@ -2513,10 +2806,7 @@ async fn scenario_contribute_does_not_sync() {
     .await;
 
     let after = fs::read_to_string(repo.path.join("results.tsv")).unwrap();
-    assert_eq!(
-        header, after,
-        "contribute must NOT modify results.tsv"
-    );
+    assert_eq!(header, after, "contribute must NOT modify results.tsv");
 }
 
 #[tokio::test]
@@ -2534,7 +2824,9 @@ async fn scenario_contribute_does_not_merge() {
     let github = Arc::new(ScenarioGitHub::new("lead"));
     seed_decidable_pr(&github, 62, 162, "lead");
 
-    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-nm"); }
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-nm");
+    }
 
     let ctx = make_scenario_ctx(
         repo.path.clone(),
@@ -2563,18 +2855,12 @@ async fn scenario_contribute_does_not_merge() {
     )
     .await;
 
-    assert!(
-        !github.is_pr_merged(162),
-        "contribute must NOT merge PRs"
-    );
+    assert!(!github.is_pr_merged(162), "contribute must NOT merge PRs");
 
     let config = ProtocolConfig::load(&repo.path).unwrap();
-    let repo_state = RepositoryState::derive(
-        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
-        &config,
-    )
-    .await
-    .unwrap();
+    let repo_state = RepositoryState::derive(&(Arc::clone(&github) as Arc<dyn GitHubApi>), &config)
+        .await
+        .unwrap();
     commands::lead::decide_ready_prs(&ctx, &config, &repo_state).unwrap();
 
     assert!(
@@ -2607,22 +2893,19 @@ async fn scenario_decide_idempotent_no_duplicate_comment() {
         }),
     );
 
-    let repo_state = RepositoryState::derive(
-        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
-        &config,
-    )
-    .await
-    .unwrap();
+    let repo_state = RepositoryState::derive(&(Arc::clone(&github) as Arc<dyn GitHubApi>), &config)
+        .await
+        .unwrap();
     commands::lead::decide_ready_prs(&ctx, &config, &repo_state).unwrap();
 
-    assert!(github.is_pr_merged(163), "PR should be merged after first decide");
+    assert!(
+        github.is_pr_merged(163),
+        "PR should be merged after first decide"
+    );
 
-    let repo_state = RepositoryState::derive(
-        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
-        &config,
-    )
-    .await
-    .unwrap();
+    let repo_state = RepositoryState::derive(&(Arc::clone(&github) as Arc<dyn GitHubApi>), &config)
+        .await
+        .unwrap();
     // Second call should not post another decision.
     commands::lead::decide_ready_prs(&ctx, &config, &repo_state).unwrap();
 
@@ -2635,9 +2918,11 @@ async fn scenario_decide_idempotent_no_duplicate_comment() {
         .map(|b| b.as_str())
         .collect();
     assert_eq!(
-        unique_decisions.len(), 1,
+        unique_decisions.len(),
+        1,
         "should have exactly one unique decision comment on PR #163, found {}: {:?}",
-        unique_decisions.len(), unique_decisions
+        unique_decisions.len(),
+        unique_decisions
     );
 }
 
@@ -2667,7 +2952,10 @@ async fn scenario_sync_accepts_master_default_branch() {
     );
 
     let result = commands::sync::run(&ctx).await;
-    assert!(result.is_ok(), "sync should succeed on master with default_branch: master: {result:?}");
+    assert!(
+        result.is_ok(),
+        "sync should succeed on master with default_branch: master: {result:?}"
+    );
 }
 
 #[tokio::test]
@@ -2689,23 +2977,35 @@ async fn scenario_sync_rejects_wrong_branch_with_config() {
         title: "Test thesis".to_string(),
         body: Some("Test".to_string()),
         state: "OPEN".to_string(),
-        labels: vec![Label { name: "thesis".to_string() }],
+        labels: vec![Label {
+            name: "thesis".to_string(),
+        }],
         created_at: now - chrono::Duration::hours(2),
         closed_at: None,
-        author: Some(Author { login: "lead".to_string() }),
+        author: Some(Author {
+            login: "lead".to_string(),
+        }),
         url: None,
     };
     let approval_comment = IssueComment {
         id: 100,
         body: ProtocolComment::Approval { thesis: 1 }.render(),
-        user: CommentUser { login: "lead".to_string() },
+        user: CommentUser {
+            login: "lead".to_string(),
+        },
         created_at: now - chrono::Duration::hours(1),
         updated_at: None,
     };
     let claim_comment = IssueComment {
         id: 101,
-        body: ProtocolComment::Claim { thesis: 1, node: "worker".to_string() }.render(),
-        user: CommentUser { login: "contrib".to_string() },
+        body: ProtocolComment::Claim {
+            thesis: 1,
+            node: "worker".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: "contrib".to_string(),
+        },
         created_at: now - chrono::Duration::minutes(50),
         updated_at: None,
     };
@@ -2719,8 +3019,11 @@ async fn scenario_sync_rejects_wrong_branch_with_config() {
             observation: polyresearch::comments::Observation::Improved,
             summary: "Test".to_string(),
             annotations: None,
-        }.render(),
-        user: CommentUser { login: "contrib".to_string() },
+        }
+        .render(),
+        user: CommentUser {
+            login: "contrib".to_string(),
+        },
         created_at: now - chrono::Duration::minutes(40),
         updated_at: None,
     };
@@ -2736,7 +3039,9 @@ async fn scenario_sync_rejects_wrong_branch_with_config() {
         created_at: now - chrono::Duration::minutes(30),
         closed_at: None,
         merged_at: Some(now - chrono::Duration::minutes(20)),
-        author: Some(Author { login: "contrib".to_string() }),
+        author: Some(Author {
+            login: "contrib".to_string(),
+        }),
         url: None,
         mergeable: None,
     };
@@ -2745,8 +3050,11 @@ async fn scenario_sync_rejects_wrong_branch_with_config() {
         body: ProtocolComment::PolicyPass {
             thesis: 1,
             candidate_sha: "abc".to_string(),
-        }.render(),
-        user: CommentUser { login: "lead".to_string() },
+        }
+        .render(),
+        user: CommentUser {
+            login: "lead".to_string(),
+        },
         created_at: now - chrono::Duration::minutes(18),
         updated_at: None,
     };
@@ -2757,8 +3065,11 @@ async fn scenario_sync_rejects_wrong_branch_with_config() {
             candidate_sha: "abc".to_string(),
             outcome: polyresearch::comments::Outcome::Accepted,
             confirmations: 0,
-        }.render(),
-        user: CommentUser { login: "lead".to_string() },
+        }
+        .render(),
+        user: CommentUser {
+            login: "lead".to_string(),
+        },
         created_at: now - chrono::Duration::minutes(15),
         updated_at: None,
     };
@@ -2778,9 +3089,15 @@ async fn scenario_sync_rejects_wrong_branch_with_config() {
     );
 
     let result = commands::sync::run(&ctx).await;
-    assert!(result.is_err(), "sync should reject when not on default branch");
+    assert!(
+        result.is_err(),
+        "sync should reject when not on default branch"
+    );
     let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("master"), "error should mention 'master' branch, got: {err_msg}");
+    assert!(
+        err_msg.contains("master"),
+        "error should mention 'master' branch, got: {err_msg}"
+    );
 }
 
 #[test]
@@ -2792,24 +3109,31 @@ fn create_thesis_worktree_uses_config_default_branch() {
     run_git(&repo.path, &["add", "-A"]);
     run_git(&repo.path, &["commit", "-m", "add src"]);
 
-    let workspace = commands::create_thesis_worktree(
-        &repo.path,
-        99,
-        "Test worktree on master",
-        "master",
-    )
-    .unwrap();
+    let workspace =
+        commands::create_thesis_worktree(&repo.path, 99, "Test worktree on master", "master")
+            .unwrap();
 
     assert!(workspace.worktree_path.exists(), "worktree should exist");
-    assert!(workspace.branch.starts_with("thesis/99-"), "branch should have thesis prefix");
+    assert!(
+        workspace.branch.starts_with("thesis/99-"),
+        "branch should have thesis prefix"
+    );
 
     let worktree_branch = commands::current_branch(&workspace.worktree_path).unwrap();
-    assert_eq!(worktree_branch, workspace.branch, "worktree should be on thesis branch");
+    assert_eq!(
+        worktree_branch, workspace.branch,
+        "worktree should be on thesis branch"
+    );
 
-    let _ = commands::run_git(&repo.path, &[
-        "worktree", "remove", "--force",
-        &workspace.worktree_path.to_string_lossy(),
-    ]);
+    let _ = commands::run_git(
+        &repo.path,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            &workspace.worktree_path.to_string_lossy(),
+        ],
+    );
 }
 
 #[tokio::test]
@@ -2872,7 +3196,10 @@ fn resolve_default_branch_falls_back_to_main() {
 
     let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
     let branch = config.resolve_default_branch(&repo.path).unwrap();
-    assert_eq!(branch, "main", "should fall back to 'main' when not set and git detection unavailable");
+    assert_eq!(
+        branch, "main",
+        "should fall back to 'main' when not set and git detection unavailable"
+    );
 }
 
 #[tokio::test]
@@ -2892,7 +3219,9 @@ async fn scenario_contribute_timeout_kills_agent() {
     github.seed_issue(issue);
     github.seed_issue_comments(95, comments);
 
-    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-timeout"); }
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-timeout");
+    }
 
     let ctx = make_scenario_ctx(
         repo.path.clone(),
@@ -2920,12 +3249,15 @@ async fn scenario_contribute_timeout_kills_agent() {
     )
     .await;
 
-    assert!(result.is_ok(), "contribute should handle agent timeout gracefully: {result:?}");
+    assert!(
+        result.is_ok(),
+        "contribute should handle agent timeout gracefully: {result:?}"
+    );
 
     let posted = github.posted_comments();
-    let has_release_timeout = posted.iter().any(|(_, body)| {
-        body.contains("polyresearch:release") && body.contains("timeout")
-    });
+    let has_release_timeout = posted
+        .iter()
+        .any(|(_, body)| body.contains("polyresearch:release") && body.contains("timeout"));
     assert!(
         has_release_timeout,
         "expected a release comment with reason=timeout, got: {posted:?}"
@@ -2949,7 +3281,9 @@ async fn scenario_contribute_fast_agent_unaffected_by_timeout() {
     github.seed_issue(issue);
     github.seed_issue_comments(96, comments);
 
-    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-fast"); }
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-fast");
+    }
 
     let ctx = make_scenario_ctx(
         repo.path.clone(),
@@ -2977,5 +3311,8 @@ async fn scenario_contribute_fast_agent_unaffected_by_timeout() {
     )
     .await;
 
-    assert!(result.is_ok(), "contribute should succeed with short-lived agent: {result:?}");
+    assert!(
+        result.is_ok(),
+        "contribute should succeed with short-lived agent: {result:?}"
+    );
 }

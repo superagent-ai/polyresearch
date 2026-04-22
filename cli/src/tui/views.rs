@@ -195,7 +195,7 @@ fn draw_thesis_table(
         .block(Block::default().borders(Borders::ALL).title("Theses"))
         .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED));
 
-    let mut state = app.table_state.clone();
+    let mut state = app.table_state;
     frame.render_stateful_widget(table, area, &mut state);
 }
 

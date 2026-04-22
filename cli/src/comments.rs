@@ -174,10 +174,10 @@ impl ProtocolComment {
 
         let full_match = captures.get(0).unwrap();
         let before_match = &body[..full_match.start()];
-        if let Some(last_line) = before_match.rsplit('\n').next() {
-            if last_line.trim_start().starts_with('>') {
-                return Ok(None);
-            }
+        if let Some(last_line) = before_match.rsplit('\n').next()
+            && last_line.trim_start().starts_with('>')
+        {
+            return Ok(None);
         }
 
         let comment_type = captures

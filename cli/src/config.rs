@@ -112,7 +112,13 @@ impl NodeConfig {
             .map(|config| config.request_delay_ms)
             .unwrap_or(DEFAULT_REQUEST_DELAY_MS);
 
-        Ok(Self::new(node_id, capacity, api_budget, request_delay_ms, file_config.as_ref().map(|c| c.agent.clone())))
+        Ok(Self::new(
+            node_id,
+            capacity,
+            api_budget,
+            request_delay_ms,
+            file_config.as_ref().map(|c| c.agent.clone()),
+        ))
     }
 
     pub fn load_api_budget(repo_root: &Path) -> u64 {
@@ -324,10 +330,11 @@ impl ProtocolConfig {
                     };
                 }
                 "metric_bound" => {
-                    config.metric_bound =
-                        Some(value.parse().wrap_err_with(|| {
-                            format!("invalid metric_bound value `{value}`")
-                        })?);
+                    config.metric_bound = Some(
+                        value
+                            .parse()
+                            .wrap_err_with(|| format!("invalid metric_bound value `{value}`"))?,
+                    );
                 }
                 "lead_github_login" => {
                     if value != "replace-me" && !value.is_empty() {
@@ -418,14 +425,14 @@ pub fn detect_default_branch_from_git(repo_root: &Path) -> String {
         .current_dir(repo_root)
         .output()
         .ok();
-    if let Some(output) = output {
-        if output.status.success() {
-            let raw = String::from_utf8_lossy(&output.stdout);
-            let branch = raw.trim();
-            let branch = branch.strip_prefix("origin/").unwrap_or(branch);
-            if !branch.is_empty() {
-                return branch.to_string();
-            }
+    if let Some(output) = output
+        && output.status.success()
+    {
+        let raw = String::from_utf8_lossy(&output.stdout);
+        let branch = raw.trim();
+        let branch = branch.strip_prefix("origin/").unwrap_or(branch);
+        if !branch.is_empty() {
+            return branch.to_string();
         }
     }
     "main".to_string()
@@ -818,7 +825,13 @@ capacity = 50
 
     #[test]
     fn defaults_capacity_when_zero() {
-        let config = NodeConfig::new("node-7f83", 0, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS, None);
+        let config = NodeConfig::new(
+            "node-7f83",
+            0,
+            DEFAULT_API_BUDGET,
+            DEFAULT_REQUEST_DELAY_MS,
+            None,
+        );
         assert_eq!(config.capacity, DEFAULT_CAPACITY);
     }
 
@@ -836,7 +849,13 @@ capacity = 50
 
     #[test]
     fn defaults_api_budget_when_missing() {
-        let config = NodeConfig::new("node-7f83", DEFAULT_CAPACITY, 0, DEFAULT_REQUEST_DELAY_MS, None);
+        let config = NodeConfig::new(
+            "node-7f83",
+            DEFAULT_CAPACITY,
+            0,
+            DEFAULT_REQUEST_DELAY_MS,
+            None,
+        );
         assert_eq!(config.effective_api_budget(), DEFAULT_API_BUDGET);
     }
 
@@ -1072,7 +1091,13 @@ Do something.
 
     #[test]
     fn with_overrides_applies_capacity() {
-        let config = NodeConfig::new("n", DEFAULT_CAPACITY, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS, None);
+        let config = NodeConfig::new(
+            "n",
+            DEFAULT_CAPACITY,
+            DEFAULT_API_BUDGET,
+            DEFAULT_REQUEST_DELAY_MS,
+            None,
+        );
         let overrides = crate::cli::NodeOverrides {
             capacity: Some(42),
             ..Default::default()
@@ -1086,7 +1111,13 @@ Do something.
 
     #[test]
     fn with_overrides_applies_api_budget() {
-        let config = NodeConfig::new("n", DEFAULT_CAPACITY, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS, None);
+        let config = NodeConfig::new(
+            "n",
+            DEFAULT_CAPACITY,
+            DEFAULT_API_BUDGET,
+            DEFAULT_REQUEST_DELAY_MS,
+            None,
+        );
         let overrides = crate::cli::NodeOverrides {
             api_budget: Some(10_000),
             ..Default::default()
@@ -1098,7 +1129,13 @@ Do something.
 
     #[test]
     fn with_overrides_applies_request_delay() {
-        let config = NodeConfig::new("n", DEFAULT_CAPACITY, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS, None);
+        let config = NodeConfig::new(
+            "n",
+            DEFAULT_CAPACITY,
+            DEFAULT_API_BUDGET,
+            DEFAULT_REQUEST_DELAY_MS,
+            None,
+        );
         let overrides = crate::cli::NodeOverrides {
             request_delay: Some(500),
             ..Default::default()
@@ -1109,7 +1146,13 @@ Do something.
 
     #[test]
     fn with_overrides_applies_agent_command() {
-        let config = NodeConfig::new("n", DEFAULT_CAPACITY, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS, None);
+        let config = NodeConfig::new(
+            "n",
+            DEFAULT_CAPACITY,
+            DEFAULT_API_BUDGET,
+            DEFAULT_REQUEST_DELAY_MS,
+            None,
+        );
         let overrides = crate::cli::NodeOverrides {
             agent_command: Some("codex --full-auto".to_string()),
             ..Default::default()
@@ -1139,7 +1182,16 @@ Do something.
 
     #[test]
     fn with_overrides_empty_leaves_unchanged() {
-        let config = NodeConfig::new("n", 50, 3000, 200, Some(AgentConfig { command: "original".to_string(), ..Default::default() }));
+        let config = NodeConfig::new(
+            "n",
+            50,
+            3000,
+            200,
+            Some(AgentConfig {
+                command: "original".to_string(),
+                ..Default::default()
+            }),
+        );
         let overrides = crate::cli::NodeOverrides::default();
         let updated = config.clone().with_overrides(&overrides);
         assert_eq!(updated, config);
@@ -1164,7 +1216,13 @@ Do something.
 
     #[test]
     fn with_overrides_applies_agent_timeout() {
-        let config = NodeConfig::new("n", DEFAULT_CAPACITY, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS, None);
+        let config = NodeConfig::new(
+            "n",
+            DEFAULT_CAPACITY,
+            DEFAULT_API_BUDGET,
+            DEFAULT_REQUEST_DELAY_MS,
+            None,
+        );
         let overrides = crate::cli::NodeOverrides {
             agent_timeout: Some(120),
             ..Default::default()

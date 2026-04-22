@@ -369,12 +369,10 @@ mod tests {
         assert!(snapshot.physical_cores >= 1);
         assert!(snapshot.total_memory_gb > 0.0);
         assert!(snapshot.available_memory_gb >= 0.0);
-        assert!(
-            matches!(
-                snapshot.platform,
-                Platform::MacOS | Platform::Linux | Platform::Other
-            )
-        );
+        assert!(matches!(
+            snapshot.platform,
+            Platform::MacOS | Platform::Linux | Platform::Other
+        ));
     }
 
     #[test]

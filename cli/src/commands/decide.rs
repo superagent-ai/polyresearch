@@ -73,7 +73,10 @@ pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
             ctx.config.required_confirmations,
         )?
     } else {
-        DecisionExecuted { outcome, confirmations }
+        DecisionExecuted {
+            outcome,
+            confirmations,
+        }
     };
 
     let output = DecideOutput {
@@ -128,7 +131,12 @@ pub(crate) fn decide_without_peer_review(
     let Some(baseline) = attempt.baseline_metric else {
         return Ok(Outcome::NonImprovement);
     };
-    if !metric_beats(attempt.metric, baseline, tolerance, ctx.config.metric_direction) {
+    if !metric_beats(
+        attempt.metric,
+        baseline,
+        tolerance,
+        ctx.config.metric_direction,
+    ) {
         return Ok(Outcome::NonImprovement);
     }
 
@@ -270,6 +278,7 @@ fn close_pr_and_cleanup(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn execute_decision(
     github: &Arc<dyn GitHubApi>,
     repo_root: Option<&PathBuf>,
@@ -332,7 +341,10 @@ pub fn execute_decision(
                 };
                 github.post_issue_comment(pr_number, &comment.render())?;
                 github.close_issue(thesis_number)?;
-                DecisionExecuted { outcome, confirmations }
+                DecisionExecuted {
+                    outcome,
+                    confirmations,
+                }
             } else {
                 let comment = ProtocolComment::Decision {
                     thesis: thesis_number,
@@ -342,7 +354,10 @@ pub fn execute_decision(
                 };
                 github.post_issue_comment(pr_number, &comment.render())?;
                 close_pr_and_cleanup(github, pr_number, head_ref_name)?;
-                DecisionExecuted { outcome: Outcome::Stale, confirmations: 0 }
+                DecisionExecuted {
+                    outcome: Outcome::Stale,
+                    confirmations: 0,
+                }
             }
         }
         Outcome::InfraFailure | Outcome::Stale => {
@@ -354,7 +369,10 @@ pub fn execute_decision(
             };
             github.post_issue_comment(pr_number, &comment.render())?;
             close_pr_and_cleanup(github, pr_number, head_ref_name)?;
-            DecisionExecuted { outcome, confirmations }
+            DecisionExecuted {
+                outcome,
+                confirmations,
+            }
         }
         Outcome::NonImprovement | Outcome::Disagreement | Outcome::PolicyRejection => {
             let comment = ProtocolComment::Decision {
@@ -368,7 +386,10 @@ pub fn execute_decision(
             if required_confirmations > 0 || !matches!(outcome, Outcome::NonImprovement) {
                 github.close_issue(thesis_number)?;
             }
-            DecisionExecuted { outcome, confirmations }
+            DecisionExecuted {
+                outcome,
+                confirmations,
+            }
         }
     };
     Ok(result)

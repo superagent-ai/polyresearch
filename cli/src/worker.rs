@@ -5,8 +5,8 @@ use std::sync::Arc;
 use color_eyre::eyre::{Context, Result, eyre};
 
 use crate::agent::{self, AgentOutcome, ExperimentResult, RecoveredMetric};
-use crate::comments::{Observation, ProtocolComment, ReleaseReason};
 use crate::commands;
+use crate::comments::{Observation, ProtocolComment, ReleaseReason};
 use crate::config::MetricDirection;
 use crate::github::GitHubApi;
 use crate::state::ThesisState;
@@ -144,7 +144,10 @@ impl ThesisWorker {
 
         if let Some(recovered) = agent::recover_from_logs(&self.worktree_path) {
             eprintln!("Recovered metric {:.4} from run logs", recovered.metric);
-            return Ok(ExperimentOutcome::Result(classify_recovered(recovered, self.ctx.metric_direction)));
+            return Ok(ExperimentOutcome::Result(classify_recovered(
+                recovered,
+                self.ctx.metric_direction,
+            )));
         }
 
         eprintln!("Log recovery failed; attempting direct harness execution...");
@@ -156,8 +159,14 @@ impl ThesisWorker {
 
         match harness_result {
             Ok(Some(recovered)) => {
-                eprintln!("Recovered metric {:.4} from direct harness", recovered.metric);
-                Ok(ExperimentOutcome::Result(classify_recovered(recovered, self.ctx.metric_direction)))
+                eprintln!(
+                    "Recovered metric {:.4} from direct harness",
+                    recovered.metric
+                );
+                Ok(ExperimentOutcome::Result(classify_recovered(
+                    recovered,
+                    self.ctx.metric_direction,
+                )))
             }
             Ok(None) => Ok(ExperimentOutcome::NoResult),
             Err(err) => {
@@ -206,7 +215,10 @@ impl ThesisWorker {
             };
             github.create_pull_request(
                 &self.branch,
-                &format!("Thesis #{}: {}", self.ctx.issue_number, self.ctx.thesis_title),
+                &format!(
+                    "Thesis #{}: {}",
+                    self.ctx.issue_number, self.ctx.thesis_title
+                ),
                 &body,
                 default_branch,
             )?;
@@ -342,7 +354,14 @@ impl ThesisWorker {
         } else {
             commands::run_git(
                 &self.ctx.repo_root,
-                &["worktree", "add", "-b", &self.branch, &path_str, default_branch],
+                &[
+                    "worktree",
+                    "add",
+                    "-b",
+                    &self.branch,
+                    &path_str,
+                    default_branch,
+                ],
             )?;
         }
 
@@ -390,11 +409,8 @@ impl ThesisWorker {
             let _ = commands::run_git(&self.worktree_path, &["reset", "HEAD", "--", glob]);
         }
 
-        let has_staged = commands::run_git(
-            &self.worktree_path,
-            &["diff", "--cached", "--quiet"],
-        )
-        .is_err();
+        let has_staged =
+            commands::run_git(&self.worktree_path, &["diff", "--cached", "--quiet"]).is_err();
         if !has_staged {
             return Err(eyre!("no changes to commit within the editable surface"));
         }
@@ -450,7 +466,10 @@ impl ThesisWorker {
     }
 }
 
-pub fn classify_recovered(recovered: RecoveredMetric, direction: MetricDirection) -> ExperimentResult {
+pub fn classify_recovered(
+    recovered: RecoveredMetric,
+    direction: MetricDirection,
+) -> ExperimentResult {
     let Some(baseline) = recovered.baseline else {
         return ExperimentResult {
             metric: recovered.metric,
@@ -468,7 +487,12 @@ pub fn classify_recovered(recovered: RecoveredMetric, direction: MetricDirection
     ExperimentResult {
         metric: recovered.metric,
         baseline: Some(baseline),
-        observation: if improved { "improved" } else { "no_improvement" }.to_string(),
+        observation: if improved {
+            "improved"
+        } else {
+            "no_improvement"
+        }
+        .to_string(),
         summary: recovered.summary,
     }
 }
@@ -558,7 +582,10 @@ mod tests {
 
     #[test]
     fn parallelism_respects_max_parallel_flag() {
-        assert_eq!(calculate_parallelism(16, 64.0, 64.0, 1, 1.0, Some(3), 10), 3);
+        assert_eq!(
+            calculate_parallelism(16, 64.0, 64.0, 1, 1.0, Some(3), 10),
+            3
+        );
     }
 
     #[test]
@@ -606,10 +633,19 @@ mod tests {
 
     #[test]
     fn parse_observation_valid() {
-        assert_eq!(parse_observation("improved").unwrap(), Observation::Improved);
-        assert_eq!(parse_observation("no_improvement").unwrap(), Observation::NoImprovement);
+        assert_eq!(
+            parse_observation("improved").unwrap(),
+            Observation::Improved
+        );
+        assert_eq!(
+            parse_observation("no_improvement").unwrap(),
+            Observation::NoImprovement
+        );
         assert_eq!(parse_observation("crashed").unwrap(), Observation::Crashed);
-        assert_eq!(parse_observation("infra_failure").unwrap(), Observation::InfraFailure);
+        assert_eq!(
+            parse_observation("infra_failure").unwrap(),
+            Observation::InfraFailure
+        );
     }
 
     #[test]

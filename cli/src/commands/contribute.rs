@@ -7,7 +7,7 @@ use color_eyre::eyre::{Result, eyre};
 use crate::cli::ContributeArgs;
 use crate::commands::{self, AppContext};
 use crate::comments::{Observation, ProtocolComment, ReleaseReason};
-use crate::config::{NodeConfig, ProtocolConfig, ProgramSpec};
+use crate::config::{NodeConfig, ProgramSpec, ProtocolConfig};
 use crate::github::{GitHubApi, GitHubClient, RepoRef};
 use crate::hardware;
 use crate::state::{RepositoryState, ThesisPhase, ThesisState};
@@ -92,6 +92,7 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_iteration(
     ctx: &AppContext,
     args: &ContributeArgs,
@@ -113,7 +114,10 @@ async fn run_iteration(
         if thesis.issue.state != "OPEN" {
             continue;
         }
-        let has_merged_pr = thesis.pull_requests.iter().any(|pr| pr.pr.state == "MERGED");
+        let has_merged_pr = thesis
+            .pull_requests
+            .iter()
+            .any(|pr| pr.pr.state == "MERGED");
         if has_merged_pr {
             continue;
         }
@@ -124,10 +128,7 @@ async fn run_iteration(
                     .iter()
                     .any(|c| c.node == node_id && a.created_at >= c.created_at)
         });
-        let has_open_pr = thesis
-            .pull_requests
-            .iter()
-            .any(|pr| pr.pr.state == "OPEN");
+        let has_open_pr = thesis.pull_requests.iter().any(|pr| pr.pr.state == "OPEN");
         if has_improved && !has_open_pr {
             eprintln!("Auto-submitting thesis #{}...", thesis.issue.number);
             let worktree_path = commands::thesis_worktree_path(
@@ -155,10 +156,18 @@ async fn run_iteration(
                             &format!("References #{}", thesis.issue.number),
                             default_branch,
                         ) {
-                            Ok(_) => { submitted_any = true; }
-                            Err(err) => eprintln!("Warning: PR creation failed for thesis #{}: {err}", thesis.issue.number),
+                            Ok(_) => {
+                                submitted_any = true;
+                            }
+                            Err(err) => eprintln!(
+                                "Warning: PR creation failed for thesis #{}: {err}",
+                                thesis.issue.number
+                            ),
                         },
-                        Err(err) => eprintln!("Warning: push failed for thesis #{}: {err}", thesis.issue.number),
+                        Err(err) => eprintln!(
+                            "Warning: push failed for thesis #{}: {err}",
+                            thesis.issue.number
+                        ),
                     }
                 }
             }
@@ -288,6 +297,7 @@ async fn run_iteration(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_worker_context(
     thesis: &ThesisState,
     repo_root: &Path,
@@ -355,10 +365,7 @@ fn cleanup_worktree(repo_root: &Path, worktree_path: &Path) {
     }
 }
 
-fn claimable_theses<'a>(
-    repo_state: &'a RepositoryState,
-    node_id: &str,
-) -> Vec<&'a ThesisState> {
+fn claimable_theses<'a>(repo_state: &'a RepositoryState, node_id: &str) -> Vec<&'a ThesisState> {
     repo_state
         .theses
         .iter()
@@ -375,10 +382,7 @@ fn claimable_theses<'a>(
         .collect()
 }
 
-fn resumable_theses<'a>(
-    repo_state: &'a RepositoryState,
-    node_id: &str,
-) -> Vec<&'a ThesisState> {
+fn resumable_theses<'a>(repo_state: &'a RepositoryState, node_id: &str) -> Vec<&'a ThesisState> {
     repo_state
         .theses
         .iter()
@@ -429,10 +433,10 @@ fn parse_prepare_key(repo_root: &Path, key: &str) -> Option<String> {
     let contents = std::fs::read_to_string(path).ok()?;
     for line in contents.lines() {
         let trimmed = line.trim();
-        if let Some((k, v)) = trimmed.split_once(':') {
-            if k.trim() == key {
-                return Some(v.trim().to_string());
-            }
+        if let Some((k, v)) = trimmed.split_once(':')
+            && k.trim() == key
+        {
+            return Some(v.trim().to_string());
         }
     }
     None

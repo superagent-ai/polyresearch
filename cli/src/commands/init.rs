@@ -64,10 +64,10 @@ fn default_machine_id() -> String {
 }
 
 fn resolve_hostname() -> String {
-    if let Ok(hostname) = env::var("HOSTNAME") {
-        if !hostname.trim().is_empty() {
-            return hostname;
-        }
+    if let Ok(hostname) = env::var("HOSTNAME")
+        && !hostname.trim().is_empty()
+    {
+        return hostname;
     }
 
     let output = Command::new("hostname").output();

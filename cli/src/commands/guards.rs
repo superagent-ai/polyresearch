@@ -16,19 +16,16 @@ pub fn ensure_lead(ctx: &AppContext) -> Result<String> {
     Ok(login)
 }
 
-pub fn find_thesis<'a>(
-    repo_state: &'a RepositoryState,
-    issue_number: u64,
-) -> Result<&'a ThesisState> {
+pub fn find_thesis(repo_state: &RepositoryState, issue_number: u64) -> Result<&ThesisState> {
     repo_state
         .get_thesis(issue_number)
         .ok_or_else(|| eyre!("thesis #{} not found", issue_number))
 }
 
-pub fn require_claimable_thesis<'a>(
-    repo_state: &'a RepositoryState,
+pub fn require_claimable_thesis(
+    repo_state: &RepositoryState,
     issue_number: u64,
-) -> Result<&'a ThesisState> {
+) -> Result<&ThesisState> {
     let thesis = find_thesis(repo_state, issue_number)?;
     if thesis.issue.state != "OPEN" {
         return Err(eyre!("thesis #{} is not open", issue_number));
@@ -65,10 +62,10 @@ pub fn require_claimed_thesis<'a>(
     Ok(thesis)
 }
 
-pub fn require_pull_request<'a>(
-    repo_state: &'a RepositoryState,
+pub fn require_pull_request(
+    repo_state: &RepositoryState,
     pr_number: u64,
-) -> Result<(&'a ThesisState, &'a PullRequestState)> {
+) -> Result<(&ThesisState, &PullRequestState)> {
     repo_state
         .get_pull_request(pr_number)
         .ok_or_else(|| eyre!("PR #{} not found", pr_number))
@@ -118,10 +115,10 @@ pub fn require_claimed_review_pr<'a>(
     Ok((thesis, pr_state))
 }
 
-pub fn require_decidable_pr<'a>(
-    repo_state: &'a RepositoryState,
+pub fn require_decidable_pr(
+    repo_state: &RepositoryState,
     pr_number: u64,
-) -> Result<(&'a ThesisState, &'a PullRequestState)> {
+) -> Result<(&ThesisState, &PullRequestState)> {
     let (thesis, pr_state) = require_pull_request(repo_state, pr_number)?;
     if pr_state.decision.is_some() {
         return Err(eyre!("PR #{} already has a decision", pr_number));
@@ -141,7 +138,8 @@ pub fn ensure_clean_audit(repo_state: &RepositoryState, action: &str) -> Result<
     if blocking_count > 0 {
         return Err(eyre!(
             "cannot {} while {} critical audit finding(s) are present; run `polyresearch audit` and resolve them through `polyresearch admin ...` first",
-            action, blocking_count
+            action,
+            blocking_count
         ));
     }
     Ok(())
@@ -149,10 +147,7 @@ pub fn ensure_clean_audit(repo_state: &RepositoryState, action: &str) -> Result<
 
 /// Checks that the audit is clean and results.tsv is current.
 /// Call after `ensure_lead` and `RepositoryState::derive`.
-pub fn ensure_current_ledger(
-    ctx: &AppContext,
-    repo_state: &RepositoryState,
-) -> Result<Ledger> {
+pub fn ensure_current_ledger(ctx: &AppContext, repo_state: &RepositoryState) -> Result<Ledger> {
     ensure_clean_audit(repo_state, "proceed")?;
     let ledger = Ledger::load(&ctx.repo_root)?;
     if !ledger.is_current(repo_state) {
@@ -165,19 +160,15 @@ pub fn ensure_current_ledger(
 
 /// After a release with `no_improvement`, re-derive state and close the issue
 /// if the thesis has become Exhausted (no remaining active claims).
-pub async fn close_if_exhausted(
-    ctx: &AppContext,
-    issue: u64,
-    reason: ReleaseReason,
-) -> Result<()> {
+pub async fn close_if_exhausted(ctx: &AppContext, issue: u64, reason: ReleaseReason) -> Result<()> {
     if reason != ReleaseReason::NoImprovement {
         return Ok(());
     }
     let updated = RepositoryState::derive(&ctx.github, &ctx.config).await?;
-    if let Some(t) = updated.theses.iter().find(|t| t.issue.number == issue) {
-        if matches!(t.phase, ThesisPhase::Exhausted) {
-            ctx.github.close_issue(issue)?;
-        }
+    if let Some(t) = updated.theses.iter().find(|t| t.issue.number == issue)
+        && matches!(t.phase, ThesisPhase::Exhausted)
+    {
+        ctx.github.close_issue(issue)?;
     }
     Ok(())
 }

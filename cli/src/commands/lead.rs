@@ -4,10 +4,10 @@ use color_eyre::eyre::{Result, eyre};
 
 use crate::agent;
 use crate::cli::LeadArgs;
-use crate::commands::{self, AppContext};
 use crate::commands::decide;
+use crate::commands::{self, AppContext};
 use crate::comments::{Outcome, ProtocolComment};
-use crate::config::{NodeConfig, ProtocolConfig, ProgramSpec};
+use crate::config::{NodeConfig, ProgramSpec, ProtocolConfig};
 use crate::ledger::Ledger;
 use crate::state::RepositoryState;
 
@@ -47,7 +47,10 @@ pub async fn run(ctx: &AppContext, args: &LeadArgs) -> Result<()> {
             return Ok(());
         }
 
-        eprintln!("Sleeping {}s before next lead iteration...", args.sleep_secs);
+        eprintln!(
+            "Sleeping {}s before next lead iteration...",
+            args.sleep_secs
+        );
         tokio::time::sleep(Duration::from_secs(args.sleep_secs)).await;
     }
 }
@@ -73,7 +76,11 @@ async fn run_iteration(
     Ok(())
 }
 
-pub fn sync_if_stale(ctx: &AppContext, repo_state: &RepositoryState, default_branch: &str) -> Result<()> {
+pub fn sync_if_stale(
+    ctx: &AppContext,
+    repo_state: &RepositoryState,
+    default_branch: &str,
+) -> Result<()> {
     let ledger = Ledger::load(&ctx.repo_root)?;
     if ledger.is_current(repo_state) {
         return Ok(());
@@ -96,7 +103,10 @@ pub fn sync_if_stale(ctx: &AppContext, repo_state: &RepositoryState, default_bra
         return Ok(());
     }
 
-    commands::run_git(&ctx.repo_root, &["pull", "origin", default_branch, "--ff-only"])?;
+    commands::run_git(
+        &ctx.repo_root,
+        &["pull", "origin", default_branch, "--ff-only"],
+    )?;
 
     let mut ledger = Ledger::load(&ctx.repo_root)?;
     let missing = ledger.missing_rows(repo_state);
@@ -105,7 +115,11 @@ pub fn sync_if_stale(ctx: &AppContext, repo_state: &RepositoryState, default_bra
     }
 
     ledger.append_rows(&missing)?;
-    commands::commit_file(&ctx.repo_root, "results.tsv", "Update results.tsv via polyresearch lead sync.")?;
+    commands::commit_file(
+        &ctx.repo_root,
+        "results.tsv",
+        "Update results.tsv via polyresearch lead sync.",
+    )?;
     commands::run_git(&ctx.repo_root, &["push"])?;
     eprintln!("Synced {} rows to results.tsv", missing.len());
     Ok(())
@@ -143,7 +157,10 @@ pub fn policy_check_open_prs(ctx: &AppContext, repo_state: &RepositoryState) -> 
                 if violations.is_empty() {
                     eprintln!("Would post policy-pass on PR #{}", pr_state.pr.number);
                 } else {
-                    eprintln!("Would reject PR #{} for policy violations: {:?}", pr_state.pr.number, violations);
+                    eprintln!(
+                        "Would reject PR #{} for policy violations: {:?}",
+                        pr_state.pr.number, violations
+                    );
                 }
                 continue;
             }
@@ -153,7 +170,8 @@ pub fn policy_check_open_prs(ctx: &AppContext, repo_state: &RepositoryState) -> 
                     thesis: thesis_num,
                     candidate_sha: pr_state.pr.head_ref_oid.clone().unwrap_or_default(),
                 };
-                ctx.github.post_issue_comment(pr_state.pr.number, &comment.render())?;
+                ctx.github
+                    .post_issue_comment(pr_state.pr.number, &comment.render())?;
                 eprintln!("Policy-pass posted on PR #{}", pr_state.pr.number);
             } else {
                 let comment = ProtocolComment::Decision {
@@ -162,7 +180,8 @@ pub fn policy_check_open_prs(ctx: &AppContext, repo_state: &RepositoryState) -> 
                     outcome: Outcome::PolicyRejection,
                     confirmations: 0,
                 };
-                ctx.github.post_issue_comment(pr_state.pr.number, &comment.render())?;
+                ctx.github
+                    .post_issue_comment(pr_state.pr.number, &comment.render())?;
                 ctx.github.close_pull_request(pr_state.pr.number)?;
                 ctx.github.close_issue(thesis_num)?;
                 eprintln!("PR #{} rejected for policy violations", pr_state.pr.number);
@@ -172,7 +191,11 @@ pub fn policy_check_open_prs(ctx: &AppContext, repo_state: &RepositoryState) -> 
     Ok(())
 }
 
-pub fn decide_ready_prs(ctx: &AppContext, config: &ProtocolConfig, repo_state: &RepositoryState) -> Result<()> {
+pub fn decide_ready_prs(
+    ctx: &AppContext,
+    config: &ProtocolConfig,
+    repo_state: &RepositoryState,
+) -> Result<()> {
     let required = config.required_confirmations as usize;
 
     let ledger = if config.required_confirmations == 0 {
@@ -193,7 +216,10 @@ pub fn decide_ready_prs(ctx: &AppContext, config: &ProtocolConfig, repo_state: &
             }
 
             if pr_state.pr.mergeable.as_deref() == Some("CONFLICTING") {
-                eprintln!("PR #{} has merge conflicts, closing as stale...", pr_state.pr.number);
+                eprintln!(
+                    "PR #{} has merge conflicts, closing as stale...",
+                    pr_state.pr.number
+                );
                 if !ctx.cli.dry_run {
                     let stale_comment = ProtocolComment::Decision {
                         thesis: thesis.issue.number,
@@ -201,7 +227,8 @@ pub fn decide_ready_prs(ctx: &AppContext, config: &ProtocolConfig, repo_state: &
                         outcome: Outcome::Stale,
                         confirmations: 0,
                     };
-                    ctx.github.post_issue_comment(pr_state.pr.number, &stale_comment.render())?;
+                    ctx.github
+                        .post_issue_comment(pr_state.pr.number, &stale_comment.render())?;
                     ctx.github.close_pull_request(pr_state.pr.number)?;
                 }
                 continue;
@@ -221,7 +248,11 @@ pub fn decide_ready_prs(ctx: &AppContext, config: &ProtocolConfig, repo_state: &
             };
 
             let candidate_sha = pr_state.pr.head_ref_oid.clone().unwrap_or_default();
-            let confirmations = if required == 0 { 0 } else { pr_state.reviews.len() as u64 };
+            let confirmations = if required == 0 {
+                0
+            } else {
+                pr_state.reviews.len() as u64
+            };
 
             let result = decide::execute_decision(
                 &ctx.github,
@@ -252,10 +283,10 @@ async fn generate_if_needed(
         return Ok(());
     }
 
-    if let Some(max) = config.max_queue_depth {
-        if repo_state.queue_depth >= max {
-            return Ok(());
-        }
+    if let Some(max) = config.max_queue_depth
+        && repo_state.queue_depth >= max
+    {
+        return Ok(());
     }
 
     let blocking_count = repo_state
@@ -269,11 +300,16 @@ async fn generate_if_needed(
     }
     let non_blocking = repo_state.audit_findings.len() - blocking_count;
     if non_blocking > 0 {
-        eprintln!("Note: {non_blocking} non-blocking audit finding(s) present (run `polyresearch audit`)");
+        eprintln!(
+            "Note: {non_blocking} non-blocking audit finding(s) present (run `polyresearch audit`)"
+        );
     }
 
-    let needed = config.min_queue_depth.saturating_sub(repo_state.queue_depth);
-    let capped = config.max_queue_depth
+    let needed = config
+        .min_queue_depth
+        .saturating_sub(repo_state.queue_depth);
+    let capped = config
+        .max_queue_depth
         .map(|max| needed.min(max.saturating_sub(repo_state.queue_depth)))
         .unwrap_or(needed);
 
@@ -281,7 +317,10 @@ async fn generate_if_needed(
         return Ok(());
     }
 
-    eprintln!("Queue depth {} < min {}, generating up to {capped} theses...", repo_state.queue_depth, config.min_queue_depth);
+    eprintln!(
+        "Queue depth {} < min {}, generating up to {capped} theses...",
+        repo_state.queue_depth, config.min_queue_depth
+    );
 
     if ctx.cli.dry_run {
         eprintln!("Would generate {capped} thesis proposals");
@@ -302,14 +341,19 @@ async fn generate_if_needed(
     eprintln!("Agent produced {} thesis proposals", proposals.len());
 
     for proposal in proposals {
-        let issue = ctx.github.create_issue(&proposal.title, &proposal.body, &["thesis"])?;
+        let issue = ctx
+            .github
+            .create_issue(&proposal.title, &proposal.body, &["thesis"])?;
         eprintln!("Created thesis #{}: {}", issue.number, proposal.title);
 
         if config.auto_approve {
             let approval = ProtocolComment::Approval {
                 thesis: issue.number,
             };
-            if let Err(err) = ctx.github.post_issue_comment(issue.number, &approval.render()) {
+            if let Err(err) = ctx
+                .github
+                .post_issue_comment(issue.number, &approval.render())
+            {
                 eprintln!("Failed to approve #{}, closing: {err}", issue.number);
                 let _ = ctx.github.close_issue(issue.number);
                 continue;
