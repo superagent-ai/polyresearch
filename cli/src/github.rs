@@ -125,12 +125,26 @@ pub struct GitHubClient {
     repo: RepoRef,
 }
 
+/// A field sent with `gh api`. `Raw` uses `-f` (value is always a JSON string).
+/// `Typed` uses `-F` (gh coerces `true`/`false` to booleans, digits to numbers).
+pub enum ApiField<'a> {
+    Raw(&'a str, &'a str),
+    Typed(&'a str, &'a str),
+}
+
+impl<'a> From<(&'a str, &'a str)> for ApiField<'a> {
+    fn from((key, value): (&'a str, &'a str)) -> Self {
+        ApiField::Raw(key, value)
+    }
+}
+
 pub trait GitHubApi: Send + Sync {
     fn current_login(&self) -> Result<String>;
     fn auth_status(&self) -> Result<String>;
     fn auth_token(&self) -> Result<String>;
     fn get_rate_limit_status(&self) -> Result<RateLimitStatus>;
     fn repo_has_issues(&self) -> Result<bool>;
+    fn enable_issues(&self) -> Result<()>;
     fn list_thesis_issues(&self, state: IssueListState) -> Result<Vec<Issue>>;
     fn list_issue_comments(&self, issue_number: u64) -> Result<Vec<IssueComment>>;
     fn create_issue(&self, title: &str, body: &str, labels: &[&str]) -> Result<Issue>;
@@ -209,6 +223,15 @@ impl GitHubClient {
             .unwrap_or(true))
     }
 
+    pub fn enable_issues(&self) -> Result<()> {
+        self.gh_api_json(
+            "PATCH",
+            &format!("repos/{}/{}", self.repo.owner, self.repo.name),
+            &[ApiField::Typed("has_issues", "true")],
+        )?;
+        Ok(())
+    }
+
     pub fn list_thesis_issues(&self, state: IssueListState) -> Result<Vec<Issue>> {
         self.gh_json_typed([
             "issue",
@@ -262,11 +285,11 @@ impl GitHubClient {
     }
 
     pub fn add_assignees(&self, issue_number: u64, assignees: &[&str]) -> Result<()> {
-        let fields = assignees
+        let fields: Vec<ApiField> = assignees
             .iter()
             .copied()
-            .map(|assignee| ("assignees[]", assignee))
-            .collect::<Vec<_>>();
+            .map(|assignee| ApiField::Raw("assignees[]", assignee))
+            .collect();
         self.gh_api_json(
             "POST",
             &format!(
@@ -388,7 +411,7 @@ impl GitHubClient {
                 "repos/{}/{}/pulls/{pr_number}",
                 self.repo.owner, self.repo.name
             ),
-            &[("state", "closed")],
+            &[ApiField::Raw("state", "closed")],
         )
     }
 
@@ -399,7 +422,7 @@ impl GitHubClient {
                 "repos/{}/{}/pulls/{pr_number}/merge",
                 self.repo.owner, self.repo.name
             ),
-            &[("merge_method", "merge")],
+            &[ApiField::Raw("merge_method", "merge")],
         )
     }
 
@@ -435,7 +458,8 @@ impl GitHubClient {
     where
         T: DeserializeOwned,
     {
-        let value = self.gh_api_json(method, endpoint, fields)?;
+        let api_fields: Vec<ApiField> = fields.iter().copied().map(Into::into).collect();
+        let value = self.gh_api_json(method, endpoint, &api_fields)?;
         Ok(serde_json::from_value(value)?)
     }
 
@@ -443,15 +467,19 @@ impl GitHubClient {
         &self,
         method: &str,
         endpoint: &str,
-        fields: &[(&str, &str)],
+        fields: &[ApiField],
     ) -> Result<serde_json::Value> {
         let idempotent = method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("HEAD");
         let mut command = Command::new("gh");
         command.arg("api");
         command.arg("--method").arg(method);
         command.arg(endpoint);
-        for (key, value) in fields {
-            command.arg("-f").arg(format!("{key}={value}"));
+        for field in fields {
+            let (flag, key, value) = match field {
+                ApiField::Raw(k, v) => ("-f", k, v),
+                ApiField::Typed(k, v) => ("-F", k, v),
+            };
+            command.arg(flag).arg(format!("{key}={value}"));
         }
         run_json_command(command, idempotent)
     }
@@ -488,6 +516,10 @@ impl GitHubApi for GitHubClient {
 
     fn repo_has_issues(&self) -> Result<bool> {
         GitHubClient::repo_has_issues(self)
+    }
+
+    fn enable_issues(&self) -> Result<()> {
+        GitHubClient::enable_issues(self)
     }
 
     fn list_thesis_issues(&self, state: IssueListState) -> Result<Vec<Issue>> {
@@ -976,7 +1008,7 @@ fn classify_error_hint(stderr: &str) -> Option<&'static str> {
 
     if lowered.contains("has disabled issues") {
         return Some(
-            "Enable Issues in your repository settings: gh api repos/OWNER/REPO --method PATCH -f has_issues=true",
+            "Enable Issues in your repository settings: gh api repos/OWNER/REPO --method PATCH -F has_issues=true",
         );
     }
 

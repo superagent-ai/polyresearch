@@ -204,6 +204,10 @@ impl GitHubApi for ScenarioGitHub {
         Ok(true)
     }
 
+    fn enable_issues(&self) -> Result<()> {
+        Ok(())
+    }
+
     fn list_thesis_issues(&self, _state: IssueListState) -> Result<Vec<Issue>> {
         let s = self.state.lock().unwrap();
         Ok(s.issues.clone())
