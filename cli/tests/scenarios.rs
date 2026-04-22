@@ -4041,8 +4041,9 @@ fn execute_decision_auto_releases_on_repeated_non_improvement() {
         findings: vec![],
     };
 
-    let prior = commands::decide::count_prior_rejections(&thesis);
-    assert_eq!(prior, 1, "should count 1 prior rejection");
+    let claim_start = thesis.active_claims.first().map(|c| c.created_at);
+    let prior = commands::decide::count_prior_rejections(&thesis, claim_start);
+    assert_eq!(prior, 1, "should count 1 prior rejection within claim period");
     assert!(
         prior + 1 >= polyresearch::commands::duties::MAX_SUBMIT_REJECTIONS,
         "threshold should be reached after this decision"
@@ -4149,7 +4150,8 @@ fn execute_decision_no_auto_release_on_first_non_improvement() {
         findings: vec![],
     };
 
-    let prior = commands::decide::count_prior_rejections(&thesis);
+    let claim_start = thesis.active_claims.first().map(|c| c.created_at);
+    let prior = commands::decide::count_prior_rejections(&thesis, claim_start);
     assert_eq!(prior, 0, "should have 0 prior rejections");
     assert!(
         prior + 1 < polyresearch::commands::duties::MAX_SUBMIT_REJECTIONS,
@@ -4171,4 +4173,93 @@ fn execute_decision_no_auto_release_on_first_non_improvement() {
 
     assert_eq!(result.outcome, polyresearch::comments::Outcome::NonImprovement);
     assert!(github.is_pr_closed(191), "PR should be closed");
+}
+
+#[test]
+fn execute_decision_no_auto_release_when_rejection_predates_claim() {
+    use polyresearch::state::{
+        AttemptRecord, ClaimRecord, DecisionRecord, PullRequestState, ThesisPhase, ThesisState,
+    };
+
+    let now = chrono::Utc::now();
+
+    let thesis = ThesisState {
+        issue: Issue {
+            number: 92,
+            title: "Re-claimed thesis".to_string(),
+            body: None,
+            state: "OPEN".to_string(),
+            labels: vec![],
+            created_at: now - chrono::Duration::hours(10),
+            closed_at: None,
+            author: None,
+            url: None,
+        },
+        phase: ThesisPhase::Claimed,
+        approved: true,
+        maintainer_approved: true,
+        maintainer_rejected: false,
+        active_claims: vec![ClaimRecord {
+            node: "worker-b".to_string(),
+            created_at: now - chrono::Duration::hours(1),
+            expired: false,
+        }],
+        releases: vec![],
+        attempts: vec![AttemptRecord {
+            thesis: 92,
+            node: "worker-b".to_string(),
+            branch: "thesis/92-reclaim".to_string(),
+            metric: 0.95,
+            baseline_metric: Some(0.90),
+            observation: polyresearch::comments::Observation::Improved,
+            summary: "Fresh attempt".to_string(),
+            author: "contributor-b".to_string(),
+            created_at: now - chrono::Duration::minutes(30),
+            comment_id: 0,
+        }],
+        pull_requests: vec![PullRequestState {
+            pr: PullRequest {
+                number: 188,
+                title: "Old rejected PR from prior claim".to_string(),
+                body: None,
+                state: "CLOSED".to_string(),
+                head_ref_name: "thesis/92-reclaim-old".to_string(),
+                head_ref_oid: Some("old-sha".to_string()),
+                base_ref_name: Some("main".to_string()),
+                created_at: now - chrono::Duration::hours(8),
+                closed_at: Some(now - chrono::Duration::hours(5)),
+                merged_at: None,
+                author: Some(Author { login: "contributor-a".to_string() }),
+                url: None,
+                mergeable: None,
+            },
+            thesis_number: Some(92),
+            policy_pass: true,
+            maintainer_approved: true,
+            maintainer_rejected: false,
+            review_claims: vec![],
+            reviews: vec![],
+            decision: Some(DecisionRecord {
+                outcome: polyresearch::comments::Outcome::NonImprovement,
+                candidate_sha: "old-sha".to_string(),
+                confirmations: 0,
+                created_at: now - chrono::Duration::hours(5),
+            }),
+            findings: vec![],
+        }],
+        best_attempt_metric: Some(0.95),
+        invalidated_attempt_branches: std::collections::BTreeSet::new(),
+        findings: vec![],
+    };
+
+    let claim_start = thesis.active_claims.first().map(|c| c.created_at);
+    let prior = commands::decide::count_prior_rejections(&thesis, claim_start);
+    assert_eq!(
+        prior, 0,
+        "rejection from prior claim period (5h ago) must not count against current claim (1h ago)"
+    );
+    assert!(
+        prior + 1 < polyresearch::commands::duties::MAX_SUBMIT_REJECTIONS,
+        "threshold must not be reached when old rejections are excluded"
+    );
 }

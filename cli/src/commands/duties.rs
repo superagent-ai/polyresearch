@@ -2,7 +2,7 @@ use color_eyre::eyre::Result;
 use serde::Serialize;
 
 use crate::commands::{AppContext, print_value, read_node_id};
-use crate::comments::{Observation, Outcome, ReleaseReason};
+use crate::comments::{Observation, ReleaseReason};
 use crate::ledger::Ledger;
 use crate::state::{RepositoryState, ThesisPhase};
 
@@ -89,17 +89,8 @@ pub fn check(ctx: &AppContext, repo_state: &RepositoryState, context: DutyContex
                 .iter()
                 .find(|c| c.node == node_id)
                 .map(|c| c.created_at);
-            let rejection_count = thesis
-                .pull_requests
-                .iter()
-                .filter(|pr| {
-                    pr.pr.state == "CLOSED"
-                        && pr.decision.as_ref().is_some_and(|d| {
-                            matches!(d.outcome, Outcome::NonImprovement | Outcome::Stale)
-                                && claim_start.is_none_or(|cs| d.created_at >= cs)
-                        })
-                })
-                .count();
+            let rejection_count =
+                crate::commands::decide::count_prior_rejections(thesis, claim_start);
 
             if rejection_count >= MAX_SUBMIT_REJECTIONS {
                 blocking.push(DutyItem {

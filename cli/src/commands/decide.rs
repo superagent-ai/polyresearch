@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Result, eyre};
 use serde::Serialize;
 
@@ -93,7 +94,8 @@ pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
             Outcome::NonImprovement | Outcome::Stale
         )
     {
-        let prior_rejections = count_prior_rejections(thesis);
+        let claim_start = thesis.active_claims.first().map(|c| c.created_at);
+        let prior_rejections = count_prior_rejections(thesis, claim_start);
         if prior_rejections + 1 >= MAX_SUBMIT_REJECTIONS
             && let Some(claim) = thesis.active_claims.first()
         {
@@ -432,7 +434,10 @@ pub fn execute_decision(
     Ok(result)
 }
 
-pub fn count_prior_rejections(thesis: &crate::state::ThesisState) -> usize {
+pub fn count_prior_rejections(
+    thesis: &crate::state::ThesisState,
+    claim_start: Option<DateTime<Utc>>,
+) -> usize {
     thesis
         .pull_requests
         .iter()
@@ -440,6 +445,7 @@ pub fn count_prior_rejections(thesis: &crate::state::ThesisState) -> usize {
             pr.pr.state == "CLOSED"
                 && pr.decision.as_ref().is_some_and(|d| {
                     matches!(d.outcome, Outcome::NonImprovement | Outcome::Stale)
+                        && claim_start.is_none_or(|cs| d.created_at >= cs)
                 })
         })
         .count()
