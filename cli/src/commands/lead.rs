@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use color_eyre::eyre::{Result, eyre};
 
 use crate::agent;
@@ -31,15 +33,35 @@ pub async fn run(ctx: &AppContext, args: &LeadArgs) -> Result<()> {
 
     crate::preflight::run_all(&agent_command, &ctx.repo_root)?;
 
-    let prompt = agent::lead_workflow_prompt();
+    let prompt = agent::lead_workflow_prompt(args.once, args.sleep_secs);
     let repo_root = ctx.repo_root.clone();
     let verbose = ctx.cli.verbose;
+    let once = args.once;
+    let sleep_secs = args.sleep_secs;
 
-    tokio::task::spawn_blocking(move || {
-        agent::spawn_workflow_agent(&agent_command, &repo_root, prompt, verbose)
-    })
-    .await
-    .map_err(|e| eyre!("lead workflow agent task failed: {e}"))??;
+    loop {
+        let cmd = agent_command.clone();
+        let root = repo_root.clone();
+        let p = prompt.clone();
+
+        let result = tokio::task::spawn_blocking(move || {
+            agent::spawn_workflow_agent(&cmd, &root, &p, verbose)
+        })
+        .await
+        .map_err(|e| eyre!("lead workflow agent task failed: {e}"))?;
+
+        match result {
+            Ok(()) => break,
+            Err(err) => {
+                eprintln!("Lead agent failed: {err}");
+                if once {
+                    return Err(err);
+                }
+                eprintln!("Restarting in {sleep_secs}s...");
+                tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+            }
+        }
+    }
 
     Ok(())
 }

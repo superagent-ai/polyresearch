@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Result, eyre};
@@ -60,15 +61,39 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
 
     crate::preflight::run_all(&agent_command, &local_ctx.repo_root)?;
 
-    let prompt = agent::contribute_workflow_prompt();
+    let prompt = agent::contribute_workflow_prompt(
+        args.once,
+        args.sleep_secs,
+        args.max_parallel,
+    );
     let repo_root = local_ctx.repo_root.clone();
     let verbose = local_ctx.cli.verbose;
+    let once = args.once;
+    let sleep_secs = args.sleep_secs;
 
-    tokio::task::spawn_blocking(move || {
-        agent::spawn_workflow_agent(&agent_command, &repo_root, prompt, verbose)
-    })
-    .await
-    .map_err(|e| eyre!("contributor workflow agent task failed: {e}"))??;
+    loop {
+        let cmd = agent_command.clone();
+        let root = repo_root.clone();
+        let p = prompt.clone();
+
+        let result = tokio::task::spawn_blocking(move || {
+            agent::spawn_workflow_agent(&cmd, &root, &p, verbose)
+        })
+        .await
+        .map_err(|e| eyre!("contributor workflow agent task failed: {e}"))?;
+
+        match result {
+            Ok(()) => break,
+            Err(err) => {
+                eprintln!("Contributor agent failed: {err}");
+                if once {
+                    return Err(err);
+                }
+                eprintln!("Restarting in {sleep_secs}s...");
+                tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+            }
+        }
+    }
 
     Ok(())
 }

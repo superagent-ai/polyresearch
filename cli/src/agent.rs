@@ -380,12 +380,45 @@ pub fn experiment_prompt() -> &'static str {
     include_str!("../prompts/experiment.md")
 }
 
-pub fn contribute_workflow_prompt() -> &'static str {
-    include_str!("../prompts/contribute-workflow.md")
+pub fn contribute_workflow_prompt(
+    once: bool,
+    sleep_secs: u64,
+    max_parallel: Option<usize>,
+) -> String {
+    let base = include_str!("../prompts/contribute-workflow.md");
+    let mut prompt = base.to_string();
+
+    if once {
+        prompt.push_str(
+            "\n\nIMPORTANT: Run exactly ONE iteration of the loop (steps 1-7), then stop. Do not loop.\n",
+        );
+    } else {
+        prompt.push_str(&format!(
+            "\n\nSleep {sleep_secs} seconds between loop iterations.\n"
+        ));
+    }
+    if let Some(max) = max_parallel {
+        prompt.push_str(&format!(
+            "\nDo not work on more than {max} thesis/theses in parallel.\n"
+        ));
+    }
+    prompt
 }
 
-pub fn lead_workflow_prompt() -> &'static str {
-    include_str!("../prompts/lead-workflow.md")
+pub fn lead_workflow_prompt(once: bool, sleep_secs: u64) -> String {
+    let base = include_str!("../prompts/lead-workflow.md");
+    let mut prompt = base.to_string();
+
+    if once {
+        prompt.push_str(
+            "\n\nIMPORTANT: Run exactly ONE iteration of the loop (steps 1-6), then stop. Do not loop.\n",
+        );
+    } else {
+        prompt.push_str(&format!(
+            "\n\nSleep {sleep_secs} seconds between loop iterations.\n"
+        ));
+    }
+    prompt
 }
 
 pub fn thesis_generation_prompt(count: usize) -> String {
@@ -423,6 +456,12 @@ pub fn spawn_workflow_agent(
             Some(agent_command),
             Some(work_dir),
         );
+        let code = output
+            .status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".into());
+        return Err(eyre!("workflow agent exited with status {code}"));
     }
 
     Ok(())
