@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use color_eyre::eyre::{Result, eyre};
 use serde::Serialize;
 
@@ -12,25 +14,39 @@ struct SyncOutput {
     attempts: Vec<String>,
 }
 
+/// Fetch the default branch from origin and fast-forward the local branch.
+/// If local has unpushed commits (prior sync that failed to push), rebase
+/// them onto the remote. If rebase conflicts, abort to keep the repo
+/// workable -- follows the same abort pattern as decide.rs::try_rebase_onto_main.
+fn pull_default_branch(repo_root: &PathBuf, branch: &str) -> Result<()> {
+    run_git(repo_root, &["fetch", "origin", branch])?;
+    let remote_ref = format!("origin/{branch}");
+
+    if run_git(repo_root, &["merge", "--ff-only", &remote_ref]).is_ok() {
+        return Ok(());
+    }
+
+    let rebase_result = run_git(repo_root, &["rebase", &remote_ref]);
+    if rebase_result.is_err() {
+        let _ = run_git(repo_root, &["rebase", "--abort"]);
+    }
+    rebase_result.map(|_| ())
+}
+
 pub async fn run(ctx: &AppContext) -> Result<()> {
     ensure_lead(ctx)?;
 
     let default_branch = ctx.config.resolve_default_branch(&ctx.repo_root)?;
 
-    // Phase 1: incorporate remote commits (e.g. merged PRs) before touching the ledger.
     if !ctx.cli.dry_run {
         if current_branch(&ctx.repo_root)? != default_branch {
             return Err(eyre!(
                 "`polyresearch sync` must run from the `{default_branch}` branch"
             ));
         }
-        run_git(
-            &ctx.repo_root,
-            &["pull", "origin", &default_branch, "--rebase"],
-        )?;
+        pull_default_branch(&ctx.repo_root, &default_branch)?;
     }
 
-    // Phase 2: load the (now up-to-date) ledger, compute missing rows, append + commit.
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
     let mut ledger = Ledger::load(&ctx.repo_root)?;
     let missing_rows = ledger.missing_rows(&repo_state);
@@ -44,7 +60,6 @@ pub async fn run(ctx: &AppContext) -> Result<()> {
         )?;
     }
 
-    // Phase 3: push unconditionally to flush new commits AND any previously-unpushed ones.
     if !ctx.cli.dry_run {
         run_git(&ctx.repo_root, &["push", "origin", &default_branch])?;
     }
