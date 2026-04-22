@@ -22,7 +22,7 @@ pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
     let _ = ensure_current_ledger(ctx, &repo_state)?;
 
-    let duty_report = duties::check(ctx, &repo_state)?;
+    let duty_report = duties::check(ctx, &repo_state, duties::DutyContext::Lead)?;
     let lead_blocking: Vec<_> = duty_report
         .blocking
         .iter()
