@@ -52,19 +52,29 @@ pub async fn run(ctx: &AppContext, args: &LeadArgs) -> Result<()> {
 
         match result {
             Ok(()) => {
-                let repo_state =
-                    RepositoryState::derive(&ctx.github, &ctx.config).await?;
-                if repo_state.queue_depth < config.min_queue_depth {
-                    eprintln!(
-                        "Warning: queue depth is {} (min = {}). \
-                         Lead agent may not have generated enough theses.",
-                        repo_state.queue_depth, config.min_queue_depth
-                    );
-                    if !once {
-                        eprintln!("Restarting agent to refill queue in {sleep_secs}s...");
-                        tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
-                        continue;
+                match RepositoryState::derive(&ctx.github, &ctx.config).await {
+                    Ok(repo_state)
+                        if repo_state.queue_depth < config.min_queue_depth =>
+                    {
+                        eprintln!(
+                            "Warning: queue depth is {} (min = {}). \
+                             Lead agent may not have generated enough theses.",
+                            repo_state.queue_depth, config.min_queue_depth
+                        );
+                        if !once {
+                            eprintln!(
+                                "Restarting agent to refill queue in {sleep_secs}s..."
+                            );
+                            tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+                            continue;
+                        }
                     }
+                    Err(err) => {
+                        eprintln!(
+                            "Warning: could not verify queue depth after agent run: {err}"
+                        );
+                    }
+                    _ => {}
                 }
                 break;
             }
