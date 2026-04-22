@@ -64,7 +64,7 @@ For each claimed thesis:
 3. Run the experiment: implement the idea, run the evaluation per PREPARE.md, iterate if needed.
 4. Write `.polyresearch/result.json` with the result.
 
-Run experiments sequentially (one at a time) unless `max_slots` from step 2 is greater than 1. Benchmarks running concurrently compete for CPU, memory, and I/O, which corrupts measurements. If you have multiple claimed theses, re-run `polyresearch pace --json` between experiments to adapt to changing system load and recompute `max_slots` before starting the next one.
+Always run experiments sequentially (one at a time), even if you claimed multiple theses. Benchmarks running concurrently compete for CPU, memory, and I/O, which corrupts measurements. `max_slots` controls how many theses you claim per loop iteration, not how many benchmarks you run simultaneously. If you have multiple claimed theses, re-run `polyresearch pace --json` between experiments to adapt to changing system load.
 
 ### 5. Record and act on the result
 
