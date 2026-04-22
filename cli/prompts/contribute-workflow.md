@@ -46,7 +46,7 @@ by_memory = floor(effective_memory / eval_memory_gb)
 max_slots = min(by_cores, by_memory)
 ```
 
-If `max_slots` is 0 (machine is overloaded or undersized for the eval footprint), wait 60 seconds and re-check pace before claiming work. If `max_slots` stays 0 after 3 consecutive checks (~3 minutes), proceed with 1 experiment. The machine is permanently undersized for the eval footprint; running one experiment slowly is better than running none.
+If `max_slots` is 0 (machine is overloaded or undersized for the eval footprint), wait 60 seconds and re-check pace before claiming work. If `max_slots` stays 0 after 3 consecutive checks (~3 minutes), set `max_slots = 1` and continue. The machine is permanently undersized for the eval footprint; running one experiment slowly is better than running none.
 
 Also check `rate_limit.is_low`. If true, wait for the reset window (`rate_limit.resets_at`) before making more API requests.
 
