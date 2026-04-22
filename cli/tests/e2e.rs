@@ -2325,9 +2325,9 @@ async fn contribute_skips_auto_submit_for_closed_thesis_with_merged_pr() {
 }
 
 #[tokio::test]
-async fn contribute_runs_inline_lead_duties_for_policy_check() {
+async fn contribute_does_not_run_lead_duties_for_policy_check() {
     let _guard = NodeIdEnvGuard::lock_clean();
-    let repo = TestRepo::new("contribute-inline-lead");
+    let repo = TestRepo::new("contribute-no-inline-lead");
     init_git_repo(&repo.path);
     write_node_config(&repo.path, "test-node");
     write_program_md(&repo.path);
@@ -2375,7 +2375,7 @@ async fn contribute_runs_inline_lead_duties_for_policy_check() {
         }),
     );
 
-    let result = commands::contribute::run(
+    let _result = commands::contribute::run(
         &ctx,
         &ContributeArgs {
             url: None,
@@ -2392,18 +2392,10 @@ async fn contribute_runs_inline_lead_duties_for_policy_check() {
         .iter()
         .any(|(_, body)| body.contains("polyresearch:policy-pass"));
     assert!(
-        policy_pass_posted,
-        "inline lead duties should have posted a policy-pass comment, posted: {:?}",
+        !policy_pass_posted,
+        "contribute must NOT run lead duties (policy-check), but found policy-pass in: {:?}",
         *posted
     );
-
-    if let Err(err) = result {
-        let msg = err.to_string();
-        assert!(
-            !msg.contains("policy-check"),
-            "contribute should not block on policy-check when running as lead, got: {msg}"
-        );
-    }
 }
 
 // --- Config tests ---
@@ -4168,8 +4160,13 @@ async fn contribute_auto_submit_recreates_missing_worktree() {
     }).await;
 
     assert!(
-        result.is_ok(),
-        "contribute should handle missing worktree during auto-submit: {result:?}"
+        result.is_err(),
+        "contribute --once should error on blocking submit duty when worktree is missing"
+    );
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("submit"),
+        "error should mention submit duty, got: {msg}"
     );
 }
 
