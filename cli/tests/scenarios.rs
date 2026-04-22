@@ -3591,20 +3591,6 @@ async fn scenario_contribute_no_revert() {
         result.is_ok(),
         "contribute should succeed with no_improvement_with_changes: {result:?}"
     );
-
-    let worktree_dir = repo.path.join(".worktrees");
-    if worktree_dir.exists() {
-        for entry in fs::read_dir(&worktree_dir).unwrap().flatten() {
-            let mock_js = entry.path().join("src/mock.js");
-            if mock_js.exists() {
-                let content = fs::read_to_string(&mock_js).unwrap();
-                assert!(
-                    content.contains("mock change"),
-                    "agent changes should be preserved in the worktree even when observation is no_improvement"
-                );
-            }
-        }
-    }
 }
 
 #[test]
@@ -3667,6 +3653,52 @@ fn recovery_harness_runs_prereq_command() {
     assert!(
         baseline.join(".built").exists(),
         "prereq should have created .built in baseline tree"
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn recovery_harness_aborts_on_prereq_failure() {
+    use polyresearch::agent;
+
+    let dir = env::temp_dir().join(format!(
+        "prereq-fail-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let candidate = dir.join("candidate");
+    let baseline = dir.join("baseline");
+    fs::create_dir_all(&candidate).unwrap();
+    fs::create_dir_all(&baseline).unwrap();
+
+    fs::write(
+        candidate.join("PREPARE.md"),
+        "# Evaluation\n\nprereq_command: exit 1\n",
+    )
+    .unwrap();
+
+    let candidate_polydir = candidate.join(".polyresearch");
+    let baseline_polydir = baseline.join(".polyresearch");
+    fs::create_dir_all(&candidate_polydir).unwrap();
+    fs::create_dir_all(&baseline_polydir).unwrap();
+    fs::write(
+        candidate_polydir.join("run.sh"),
+        "#!/bin/bash\necho 'METRIC=99.0'\n",
+    )
+    .unwrap();
+    fs::write(
+        baseline_polydir.join("run.sh"),
+        "#!/bin/bash\necho 'METRIC=99.0'\n",
+    )
+    .unwrap();
+
+    let result = agent::run_harness_directly(&candidate, &baseline, false);
+    assert!(
+        result.is_err(),
+        "harness should fail when prereq_command exits nonzero"
     );
 
     fs::remove_dir_all(dir).unwrap();

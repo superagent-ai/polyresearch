@@ -304,6 +304,12 @@ fn run_shell_prereq(command: &str, work_dir: &Path, verbose: bool) -> Result<()>
             Some(command),
             Some(work_dir),
         );
+        let code = output
+            .status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".into());
+        return Err(eyre!("prereq_command failed with status {code}"));
     }
     Ok(())
 }
