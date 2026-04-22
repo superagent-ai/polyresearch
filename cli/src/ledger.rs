@@ -95,10 +95,6 @@ impl Ledger {
         Ok(())
     }
 
-    pub fn best_accepted_metric(&self, config: &ProtocolConfig) -> Option<f64> {
-        self.best_accepted_metric_excluding(config, &BTreeSet::new())
-    }
-
     pub fn best_accepted_metric_excluding(
         &self,
         config: &ProtocolConfig,

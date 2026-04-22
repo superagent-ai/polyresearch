@@ -2026,6 +2026,7 @@ async fn duties_submit_skipped_when_pr_merged() {
         summary: "Better prompt".to_string(),
         author: "alice".to_string(),
         created_at: now,
+        comment_id: 0,
     });
     thesis.pull_requests.push(PullRequestState {
         pr: PullRequest {
