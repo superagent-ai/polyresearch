@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Result, eyre};
 use serde::Serialize;
 
@@ -402,6 +403,23 @@ pub fn execute_decision(
         }
     };
     Ok(result)
+}
+
+pub fn count_prior_rejections(
+    thesis: &crate::state::ThesisState,
+    claim_start: Option<DateTime<Utc>>,
+) -> usize {
+    thesis
+        .pull_requests
+        .iter()
+        .filter(|pr| {
+            pr.pr.state == "CLOSED"
+                && pr.decision.as_ref().is_some_and(|d| {
+                    matches!(d.outcome, Outcome::NonImprovement | Outcome::Stale)
+                        && claim_start.is_none_or(|cs| d.created_at >= cs)
+                })
+        })
+        .count()
 }
 
 fn all_observations(reviews: &[ReviewRecord], observation: Observation) -> bool {

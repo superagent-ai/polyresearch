@@ -2077,6 +2077,382 @@ async fn duties_submit_skipped_when_pr_merged() {
 }
 
 #[tokio::test]
+async fn duties_submit_replaced_by_release_after_two_rejections() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("duties-two-rejections");
+    let now = chrono::Utc::now();
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let mut thesis = make_approved_thesis(1);
+    thesis.active_claims.push(ClaimRecord {
+        node: "test-node".to_string(),
+        created_at: now - chrono::Duration::hours(3),
+        expired: false,
+    });
+    thesis.attempts.push(AttemptRecord {
+        thesis: 1,
+        node: "test-node".to_string(),
+        branch: "thesis/1-test-attempt-1".to_string(),
+        metric: 0.95,
+        baseline_metric: Some(0.90),
+        observation: Observation::Improved,
+        summary: "Better prompt".to_string(),
+        author: "alice".to_string(),
+        created_at: now - chrono::Duration::hours(2),
+        comment_id: 0,
+    });
+    for i in 0..2 {
+        thesis.pull_requests.push(PullRequestState {
+            pr: PullRequest {
+                number: 50 + i,
+                title: format!("Rejected candidate {}", i + 1),
+                body: None,
+                state: "CLOSED".to_string(),
+                head_ref_name: "thesis/1-test-attempt-1".to_string(),
+                head_ref_oid: Some("sha".to_string()),
+                base_ref_name: Some("main".to_string()),
+                created_at: now - chrono::Duration::hours(1) + chrono::Duration::minutes(i as i64),
+                closed_at: Some(now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64)),
+                merged_at: None,
+                author: Some(Author { login: "alice".to_string() }),
+                url: None,
+                mergeable: None,
+            },
+            thesis_number: Some(1),
+            policy_pass: true,
+            maintainer_approved: true,
+            maintainer_rejected: false,
+            review_claims: vec![],
+            reviews: vec![],
+            decision: Some(DecisionRecord {
+                outcome: Outcome::NonImprovement,
+                candidate_sha: "sha".to_string(),
+                confirmations: 0,
+                created_at: now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64),
+            }),
+            findings: vec![],
+        });
+    }
+
+    let repo_state = make_repo_state(vec![thesis], 0, 1, None);
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
+
+    assert!(
+        !report.blocking.iter().any(|d| d.category == "submit"),
+        "submit duty must not appear after 2 rejections; got: {:?}",
+        report.blocking
+    );
+    assert!(
+        report.blocking.iter().any(|d| d.category == "release"),
+        "release duty must appear after 2 rejections; got: {:?}",
+        report.blocking
+    );
+}
+
+#[tokio::test]
+async fn duties_submit_present_after_single_rejection() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("duties-single-rejection");
+    let now = chrono::Utc::now();
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let mut thesis = make_approved_thesis(1);
+    thesis.active_claims.push(ClaimRecord {
+        node: "test-node".to_string(),
+        created_at: now - chrono::Duration::hours(3),
+        expired: false,
+    });
+    thesis.attempts.push(AttemptRecord {
+        thesis: 1,
+        node: "test-node".to_string(),
+        branch: "thesis/1-test-attempt-1".to_string(),
+        metric: 0.95,
+        baseline_metric: Some(0.90),
+        observation: Observation::Improved,
+        summary: "Better prompt".to_string(),
+        author: "alice".to_string(),
+        created_at: now - chrono::Duration::hours(2),
+        comment_id: 0,
+    });
+    thesis.pull_requests.push(PullRequestState {
+        pr: PullRequest {
+            number: 50,
+            title: "Rejected candidate".to_string(),
+            body: None,
+            state: "CLOSED".to_string(),
+            head_ref_name: "thesis/1-test-attempt-1".to_string(),
+            head_ref_oid: Some("sha".to_string()),
+            base_ref_name: Some("main".to_string()),
+            created_at: now - chrono::Duration::hours(1),
+            closed_at: Some(now - chrono::Duration::minutes(30)),
+            merged_at: None,
+            author: Some(Author { login: "alice".to_string() }),
+            url: None,
+            mergeable: None,
+        },
+        thesis_number: Some(1),
+        policy_pass: true,
+        maintainer_approved: true,
+        maintainer_rejected: false,
+        review_claims: vec![],
+        reviews: vec![],
+        decision: Some(DecisionRecord {
+            outcome: Outcome::NonImprovement,
+            candidate_sha: "sha".to_string(),
+            confirmations: 0,
+            created_at: now - chrono::Duration::minutes(30),
+        }),
+        findings: vec![],
+    });
+
+    let repo_state = make_repo_state(vec![thesis], 0, 1, None);
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
+
+    assert!(
+        report.blocking.iter().any(|d| d.category == "submit"),
+        "submit duty must still appear after only 1 rejection; got: {:?}",
+        report.blocking
+    );
+    assert!(
+        !report.blocking.iter().any(|d| d.category == "release"),
+        "release duty must not appear after only 1 rejection; got: {:?}",
+        report.blocking
+    );
+}
+
+#[tokio::test]
+async fn duties_submit_replaced_by_release_after_stale_decisions() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("duties-stale-rejections");
+    let now = chrono::Utc::now();
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let mut thesis = make_approved_thesis(1);
+    thesis.active_claims.push(ClaimRecord {
+        node: "test-node".to_string(),
+        created_at: now - chrono::Duration::hours(3),
+        expired: false,
+    });
+    thesis.attempts.push(AttemptRecord {
+        thesis: 1,
+        node: "test-node".to_string(),
+        branch: "thesis/1-test-attempt-1".to_string(),
+        metric: 0.95,
+        baseline_metric: Some(0.90),
+        observation: Observation::Improved,
+        summary: "Better prompt".to_string(),
+        author: "alice".to_string(),
+        created_at: now - chrono::Duration::hours(2),
+        comment_id: 0,
+    });
+    for i in 0..2 {
+        thesis.pull_requests.push(PullRequestState {
+            pr: PullRequest {
+                number: 60 + i,
+                title: format!("Stale candidate {}", i + 1),
+                body: None,
+                state: "CLOSED".to_string(),
+                head_ref_name: "thesis/1-test-attempt-1".to_string(),
+                head_ref_oid: Some("sha".to_string()),
+                base_ref_name: Some("main".to_string()),
+                created_at: now - chrono::Duration::hours(1) + chrono::Duration::minutes(i as i64),
+                closed_at: Some(now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64)),
+                merged_at: None,
+                author: Some(Author { login: "alice".to_string() }),
+                url: None,
+                mergeable: None,
+            },
+            thesis_number: Some(1),
+            policy_pass: true,
+            maintainer_approved: true,
+            maintainer_rejected: false,
+            review_claims: vec![],
+            reviews: vec![],
+            decision: Some(DecisionRecord {
+                outcome: Outcome::Stale,
+                candidate_sha: "sha".to_string(),
+                confirmations: 0,
+                created_at: now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64),
+            }),
+            findings: vec![],
+        });
+    }
+
+    let repo_state = make_repo_state(vec![thesis], 0, 1, None);
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
+
+    assert!(
+        !report.blocking.iter().any(|d| d.category == "submit"),
+        "submit duty must not appear after 2 stale decisions; got: {:?}",
+        report.blocking
+    );
+    assert!(
+        report.blocking.iter().any(|d| d.category == "release"),
+        "release duty must appear after 2 stale decisions; got: {:?}",
+        report.blocking
+    );
+}
+
+#[tokio::test]
+async fn duties_submit_present_on_happy_path() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("duties-happy-submit");
+    let now = chrono::Utc::now();
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let mut thesis = make_approved_thesis(1);
+    thesis.active_claims.push(ClaimRecord {
+        node: "test-node".to_string(),
+        created_at: now - chrono::Duration::hours(2),
+        expired: false,
+    });
+    thesis.attempts.push(AttemptRecord {
+        thesis: 1,
+        node: "test-node".to_string(),
+        branch: "thesis/1-test-attempt-1".to_string(),
+        metric: 0.95,
+        baseline_metric: Some(0.90),
+        observation: Observation::Improved,
+        summary: "Better prompt".to_string(),
+        author: "alice".to_string(),
+        created_at: now,
+        comment_id: 0,
+    });
+
+    let repo_state = make_repo_state(vec![thesis], 0, 1, None);
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
+
+    assert!(
+        report.blocking.iter().any(|d| d.category == "submit"),
+        "submit duty must appear on happy path with improved attempt and no PRs; got: {:?}",
+        report.blocking
+    );
+    assert!(
+        !report.blocking.iter().any(|d| d.category == "release"),
+        "release duty must not appear on happy path; got: {:?}",
+        report.blocking
+    );
+}
+
+#[tokio::test]
+async fn duties_submit_present_when_prior_rejections_predate_claim() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("duties-old-rejections");
+    let now = chrono::Utc::now();
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let mut thesis = make_approved_thesis(1);
+    thesis.active_claims.push(ClaimRecord {
+        node: "test-node".to_string(),
+        created_at: now - chrono::Duration::hours(1),
+        expired: false,
+    });
+    thesis.attempts.push(AttemptRecord {
+        thesis: 1,
+        node: "test-node".to_string(),
+        branch: "thesis/1-test-attempt-1".to_string(),
+        metric: 0.95,
+        baseline_metric: Some(0.90),
+        observation: Observation::Improved,
+        summary: "Fresh attempt".to_string(),
+        author: "alice".to_string(),
+        created_at: now - chrono::Duration::minutes(30),
+        comment_id: 0,
+    });
+    for i in 0..2 {
+        thesis.pull_requests.push(PullRequestState {
+            pr: PullRequest {
+                number: 70 + i,
+                title: format!("Old rejected PR {}", i + 1),
+                body: None,
+                state: "CLOSED".to_string(),
+                head_ref_name: "thesis/1-test-old".to_string(),
+                head_ref_oid: Some("old-sha".to_string()),
+                base_ref_name: Some("main".to_string()),
+                created_at: now - chrono::Duration::hours(8) + chrono::Duration::minutes(i as i64),
+                closed_at: Some(now - chrono::Duration::hours(5) + chrono::Duration::minutes(i as i64)),
+                merged_at: None,
+                author: Some(Author { login: "alice".to_string() }),
+                url: None,
+                mergeable: None,
+            },
+            thesis_number: Some(1),
+            policy_pass: true,
+            maintainer_approved: true,
+            maintainer_rejected: false,
+            review_claims: vec![],
+            reviews: vec![],
+            decision: Some(DecisionRecord {
+                outcome: Outcome::NonImprovement,
+                candidate_sha: "old-sha".to_string(),
+                confirmations: 0,
+                created_at: now - chrono::Duration::hours(5) + chrono::Duration::minutes(i as i64),
+            }),
+            findings: vec![],
+        });
+    }
+
+    let repo_state = make_repo_state(vec![thesis], 0, 1, None);
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
+
+    assert!(
+        report.blocking.iter().any(|d| d.category == "submit"),
+        "submit duty must appear when 2 rejections predate the current claim; got: {:?}",
+        report.blocking
+    );
+    assert!(
+        !report.blocking.iter().any(|d| d.category == "release"),
+        "release duty must not appear when rejections are from a prior claim period; got: {:?}",
+        report.blocking
+    );
+}
+
+#[tokio::test]
 async fn duties_contribute_proceeds_despite_pending_lead_duties() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("duties-contribute-unblocked");
