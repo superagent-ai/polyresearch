@@ -7,7 +7,7 @@ use color_eyre::eyre::{Context, Result, eyre};
 use crate::cli::BootstrapArgs;
 use crate::commands::{self, AppContext};
 use crate::config::NodeConfig;
-use crate::github::RepoRef;
+use crate::github::{GitHubClient, RepoRef};
 
 pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
     let (repo_root, login) = scaffold(ctx, args)?;
@@ -183,6 +183,15 @@ fn fork_and_clone(upstream: &RepoRef, fork_owner: &str, repo_root: &Path) -> Res
         &["remote", "add", "upstream", &upstream_url],
     )
     .ok();
+
+    let fork_repo = RepoRef {
+        owner: fork_owner.to_string(),
+        name: upstream.name.clone(),
+    };
+    eprintln!("Enabling GitHub Issues on {}...", fork_repo.slug());
+    if let Err(e) = GitHubClient::new(fork_repo).enable_issues() {
+        eprintln!("Warning: could not enable Issues: {e}");
+    }
 
     Ok(())
 }

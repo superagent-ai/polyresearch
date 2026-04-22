@@ -123,6 +123,10 @@ impl GitHubApi for MockGitHubClient {
         Ok(true)
     }
 
+    fn enable_issues(&self) -> Result<()> {
+        Ok(())
+    }
+
     fn list_thesis_issues(&self, _state: IssueListState) -> Result<Vec<Issue>> {
         Ok(self.issues.clone())
     }
