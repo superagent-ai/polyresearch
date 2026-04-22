@@ -321,6 +321,12 @@ impl ThesisState {
             ThesisPhase::Submitted
         };
 
+        let active_claims = if matches!(phase, ThesisPhase::Resolved { .. }) {
+            vec![]
+        } else {
+            active_claims
+        };
+
         let best_attempt_metric = attempts.iter().fold(None, |current, attempt| {
             Some(select_metric(
                 current,
@@ -698,6 +704,151 @@ mod tests {
         };
 
         assert_eq!(thesis.maintainer_summary(false), "PR rejected");
+    }
+
+    #[test]
+    fn resolved_thesis_clears_active_claims() {
+        let fixture: IssueFixture = serde_json::from_str(include_str!(
+            "../tests/fixtures/claimed_no_attempts_issue.json"
+        ))
+        .unwrap();
+        let config = test_config(&fixture.lead_github_login);
+
+        let claimed =
+            ThesisState::derive(fixture.issue.clone(), fixture.comments.clone(), &[], &config)
+                .unwrap();
+        assert!(matches!(claimed.phase, ThesisPhase::Claimed));
+        assert_eq!(claimed.active_claims.len(), 1);
+
+        let pr_with_decision = PullRequestState {
+            pr: PullRequest {
+                number: 50,
+                title: "Candidate for thesis #20".to_string(),
+                body: None,
+                state: "MERGED".to_string(),
+                head_ref_name: "thesis/20-claimed-attempt-1".to_string(),
+                head_ref_oid: Some("deadbeef".to_string()),
+                base_ref_name: Some("main".to_string()),
+                created_at: chrono::Utc::now(),
+                closed_at: None,
+                merged_at: Some(chrono::Utc::now()),
+                author: None,
+                url: None,
+                mergeable: None,
+            },
+            thesis_number: Some(20),
+            policy_pass: true,
+            maintainer_approved: false,
+            maintainer_rejected: false,
+            review_claims: vec![],
+            reviews: vec![],
+            decision: Some(DecisionRecord {
+                outcome: crate::comments::Outcome::Accepted,
+                candidate_sha: "deadbeef".to_string(),
+                confirmations: 0,
+                created_at: chrono::Utc::now(),
+            }),
+            findings: vec![],
+        };
+
+        let resolved = ThesisState::derive(
+            fixture.issue,
+            fixture.comments,
+            &[pr_with_decision],
+            &config,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            resolved.phase,
+            ThesisPhase::Resolved {
+                outcome: crate::comments::Outcome::Accepted
+            }
+        ));
+        assert!(
+            resolved.active_claims.is_empty(),
+            "active_claims should be empty on a resolved thesis, got: {:?}",
+            resolved.active_claims
+        );
+    }
+
+    #[test]
+    fn resolved_thesis_excluded_from_active_nodes() {
+        use crate::comments::ProtocolComment;
+
+        let fixture: IssueFixture = serde_json::from_str(include_str!(
+            "../tests/fixtures/claimed_no_attempts_issue.json"
+        ))
+        .unwrap();
+        let config = test_config(&fixture.lead_github_login);
+
+        let pr_with_decision = PullRequest {
+            number: 50,
+            title: "Candidate for thesis #20".to_string(),
+            body: None,
+            state: "MERGED".to_string(),
+            head_ref_name: "thesis/20-claimed-attempt-1".to_string(),
+            head_ref_oid: Some("deadbeef".to_string()),
+            base_ref_name: Some("main".to_string()),
+            created_at: chrono::Utc::now(),
+            closed_at: None,
+            merged_at: Some(chrono::Utc::now()),
+            author: None,
+            url: None,
+            mergeable: None,
+        };
+
+        let policy_pass = ProtocolComment::PolicyPass {
+            thesis: 20,
+            candidate_sha: "deadbeef".to_string(),
+        };
+        let decision_comment = ProtocolComment::Decision {
+            thesis: 20,
+            candidate_sha: "deadbeef".to_string(),
+            outcome: crate::comments::Outcome::Accepted,
+            confirmations: 0,
+        };
+        let now = chrono::Utc::now();
+        let pr_comments = vec![
+            IssueComment {
+                id: 9000,
+                body: policy_pass.render(),
+                user: crate::github::CommentUser {
+                    login: fixture.lead_github_login.clone(),
+                },
+                created_at: now - chrono::Duration::minutes(5),
+                updated_at: None,
+            },
+            IssueComment {
+                id: 9001,
+                body: decision_comment.render(),
+                user: crate::github::CommentUser {
+                    login: fixture.lead_github_login.clone(),
+                },
+                created_at: now,
+                updated_at: None,
+            },
+        ];
+
+        let mut issue_comments_map = std::collections::HashMap::new();
+        issue_comments_map.insert(fixture.issue.number, fixture.comments);
+        let mut pr_comments_map = std::collections::HashMap::new();
+        pr_comments_map.insert(50u64, pr_comments);
+
+        let state = RepositoryState::derive_from_fetched(
+            vec![fixture.issue],
+            vec![pr_with_decision],
+            &mut issue_comments_map,
+            &mut pr_comments_map,
+            &config,
+        )
+        .unwrap();
+
+        assert!(
+            state.active_nodes.is_empty(),
+            "active_nodes should not include nodes from resolved theses, got: {:?}",
+            state.active_nodes
+        );
     }
 
     fn exhausted_fixture() -> IssueFixture {
