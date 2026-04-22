@@ -27,13 +27,32 @@ Run `polyresearch duties`. If blocking duties exist, resolve each one:
 - **submit**: go to the thesis worktree, run `polyresearch submit <issue>`.
 - If submit fails because a PR already exists for the branch, check if the PR was closed. If closed as stale (merge conflicts), try rebasing the branch onto the default branch and resubmit. If the PR was decided as non_improvement, release the thesis instead: `polyresearch release <issue> --reason no_improvement`.
 
-### 2. Check pace
+### 2. Check pace and compute parallelism
 
-Run `polyresearch pace`. Read the hardware budget and API budget. Decide how many theses you can work in parallel based on the eval footprint in PREPARE.md. If the API budget is near the limit, wait before making more requests.
+Run `polyresearch pace --json` and parse the JSON output. The key fields are:
+
+- `budget.cores` — CPU cores allocated to you (already scaled by your capacity %)
+- `budget.memory_gb` — memory allocated to you
+- `hardware.available_memory_gb` — memory currently free on the machine
+
+Then read `eval_cores` and `eval_memory_gb` from PREPARE.md. These define the resource footprint of a single experiment run.
+
+Compute how many experiments you can run in parallel:
+
+```
+effective_memory = min(budget.memory_gb, hardware.available_memory_gb)
+by_cores  = floor(budget.cores / eval_cores)       # at least 1
+by_memory = floor(effective_memory / eval_memory_gb) # at least 1
+max_slots = min(by_cores, by_memory)
+```
+
+If `max_slots` is 0 or negative (machine is overloaded), wait 60 seconds and re-check pace before claiming work.
+
+Also check `rate_limit.is_low`. If true, wait for the reset window (`rate_limit.resets_at`) before making more API requests.
 
 ### 3. Find and claim work
 
-Run `polyresearch status` to see claimable theses. If theses are available, claim one (or several with `batch-claim` if parallelism allows).
+Run `polyresearch status` to see claimable theses. Claim up to `max_slots` theses (use `batch-claim --count N` when N > 1). Never claim more theses than your computed `max_slots` allows.
 
 If no work is available, sleep 60 seconds and restart the loop.
 
@@ -44,6 +63,8 @@ For each claimed thesis:
 2. Read `.polyresearch/thesis.md` for the thesis context and prior attempts.
 3. Run the experiment: implement the idea, run the evaluation per PREPARE.md, iterate if needed.
 4. Write `.polyresearch/result.json` with the result.
+
+Run experiments sequentially (one at a time) unless `max_slots` from step 2 is greater than 1. Benchmarks running concurrently compete for CPU, memory, and I/O, which corrupts measurements. If you have multiple claimed theses, re-run `polyresearch pace --json` between experiments to adapt to changing system load and recompute `max_slots` before starting the next one.
 
 ### 5. Record and act on the result
 

@@ -65,6 +65,7 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
         args.once,
         args.sleep_secs,
         args.max_parallel,
+        node_config.effective_capacity(),
     );
     let repo_root = local_ctx.repo_root.clone();
     let verbose = local_ctx.cli.verbose;

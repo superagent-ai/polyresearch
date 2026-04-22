@@ -384,6 +384,7 @@ pub fn contribute_workflow_prompt(
     once: bool,
     sleep_secs: u64,
     max_parallel: Option<usize>,
+    capacity: u8,
 ) -> String {
     let base = include_str!("../prompts/contribute-workflow.md");
     let mut prompt = base.to_string();
@@ -402,6 +403,9 @@ pub fn contribute_workflow_prompt(
             "\nDo not work on more than {max} thesis/theses in parallel.\n"
         ));
     }
+    prompt.push_str(&format!(
+        "\nYour capacity allocation is {capacity}% of this machine's hardware. Use `polyresearch pace --json` to see the resulting budget.\n"
+    ));
     prompt
 }
 
