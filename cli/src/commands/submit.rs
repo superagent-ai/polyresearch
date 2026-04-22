@@ -1,10 +1,15 @@
+use std::path::PathBuf;
+
 use color_eyre::eyre::{Result, eyre};
 use serde::Serialize;
 
 use crate::cli::IssueArgs;
 use crate::commands::guards::require_claimed_thesis;
-use crate::commands::{AppContext, current_branch, print_value, push_current_branch, read_node_id};
+use crate::commands::{
+    AppContext, current_branch, print_value, push_current_branch, read_node_id, run_git,
+};
 use crate::comments::Observation;
+use crate::config::ProgramSpec;
 use crate::state::RepositoryState;
 
 #[derive(Debug, Serialize)]
@@ -40,11 +45,24 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
         return Err(eyre!("branch `{branch}` already has an open PR"));
     }
 
+    let default_branch = ctx.config.resolve_default_branch(&ctx.repo_root)?;
+
+    let violations = check_editable_surface(&ctx.repo_root, &ctx.program, &default_branch)?;
+    if !violations.is_empty() {
+        if ctx.cli.dry_run {
+            eprintln!(
+                "Would strip {} file(s) outside the editable surface: {}",
+                violations.len(),
+                violations.join(", ")
+            );
+        } else {
+            strip_violating_files(&ctx.repo_root, &violations, &default_branch)?;
+        }
+    }
+
     if !ctx.cli.dry_run {
         push_current_branch(&ctx.repo_root)?;
     }
-
-    let default_branch = ctx.config.resolve_default_branch(&ctx.repo_root)?;
     let pr = if ctx.cli.dry_run {
         None
     } else {
@@ -85,4 +103,67 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
             )
         }
     })
+}
+
+pub fn check_editable_surface(
+    repo_root: &PathBuf,
+    program: &ProgramSpec,
+    default_branch: &str,
+) -> Result<Vec<String>> {
+    let merge_base = format!("origin/{default_branch}");
+    let diff_ref = format!("{merge_base}...HEAD");
+    let diff_output = run_git(repo_root, &["diff", "--name-only", &diff_ref])?;
+
+    if diff_output.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let violations: Vec<String> = diff_output
+        .lines()
+        .filter(|file| {
+            let editable = program.is_editable(file).unwrap_or(false);
+            let protected = program.is_protected(file);
+            !editable || protected
+        })
+        .map(|file| file.to_string())
+        .collect();
+
+    Ok(violations)
+}
+
+pub fn strip_violating_files(
+    repo_root: &PathBuf,
+    violations: &[String],
+    default_branch: &str,
+) -> Result<()> {
+    let base_ref = format!("origin/{default_branch}");
+    for file in violations {
+        let exists_on_base =
+            run_git(repo_root, &["cat-file", "-e", &format!("{base_ref}:{file}")]).is_ok();
+
+        if exists_on_base {
+            run_git(repo_root, &["checkout", &base_ref, "--", file])?;
+        } else {
+            run_git(repo_root, &["rm", "-f", file])?;
+        }
+    }
+
+    let has_staged = run_git(repo_root, &["diff", "--cached", "--quiet"]).is_err();
+    if has_staged {
+        run_git(
+            repo_root,
+            &[
+                "commit",
+                "-m",
+                "polyresearch: strip files outside editable surface",
+            ],
+        )?;
+    }
+
+    eprintln!(
+        "Stripped {} file(s) outside the editable surface: {}",
+        violations.len(),
+        violations.join(", ")
+    );
+    Ok(())
 }
