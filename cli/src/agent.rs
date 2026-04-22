@@ -442,6 +442,8 @@ pub fn spawn_workflow_agent(
     cmd.args(&parts[1..]);
     cmd.current_dir(work_dir);
     cmd.stdin(Stdio::piped());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
 
     eprintln!(
         "Spawning workflow agent in {}...",
@@ -449,11 +451,12 @@ pub fn spawn_workflow_agent(
     );
     let mut child = cmd.spawn().wrap_err("failed to spawn workflow agent")?;
 
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(prompt.as_bytes())
-            .wrap_err("failed to write prompt to agent stdin")?;
-    }
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| eyre!("failed to open stdin pipe for workflow agent"))?
+        .write_all(prompt.as_bytes())
+        .wrap_err("failed to write prompt to agent stdin")?;
 
     let output = child
         .wait_with_output()
