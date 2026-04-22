@@ -10,8 +10,7 @@ use std::sync::Arc;
 use crate::cli::PrArgs;
 use crate::commands::guards::{ensure_current_ledger, ensure_lead, require_decidable_pr};
 use crate::commands::{AppContext, print_value, run_git};
-use crate::commands::duties::MAX_SUBMIT_REJECTIONS;
-use crate::comments::{Observation, Outcome, ProtocolComment, ReleaseReason};
+use crate::comments::{Observation, Outcome, ProtocolComment};
 use crate::github::GitHubApi;
 use crate::ledger::Ledger;
 use crate::state::{RepositoryState, ReviewRecord, metric_beats};
@@ -86,34 +85,6 @@ pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
             confirmations,
         }
     };
-
-    if !ctx.cli.dry_run
-        && ctx.config.required_confirmations == 0
-        && matches!(
-            result.outcome,
-            Outcome::NonImprovement | Outcome::Stale
-        )
-    {
-        let claim_start = thesis.active_claims.first().map(|c| c.created_at);
-        let prior_rejections = count_prior_rejections(thesis, claim_start);
-        if prior_rejections + 1 >= MAX_SUBMIT_REJECTIONS
-            && let Some(claim) = thesis.active_claims.first()
-        {
-            let release = ProtocolComment::Release {
-                thesis: thesis.issue.number,
-                node: claim.node.clone(),
-                reason: ReleaseReason::NoImprovement,
-            };
-            ctx.github
-                .post_issue_comment(thesis.issue.number, &release.render())?;
-            crate::commands::guards::close_if_exhausted(
-                ctx,
-                thesis.issue.number,
-                ReleaseReason::NoImprovement,
-            )
-            .await?;
-        }
-    }
 
     let output = DecideOutput {
         pr: args.pr,
