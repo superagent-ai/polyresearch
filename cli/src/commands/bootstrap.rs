@@ -402,36 +402,7 @@ pub fn commit_and_push_setup_files(repo_root: &Path) -> Result<()> {
 }
 
 fn detect_default_branch(repo_root: &Path) -> String {
-    let output = Command::new("git")
-        .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
-        .current_dir(repo_root)
-        .output()
-        .ok();
-    if let Some(output) = output {
-        if output.status.success() {
-            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let branch = branch.strip_prefix("origin/").unwrap_or(&branch).to_string();
-            if !branch.is_empty() {
-                return branch;
-            }
-        }
-    }
-
-    let output = Command::new("git")
-        .args(["branch", "--show-current"])
-        .current_dir(repo_root)
-        .output()
-        .ok();
-    if let Some(output) = output {
-        if output.status.success() {
-            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !branch.is_empty() {
-                return branch;
-            }
-        }
-    }
-
-    "main".to_string()
+    crate::config::detect_default_branch_from_git(repo_root)
 }
 
 pub fn normalize_program_md(repo_root: &Path) -> Result<()> {
