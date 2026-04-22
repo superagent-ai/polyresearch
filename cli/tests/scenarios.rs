@@ -790,17 +790,17 @@ async fn scenario_lead_accept_pr() {
         }),
     );
 
-    let result = commands::lead::run(
-        &ctx,
-        &LeadArgs {
-            once: true,
-            sleep_secs: 0,
-            overrides: NodeOverrides::default(),
-        },
+    let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        &config,
     )
-    .await;
+    .await
+    .unwrap();
 
-    assert!(result.is_ok(), "lead should succeed: {result:?}");
+    let result = commands::lead::decide_ready_prs(&ctx, &config, &repo_state);
+
+    assert!(result.is_ok(), "decide_ready_prs should succeed: {result:?}");
     assert!(github.is_pr_merged(50), "PR #50 should be merged");
     assert!(
         github.is_issue_closed(40),
@@ -918,17 +918,17 @@ async fn scenario_lead_reject_non_improvement() {
         }),
     );
 
-    let result = commands::lead::run(
-        &ctx,
-        &LeadArgs {
-            once: true,
-            sleep_secs: 0,
-            overrides: NodeOverrides::default(),
-        },
+    let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        &config,
     )
-    .await;
+    .await
+    .unwrap();
 
-    assert!(result.is_ok(), "lead should succeed: {result:?}");
+    let result = commands::lead::decide_ready_prs(&ctx, &config, &repo_state);
+
+    assert!(result.is_ok(), "decide_ready_prs should succeed: {result:?}");
     assert!(github.is_pr_closed(51), "PR #51 should be closed");
     assert!(
         !github.is_issue_closed(41),
@@ -1293,17 +1293,17 @@ async fn scenario_lead_closes_conflicting_pr_as_stale() {
         }),
     );
 
-    let result = commands::lead::run(
-        &ctx,
-        &LeadArgs {
-            once: true,
-            sleep_secs: 0,
-            overrides: NodeOverrides::default(),
-        },
+    let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        &config,
     )
-    .await;
+    .await
+    .unwrap();
 
-    assert!(result.is_ok(), "lead should succeed: {result:?}");
+    let result = commands::lead::decide_ready_prs(&ctx, &config, &repo_state);
+
+    assert!(result.is_ok(), "decide_ready_prs should succeed: {result:?}");
     assert!(
         !github.is_pr_merged(55),
         "conflicting PR #55 should NOT be merged"
