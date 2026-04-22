@@ -319,11 +319,7 @@ fn replace_goal_section(template: &str, goal: &str) -> String {
 
 fn initialize_node(repo_root: &Path, overrides: &crate::cli::NodeOverrides) -> Result<()> {
     commands::ensure_node_config(repo_root)?;
-    if overrides.capacity.is_some()
-        || overrides.api_budget.is_some()
-        || overrides.request_delay.is_some()
-        || overrides.agent_command.is_some()
-    {
+    if overrides.has_any() {
         let config = NodeConfig::load(repo_root)?;
         config.with_overrides(overrides).save(repo_root)?;
     }
@@ -343,6 +339,10 @@ fn spawn_setup_agent(repo_root: &Path, overrides: &crate::cli::NodeOverrides, ve
                 .clone()
                 .unwrap_or_else(|| "claude -p --dangerously-skip-permissions".to_string())
         });
+    let timeout_secs = node_config
+        .as_ref()
+        .map(|c| c.agent.timeout_secs)
+        .unwrap_or(crate::config::DEFAULT_AGENT_TIMEOUT_SECS);
 
     let base_prompt = include_str!("../../prompts/bootstrap-setup.md");
     let prompt = format!(
@@ -351,7 +351,7 @@ fn spawn_setup_agent(repo_root: &Path, overrides: &crate::cli::NodeOverrides, ve
     );
 
     eprintln!("Spawning agent for initial setup...");
-    let timeout = std::time::Duration::from_secs(crate::config::DEFAULT_AGENT_TIMEOUT_SECS);
+    let timeout = std::time::Duration::from_secs(timeout_secs);
     let _ = crate::agent::spawn_experiment(&agent_command, repo_root, &prompt, verbose, timeout);
     Ok(())
 }
