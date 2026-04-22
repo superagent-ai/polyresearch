@@ -15,6 +15,7 @@ use polyresearch::comments::ProtocolComment;
 use polyresearch::config::{
     DEFAULT_API_BUDGET, ProgramSpec, ProtocolConfig,
 };
+use polyresearch::state::RepositoryState;
 use polyresearch::github::{
     Author, CommentUser, GitHubApi, Issue, IssueComment, Label, PullRequest, RepoRef,
 };
@@ -1886,4 +1887,341 @@ async fn scenario_contribute_lower_is_better() {
     .await;
 
     assert!(result.is_ok(), "contribute should succeed with lower_is_better: {result:?}");
+}
+
+// ---------------------------------------------------------------------------
+// Lead/contribute separation (issue #94)
+// ---------------------------------------------------------------------------
+
+fn seed_decidable_pr(
+    github: &ScenarioGitHub,
+    thesis_num: u64,
+    pr_num: u64,
+    lead: &str,
+) {
+    let now = chrono::Utc::now();
+    let (issue, mut issue_comments) = make_approved_thesis(thesis_num, "Decidable thesis", lead);
+
+    issue_comments.push(IssueComment {
+        id: thesis_num * 100 + 1,
+        body: ProtocolComment::Claim {
+            thesis: thesis_num,
+            node: "worker-a".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(30),
+        updated_at: None,
+    });
+
+    issue_comments.push(IssueComment {
+        id: thesis_num * 100 + 2,
+        body: ProtocolComment::Attempt {
+            thesis: thesis_num,
+            branch: format!("thesis/{thesis_num}-decidable-thesis"),
+            metric: 0.95,
+            baseline_metric: Some(0.90),
+            observation: polyresearch::comments::Observation::Improved,
+            summary: "Improvement".to_string(),
+            annotations: None,
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(20),
+        updated_at: None,
+    });
+
+    let pr = PullRequest {
+        number: pr_num,
+        title: format!("Thesis #{thesis_num}: Decidable thesis"),
+        body: Some(format!("References #{thesis_num}")),
+        state: "OPEN".to_string(),
+        head_ref_name: format!("thesis/{thesis_num}-decidable-thesis"),
+        head_ref_oid: Some("candidate-sha".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: now - chrono::Duration::minutes(15),
+        closed_at: None,
+        merged_at: None,
+        author: Some(Author {
+            login: "contributor".to_string(),
+        }),
+        url: Some(format!("https://github.com/test/repo/pull/{pr_num}")),
+        mergeable: Some("MERGEABLE".to_string()),
+    };
+
+    let pr_comments = vec![IssueComment {
+        id: pr_num * 100,
+        body: ProtocolComment::PolicyPass {
+            thesis: thesis_num,
+            candidate_sha: "candidate-sha".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: lead.to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(10),
+        updated_at: None,
+    }];
+
+    github.seed_issue(issue);
+    github.seed_issue_comments(thesis_num, issue_comments);
+    github.seed_pull_request(pr);
+    github.seed_pr_comments(pr_num, pr_comments);
+    github.seed_pr_files(pr_num, vec![polyresearch::github::PullRequestFile {
+        filename: "src/decidable.js".to_string(),
+    }]);
+}
+
+#[tokio::test]
+async fn scenario_contribute_does_not_decide() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("contrib-no-decide");
+    repo.init_git();
+
+    let agent_cmd = mock_agent_command("no_improvement");
+    repo.write_full_setup("lead", "test-node-nd", &agent_cmd);
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    seed_decidable_pr(&github, 60, 160, "lead");
+
+    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-nd"); }
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    // Contribute with --once will error on the blocking "decide" duty since
+    // it no longer runs lead operations. That error is expected.
+    let _result = commands::contribute::run(
+        &ctx,
+        &ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    let pr_bodies = github.comment_bodies_on(160);
+    let has_decision = pr_bodies
+        .iter()
+        .any(|b| b.contains("polyresearch:decision"));
+    assert!(
+        !has_decision,
+        "contribute must NOT post decision comments, but found: {pr_bodies:?}"
+    );
+    assert!(
+        !github.is_pr_merged(160),
+        "contribute must NOT merge PRs"
+    );
+
+    let config = ProtocolConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        &config,
+    )
+    .await
+    .unwrap();
+    commands::lead::decide_ready_prs(&ctx, &config, &repo_state).unwrap();
+
+    let pr_bodies = github.comment_bodies_on(160);
+    let has_decision = pr_bodies
+        .iter()
+        .any(|b| b.contains("polyresearch:decision") && b.contains("accepted"));
+    assert!(has_decision, "lead::decide_ready_prs should post accepted decision");
+    assert!(github.is_pr_merged(160), "lead::decide_ready_prs should merge the PR");
+}
+
+#[tokio::test]
+async fn scenario_contribute_does_not_sync() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("contrib-no-sync");
+    repo.init_git();
+
+    let agent_cmd = mock_agent_command("no_improvement");
+    repo.write_full_setup("lead", "test-node-ns", &agent_cmd);
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    seed_decidable_pr(&github, 61, 161, "lead");
+
+    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-ns"); }
+
+    let header = fs::read_to_string(repo.path.join("results.tsv")).unwrap();
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    // May error on blocking duties -- that's fine for this test.
+    let _result = commands::contribute::run(
+        &ctx,
+        &ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    let after = fs::read_to_string(repo.path.join("results.tsv")).unwrap();
+    assert_eq!(
+        header, after,
+        "contribute must NOT modify results.tsv"
+    );
+}
+
+#[tokio::test]
+async fn scenario_contribute_does_not_merge() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("contrib-no-merge");
+    repo.init_git();
+
+    let agent_cmd = mock_agent_command("no_improvement");
+    repo.write_full_setup("lead", "test-node-nm", &agent_cmd);
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    seed_decidable_pr(&github, 62, 162, "lead");
+
+    unsafe { env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-nm"); }
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    // May error on blocking duties -- that's fine for this test.
+    let _result = commands::contribute::run(
+        &ctx,
+        &ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(
+        !github.is_pr_merged(162),
+        "contribute must NOT merge PRs"
+    );
+
+    let config = ProtocolConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        &config,
+    )
+    .await
+    .unwrap();
+    commands::lead::decide_ready_prs(&ctx, &config, &repo_state).unwrap();
+
+    assert!(
+        github.is_pr_merged(162),
+        "lead::decide_ready_prs should merge the PR"
+    );
+}
+
+#[tokio::test]
+async fn scenario_decide_idempotent_no_duplicate_comment() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("decide-idempotent");
+    repo.init_git();
+    repo.write_full_setup("lead", "lead-node", "echo noop");
+    repo.commit_all("setup");
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    seed_decidable_pr(&github, 63, 163, "lead");
+
+    let config = ProtocolConfig::load(&repo.path).unwrap();
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Lead(LeadArgs {
+            once: true,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let repo_state = RepositoryState::derive(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        &config,
+    )
+    .await
+    .unwrap();
+    commands::lead::decide_ready_prs(&ctx, &config, &repo_state).unwrap();
+
+    assert!(github.is_pr_merged(163), "PR should be merged after first decide");
+
+    let repo_state = RepositoryState::derive(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        &config,
+    )
+    .await
+    .unwrap();
+    // Second call should not post another decision.
+    commands::lead::decide_ready_prs(&ctx, &config, &repo_state).unwrap();
+
+    // The mock stores posted comments in both issue_comments and pr_comments
+    // for PR numbers, so deduplicate by body text before counting.
+    let all_bodies = github.comment_bodies_on(163);
+    let unique_decisions: std::collections::HashSet<&str> = all_bodies
+        .iter()
+        .filter(|b| b.contains("polyresearch:decision"))
+        .map(|b| b.as_str())
+        .collect();
+    assert_eq!(
+        unique_decisions.len(), 1,
+        "should have exactly one unique decision comment on PR #163, found {}: {:?}",
+        unique_decisions.len(), unique_decisions
+    );
 }
