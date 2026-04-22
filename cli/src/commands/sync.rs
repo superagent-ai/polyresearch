@@ -2,7 +2,7 @@ use color_eyre::eyre::{Result, eyre};
 use serde::Serialize;
 
 use crate::commands::guards::ensure_lead;
-use crate::commands::{AppContext, commit_file, current_branch, print_value};
+use crate::commands::{AppContext, commit_file, current_branch, print_value, run_git};
 use crate::ledger::Ledger;
 use crate::state::RepositoryState;
 
@@ -25,12 +25,17 @@ pub async fn run(ctx: &AppContext) -> Result<()> {
                 "`polyresearch sync` must run from the `{default_branch}` branch"
             ));
         }
+        run_git(
+            &ctx.repo_root,
+            &["pull", "origin", &default_branch, "--rebase"],
+        )?;
         ledger.append_rows(&missing_rows)?;
         commit_file(
             &ctx.repo_root,
             "results.tsv",
             "Update results.tsv via polyresearch sync.",
         )?;
+        run_git(&ctx.repo_root, &["push", "origin", &default_branch])?;
     }
 
     let output = SyncOutput {
