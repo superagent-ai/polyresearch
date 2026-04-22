@@ -6256,9 +6256,6 @@ fn include_fixture(name: &str) -> &'static str {
         "closed_improved_thesis_issue.json" => {
             include_str!("fixtures/closed_improved_thesis_issue.json")
         }
-        "poisoned_baseline_issue.json" => {
-            include_str!("fixtures/poisoned_baseline_issue.json")
-        }
         other => panic!("unknown fixture: {other}"),
     }
 }
