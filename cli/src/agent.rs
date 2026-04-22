@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::thread;
@@ -440,13 +441,23 @@ pub fn spawn_workflow_agent(
     let mut cmd = Command::new(&parts[0]);
     cmd.args(&parts[1..]);
     cmd.current_dir(work_dir);
-    cmd.arg(prompt);
+    cmd.stdin(Stdio::piped());
 
     eprintln!(
         "Spawning workflow agent in {}...",
         work_dir.display(),
     );
-    let output = cmd.output().wrap_err("failed to spawn workflow agent")?;
+    let mut child = cmd.spawn().wrap_err("failed to spawn workflow agent")?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(prompt.as_bytes())
+            .wrap_err("failed to write prompt to agent stdin")?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .wrap_err("failed to wait for workflow agent")?;
 
     if !output.status.success() {
         log_subprocess_failure(
