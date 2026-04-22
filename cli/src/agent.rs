@@ -251,6 +251,13 @@ pub fn run_harness_directly(
         return Ok(None);
     };
 
+    if let Some(prereq) = parse_prepare_key(worktree_path, "prereq_command") {
+        eprintln!("Running prereq_command in candidate tree...");
+        run_shell_prereq(&prereq, worktree_path, verbose)?;
+        eprintln!("Running prereq_command in baseline tree...");
+        run_shell_prereq(&prereq, baseline_path, verbose)?;
+    }
+
     let candidate_metric = run_harness_in(&harness, worktree_path, verbose)?;
     let baseline_metric = run_harness_in(&harness, baseline_path, verbose)?;
 
@@ -262,6 +269,49 @@ pub fn run_harness_directly(
         })),
         _ => Ok(None),
     }
+}
+
+pub fn parse_prepare_key(worktree_path: &Path, key: &str) -> Option<String> {
+    let path = worktree_path.join("PREPARE.md");
+    let contents = fs::read_to_string(path).ok()?;
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if let Some((k, v)) = trimmed.split_once(':') {
+            if k.trim() == key {
+                let val = v.trim();
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn run_shell_prereq(command: &str, work_dir: &Path, verbose: bool) -> Result<()> {
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(command)
+        .current_dir(work_dir)
+        .output()
+        .wrap_err("failed to run prereq_command")?;
+
+    if !output.status.success() {
+        log_subprocess_failure(
+            "prereq_command",
+            &output,
+            verbose,
+            Some(command),
+            Some(work_dir),
+        );
+        let code = output
+            .status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".into());
+        return Err(eyre!("prereq_command failed with status {code}"));
+    }
+    Ok(())
 }
 
 pub fn spawn_thesis_generation(
@@ -591,5 +641,67 @@ mod tests {
         let json = r#"{"metric": 0.95, "observation": "improved", "summary": "test"}"#;
         let result: ExperimentResult = serde_json::from_str(json).unwrap();
         assert!(result.baseline.is_none());
+    }
+
+    #[test]
+    fn parse_prepare_key_finds_prereq() {
+        let dir = std::env::temp_dir().join(format!("prepare-key-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("PREPARE.md"),
+            "# Evaluation\n\neval_cores: 2\nprereq_command: npm run build\neval_memory_gb: 4.0\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            parse_prepare_key(&dir, "prereq_command"),
+            Some("npm run build".to_string())
+        );
+        assert_eq!(
+            parse_prepare_key(&dir, "eval_cores"),
+            Some("2".to_string())
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn parse_prepare_key_returns_none_for_missing_key() {
+        let dir = std::env::temp_dir().join(format!("prepare-missing-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("PREPARE.md"),
+            "# Evaluation\n\neval_cores: 1\n",
+        )
+        .unwrap();
+
+        assert_eq!(parse_prepare_key(&dir, "prereq_command"), None);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn parse_prepare_key_returns_none_for_empty_value() {
+        let dir = std::env::temp_dir().join(format!("prepare-empty-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("PREPARE.md"),
+            "# Evaluation\n\nprereq_command:\n",
+        )
+        .unwrap();
+
+        assert_eq!(parse_prepare_key(&dir, "prereq_command"), None);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn parse_prepare_key_returns_none_without_file() {
+        let dir = std::env::temp_dir().join(format!("prepare-nofile-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+
+        assert_eq!(parse_prepare_key(&dir, "prereq_command"), None);
+
+        fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -467,30 +467,17 @@ fn ensure_node_config(repo_root: &Path) -> Result<()> {
 }
 
 fn parse_eval_footprint_cores(repo_root: &Path) -> usize {
-    parse_prepare_key(repo_root, "eval_cores")
+    crate::agent::parse_prepare_key(repo_root, "eval_cores")
         .and_then(|v| v.parse().ok())
         .unwrap_or(1)
 }
 
 fn parse_eval_footprint_memory(repo_root: &Path) -> f64 {
-    parse_prepare_key(repo_root, "eval_memory_gb")
+    crate::agent::parse_prepare_key(repo_root, "eval_memory_gb")
         .and_then(|v| v.parse().ok())
         .unwrap_or(1.0)
 }
 
-fn parse_prepare_key(repo_root: &Path, key: &str) -> Option<String> {
-    let path = repo_root.join("PREPARE.md");
-    let contents = std::fs::read_to_string(path).ok()?;
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        if let Some((k, v)) = trimmed.split_once(':')
-            && k.trim() == key
-        {
-            return Some(v.trim().to_string());
-        }
-    }
-    None
-}
 
 #[cfg(test)]
 mod tests {
@@ -520,6 +507,7 @@ mod tests {
             attempts: vec![],
             pull_requests: vec![],
             best_attempt_metric: None,
+            invalidated_attempt_branches: std::collections::BTreeSet::new(),
             findings: vec![],
         }
     }
@@ -575,7 +563,6 @@ mod tests {
         let base = 60u64;
         let last_crash = Utc::now() - chrono::Duration::seconds(200);
 
-        // 1 crash: cooldown = 60s. 200s after crash -> expired.
         let thesis_1 = make_thesis_with_releases(vec![infra_release("n", last_crash)]);
         let now = last_crash + chrono::Duration::seconds(200);
         assert!(
@@ -583,7 +570,6 @@ mod tests {
             "1 crash, 200s later: cooldown (60s) should have expired"
         );
 
-        // 2 crashes: cooldown = 120s. 100s after last crash -> still active.
         let thesis_2 = make_thesis_with_releases(vec![
             infra_release("n", last_crash - chrono::Duration::seconds(300)),
             infra_release("n", last_crash),
@@ -594,7 +580,6 @@ mod tests {
             "2 crashes, 100s later: cooldown (120s) should still be active"
         );
 
-        // 3 crashes: cooldown = 240s. 200s after last crash -> still active.
         let thesis_3 = make_thesis_with_releases(vec![
             infra_release("n", last_crash - chrono::Duration::seconds(600)),
             infra_release("n", last_crash - chrono::Duration::seconds(300)),
@@ -633,15 +618,12 @@ mod tests {
         }
         let thesis = make_thesis_with_releases(releases);
 
-        // 20 crashes with base=60: uncapped would be 60 * 2^19 = huge.
-        // Capped at MAX_CRASH_COOLDOWN_SECS (3600).
         let after_max = now + chrono::Duration::seconds(MAX_CRASH_COOLDOWN_SECS as i64 + 1);
         assert!(
             !is_crash_cooldown(&thesis, "node-a", 60, after_max),
             "cooldown should expire after MAX_CRASH_COOLDOWN_SECS even with 20 crashes"
         );
 
-        // Should still be in cooldown just before the cap expires.
         let before_max = now + chrono::Duration::seconds(MAX_CRASH_COOLDOWN_SECS as i64 - 60);
         assert!(
             is_crash_cooldown(&thesis, "node-a", 60, before_max),
