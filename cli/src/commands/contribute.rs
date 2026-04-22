@@ -178,7 +178,7 @@ async fn run_iteration(
         repo_state = RepositoryState::derive(&ctx.github, config).await?;
     }
 
-    let duty_report = crate::commands::duties::check(ctx, &repo_state)?;
+    let duty_report = crate::commands::duties::check(ctx, &repo_state, crate::commands::duties::DutyContext::Contribute)?;
     if !duty_report.blocking.is_empty() {
         let items: Vec<String> = duty_report
             .blocking

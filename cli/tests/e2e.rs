@@ -34,6 +34,7 @@ use serde::Deserialize;
 
 #[allow(unused_imports)]
 use polyresearch::commands::duties;
+use polyresearch::commands::duties::DutyContext;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1340,7 +1341,7 @@ async fn duties_reports_advisory_when_claim_has_no_attempts() {
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
         .await
         .unwrap();
-    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
     assert!(
         report.advisory.iter().any(|d| d.category == "attempt"),
         "should report a claim-without-attempt advisory"
@@ -1371,7 +1372,7 @@ async fn duties_reports_blocking_when_improved_but_not_submitted() {
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
         .await
         .unwrap();
-    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
     assert!(!report.clean, "should have blocking duties");
     assert!(
         report.blocking.iter().any(|d| d.category == "submit"),
@@ -1403,7 +1404,7 @@ async fn duties_clean_on_no_claims() {
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
         .await
         .unwrap();
-    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
     assert!(report.clean, "should have no blocking duties");
 }
 
@@ -1432,7 +1433,7 @@ async fn duties_reports_metric_floor_and_stale_queue_for_lead() {
         3,
         Some(25.8),
     );
-    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Lead).unwrap();
 
     assert!(
         report.advisory.iter().any(|d| d.category == "metric-floor"),
@@ -1470,7 +1471,7 @@ async fn duties_reports_no_claimable_work_for_contributor_at_metric_floor() {
         3,
         Some(25.8),
     );
-    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
 
     assert!(
         report
@@ -1506,7 +1507,7 @@ async fn duties_metric_floor_skips_unbounded_higher_is_better() {
         3,
         Some(50000.0),
     );
-    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Lead).unwrap();
 
     assert!(
         !report.advisory.iter().any(|d| d.category == "metric-floor"),
@@ -1542,7 +1543,7 @@ async fn duties_reports_no_claimable_work_when_all_theses_were_released_by_node(
     });
 
     let repo_state = make_repo_state(vec![thesis_one, thesis_two], 0, 2, None);
-    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
 
     assert!(
         report
@@ -1568,7 +1569,7 @@ async fn duties_reports_waiting_for_approval_when_queue_has_only_submitted_these
     commands::write_node_id(&repo.path, "node-a").unwrap();
 
     let repo_state = make_repo_state(vec![make_submitted_thesis(1)], 0, 1, None);
-    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
 
     assert!(
         report
@@ -1767,7 +1768,7 @@ async fn duties_reports_idle_advisory_when_queue_empty_for_contributor() {
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
         .await
         .unwrap();
-    let report = commands::duties::check(&ctx, &repo_state).unwrap();
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
     assert!(
         report
             .advisory
@@ -1775,6 +1776,367 @@ async fn duties_reports_idle_advisory_when_queue_empty_for_contributor() {
             .any(|d| d.category == "idle" && d.message.contains("Do not assume lead duties")),
         "should warn idle contributor not to assume lead duties, got: {:?}",
         report.advisory
+    );
+}
+
+// --- B5b: DutyContext and submit-duty fixes (#100) ---
+
+#[tokio::test]
+async fn duties_lead_duties_excluded_in_contribute_context() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("duties-context-contribute");
+    let now = chrono::Utc::now();
+
+    let pr = PullRequest {
+        number: 8,
+        title: "Candidate PR".to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        head_ref_name: "thesis/1-test-attempt-1".to_string(),
+        head_ref_oid: Some("abc123".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: now,
+        closed_at: None,
+        merged_at: None,
+        author: Some(Author { login: "alice".to_string() }),
+        url: None,
+        mergeable: None,
+    };
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![pr],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let mut thesis = make_approved_thesis(1);
+    thesis.pull_requests.push(PullRequestState {
+        pr: PullRequest {
+            number: 8,
+            title: "Candidate PR".to_string(),
+            body: None,
+            state: "OPEN".to_string(),
+            head_ref_name: "thesis/1-test-attempt-1".to_string(),
+            head_ref_oid: Some("abc123".to_string()),
+            base_ref_name: Some("main".to_string()),
+            created_at: now,
+            closed_at: None,
+            merged_at: None,
+            author: Some(Author { login: "alice".to_string() }),
+            url: None,
+            mergeable: None,
+        },
+        thesis_number: Some(1),
+        policy_pass: true,
+        maintainer_approved: true,
+        maintainer_rejected: false,
+        review_claims: vec![],
+        reviews: vec![],
+        decision: None,
+        findings: vec![],
+    });
+    thesis.phase = ThesisPhase::InReview;
+
+    let repo_state = make_repo_state(vec![thesis], 1, 1, None);
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
+
+    assert!(
+        !report.blocking.iter().any(|d| d.category == "decide"),
+        "contribute context must not see decide blocking duties; got: {:?}",
+        report.blocking
+    );
+    assert!(
+        !report.blocking.iter().any(|d| d.category == "sync"),
+        "contribute context must not see sync blocking duties"
+    );
+    assert!(
+        !report.blocking.iter().any(|d| d.category == "policy-check"),
+        "contribute context must not see policy-check blocking duties"
+    );
+}
+
+#[tokio::test]
+async fn duties_lead_duties_included_in_lead_context() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("duties-context-lead");
+    let now = chrono::Utc::now();
+
+    let pr = PullRequest {
+        number: 8,
+        title: "Candidate PR".to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        head_ref_name: "thesis/1-test-attempt-1".to_string(),
+        head_ref_oid: Some("abc123".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: now,
+        closed_at: None,
+        merged_at: None,
+        author: Some(Author { login: "alice".to_string() }),
+        url: None,
+        mergeable: None,
+    };
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![pr],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let mut thesis = make_approved_thesis(1);
+    thesis.pull_requests.push(PullRequestState {
+        pr: PullRequest {
+            number: 8,
+            title: "Candidate PR".to_string(),
+            body: None,
+            state: "OPEN".to_string(),
+            head_ref_name: "thesis/1-test-attempt-1".to_string(),
+            head_ref_oid: Some("abc123".to_string()),
+            base_ref_name: Some("main".to_string()),
+            created_at: now,
+            closed_at: None,
+            merged_at: None,
+            author: Some(Author { login: "alice".to_string() }),
+            url: None,
+            mergeable: None,
+        },
+        thesis_number: Some(1),
+        policy_pass: true,
+        maintainer_approved: true,
+        maintainer_rejected: false,
+        review_claims: vec![],
+        reviews: vec![],
+        decision: None,
+        findings: vec![],
+    });
+    thesis.phase = ThesisPhase::InReview;
+
+    let repo_state = make_repo_state(vec![thesis], 1, 1, None);
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Lead).unwrap();
+
+    assert!(
+        report.blocking.iter().any(|d| d.category == "decide"),
+        "lead context must see decide blocking duty; got: {:?}",
+        report.blocking
+    );
+}
+
+#[tokio::test]
+async fn duties_submit_skipped_for_closed_thesis() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("duties-closed-submit");
+    let fixture = load_issue_fixture("closed_improved_thesis_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        false,
+        Commands::Duties,
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
+    assert!(
+        !report.blocking.iter().any(|d| d.category == "submit"),
+        "closed thesis must not produce a submit duty; got: {:?}",
+        report.blocking
+    );
+}
+
+#[tokio::test]
+async fn duties_submit_present_for_open_thesis_with_improved_attempt() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("duties-open-submit");
+    let fixture = load_issue_fixture("improved_no_submit_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        false,
+        Commands::Duties,
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
+    assert!(
+        report.blocking.iter().any(|d| d.category == "submit"),
+        "open thesis with improved attempt and no PR must produce submit duty; got blocking: {:?}",
+        report.blocking
+    );
+}
+
+#[tokio::test]
+async fn duties_submit_skipped_when_pr_merged() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("duties-merged-pr-submit");
+    let now = chrono::Utc::now();
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let mut thesis = make_approved_thesis(1);
+    thesis.active_claims.push(ClaimRecord {
+        node: "test-node".to_string(),
+        created_at: now - chrono::Duration::hours(1),
+        expired: false,
+    });
+    thesis.attempts.push(AttemptRecord {
+        thesis: 1,
+        node: "test-node".to_string(),
+        branch: "thesis/1-test-attempt-1".to_string(),
+        metric: 0.95,
+        baseline_metric: Some(0.90),
+        observation: Observation::Improved,
+        summary: "Better prompt".to_string(),
+        author: "alice".to_string(),
+        created_at: now,
+    });
+    thesis.pull_requests.push(PullRequestState {
+        pr: PullRequest {
+            number: 39,
+            title: "Merged candidate".to_string(),
+            body: None,
+            state: "MERGED".to_string(),
+            head_ref_name: "thesis/1-test-attempt-1".to_string(),
+            head_ref_oid: Some("abc123".to_string()),
+            base_ref_name: Some("main".to_string()),
+            created_at: now,
+            closed_at: Some(now),
+            merged_at: Some(now),
+            author: Some(Author { login: "alice".to_string() }),
+            url: None,
+            mergeable: None,
+        },
+        thesis_number: Some(1),
+        policy_pass: true,
+        maintainer_approved: true,
+        maintainer_rejected: false,
+        review_claims: vec![],
+        reviews: vec![],
+        decision: None,
+        findings: vec![],
+    });
+
+    let repo_state = make_repo_state(vec![thesis], 0, 1, None);
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
+
+    assert!(
+        !report.blocking.iter().any(|d| d.category == "submit"),
+        "thesis with a merged PR must not produce a submit duty; got: {:?}",
+        report.blocking
+    );
+}
+
+#[tokio::test]
+async fn duties_contribute_proceeds_despite_pending_lead_duties() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("duties-contribute-unblocked");
+    let now = chrono::Utc::now();
+
+    let pr = PullRequest {
+        number: 8,
+        title: "Candidate PR".to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        head_ref_name: "thesis/2-test-attempt-1".to_string(),
+        head_ref_oid: Some("abc123".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: now,
+        closed_at: None,
+        merged_at: None,
+        author: Some(Author { login: "alice".to_string() }),
+        url: None,
+        mergeable: None,
+    };
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![pr],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let mut decided_thesis = make_approved_thesis(2);
+    decided_thesis.phase = ThesisPhase::InReview;
+    decided_thesis.pull_requests.push(PullRequestState {
+        pr: PullRequest {
+            number: 8,
+            title: "Candidate PR".to_string(),
+            body: None,
+            state: "OPEN".to_string(),
+            head_ref_name: "thesis/2-test-attempt-1".to_string(),
+            head_ref_oid: Some("abc123".to_string()),
+            base_ref_name: Some("main".to_string()),
+            created_at: now,
+            closed_at: None,
+            merged_at: None,
+            author: Some(Author { login: "alice".to_string() }),
+            url: None,
+            mergeable: None,
+        },
+        thesis_number: Some(2),
+        policy_pass: true,
+        maintainer_approved: true,
+        maintainer_rejected: false,
+        review_claims: vec![],
+        reviews: vec![],
+        decision: None,
+        findings: vec![],
+    });
+
+    let claimable_thesis = make_approved_thesis(3);
+    let repo_state = make_repo_state(vec![decided_thesis, claimable_thesis], 1, 2, None);
+
+    let lead_report = commands::duties::check(&ctx, &repo_state, DutyContext::Lead).unwrap();
+    assert!(
+        lead_report.blocking.iter().any(|d| d.category == "decide"),
+        "lead context should see decide as blocking"
+    );
+
+    let contribute_report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
+    assert!(
+        contribute_report.blocking.is_empty(),
+        "contribute context must not be blocked by lead duties; got: {:?}",
+        contribute_report.blocking
+    );
+    assert!(
+        contribute_report.clean,
+        "contribute report should be clean when only lead duties exist"
     );
 }
 
@@ -4575,7 +4937,7 @@ async fn duties_counts_infra_failure_released_thesis_as_claimable() {
     });
 
     let repo_state = make_repo_state(vec![thesis], 0, 1, None);
-    let report = duties::check(&ctx, &repo_state).unwrap();
+    let report = duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
 
     assert!(
         !report
@@ -4912,7 +5274,7 @@ async fn duties_reports_metric_floor_for_higher_is_better() {
         3,
         Some(0.999),
     );
-    let report = duties::check(&ctx, &repo_state).unwrap();
+    let report = duties::check(&ctx, &repo_state, DutyContext::Lead).unwrap();
 
     assert!(
         report.advisory.iter().any(|d| d.category == "metric-floor"),
@@ -5247,6 +5609,9 @@ fn include_fixture(name: &str) -> &'static str {
         }
         "improved_no_submit_issue.json" => {
             include_str!("fixtures/improved_no_submit_issue.json")
+        }
+        "closed_improved_thesis_issue.json" => {
+            include_str!("fixtures/closed_improved_thesis_issue.json")
         }
         other => panic!("unknown fixture: {other}"),
     }

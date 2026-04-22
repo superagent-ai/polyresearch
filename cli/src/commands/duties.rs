@@ -6,6 +6,12 @@ use crate::comments::{Observation, ReleaseReason};
 use crate::ledger::Ledger;
 use crate::state::{RepositoryState, ThesisPhase};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DutyContext {
+    Lead,
+    Contribute,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DutyItem {
     pub category: String,
@@ -20,7 +26,7 @@ pub struct DutyReport {
     pub clean: bool,
 }
 
-pub fn check(ctx: &AppContext, repo_state: &RepositoryState) -> Result<DutyReport> {
+pub fn check(ctx: &AppContext, repo_state: &RepositoryState, context: DutyContext) -> Result<DutyReport> {
     let node_id = read_node_id(&ctx.repo_root).unwrap_or_default();
     let login = ctx.github.current_login().unwrap_or_default();
     let is_lead = ctx
@@ -71,8 +77,11 @@ pub fn check(ctx: &AppContext, repo_state: &RepositoryState) -> Result<DutyRepor
         let has_improved = my_attempts
             .iter()
             .any(|a| a.observation == Observation::Improved);
-        let has_open_pr = thesis.pull_requests.iter().any(|pr| pr.pr.state == "OPEN");
-        if has_improved && !has_open_pr {
+        let has_open_or_merged_pr = thesis
+            .pull_requests
+            .iter()
+            .any(|pr| pr.pr.state == "OPEN" || pr.pr.state == "MERGED");
+        if has_improved && !has_open_or_merged_pr {
             blocking.push(DutyItem {
                 category: "submit".to_string(),
                 message: format!(
@@ -84,12 +93,12 @@ pub fn check(ctx: &AppContext, repo_state: &RepositoryState) -> Result<DutyRepor
         }
     }
 
-    if is_lead {
+    if is_lead && context == DutyContext::Lead {
         check_lead_duties(ctx, repo_state, &mut blocking, &mut advisory)?;
     }
 
     let has_review_work = check_review_opportunities(repo_state, &node_id, &login, &mut advisory);
-    if !is_lead {
+    if !is_lead || context == DutyContext::Contribute {
         check_contributor_idle_state(ctx, repo_state, &node_id, has_review_work, &mut advisory)?;
     }
 
@@ -413,7 +422,7 @@ fn render_report(value: &DutyReport) -> String {
 
 pub async fn run(ctx: &AppContext) -> Result<()> {
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
-    let report = check(ctx, &repo_state)?;
+    let report = check(ctx, &repo_state, DutyContext::Lead)?;
 
     print_value(ctx, &report, render_report)
 }
