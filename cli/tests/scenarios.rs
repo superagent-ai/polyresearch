@@ -3316,3 +3316,222 @@ async fn scenario_contribute_fast_agent_unaffected_by_timeout() {
         "contribute should succeed with short-lived agent: {result:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Pre-flight validation scenarios (issue #101)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn scenario_preflight_broken_agent_aborts_contribute() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("preflight-contrib-bad-agent");
+    repo.init_git();
+
+    repo.write_full_setup("lead", "test-node-pf", "/nonexistent/agent");
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    let (issue, comments) = make_approved_thesis(200, "Preflight test thesis", "lead");
+    let github = Arc::new(ScenarioGitHub::new("contributor"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(200, comments);
+
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-pf");
+    }
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(
+        &ctx,
+        &ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(result.is_err(), "contribute should fail on broken agent command");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("pre-flight"),
+        "error should mention pre-flight: {err_msg}"
+    );
+
+    let posted = github.posted_comments();
+    assert!(
+        posted.is_empty(),
+        "no comments should have been posted (no claims): {posted:?}"
+    );
+}
+
+#[tokio::test]
+async fn scenario_preflight_broken_agent_aborts_lead() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("preflight-lead-bad-agent");
+    repo.init_git();
+
+    repo.write_full_setup("lead", "lead-node-pf", "/nonexistent/agent");
+    repo.commit_all("setup");
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Lead(LeadArgs {
+            once: true,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::lead::run(
+        &ctx,
+        &LeadArgs {
+            once: true,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(result.is_err(), "lead should fail on broken agent command");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("pre-flight"),
+        "error should mention pre-flight: {err_msg}"
+    );
+
+    let created = github.created_issues();
+    assert!(
+        created.is_empty(),
+        "no thesis issues should have been created: {created:?}"
+    );
+}
+
+#[tokio::test]
+async fn scenario_preflight_dirty_tree_aborts_contribute() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("preflight-dirty-tree");
+    repo.init_git();
+
+    let agent_cmd = mock_agent_command("improved");
+    repo.write_full_setup("lead", "test-node-dirty", &agent_cmd);
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    // Modify a tracked file to simulate experiment leakage.
+    fs::write(repo.path.join("src/main.js"), "// leaked experiment change\n").unwrap();
+
+    let (issue, comments) = make_approved_thesis(201, "Dirty tree thesis", "lead");
+    let github = Arc::new(ScenarioGitHub::new("contributor"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(201, comments);
+
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-dirty");
+    }
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(
+        &ctx,
+        &ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(result.is_err(), "contribute should fail with dirty working tree");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("uncommitted"),
+        "error should mention uncommitted changes: {err_msg}"
+    );
+
+    let posted = github.posted_comments();
+    assert!(
+        posted.is_empty(),
+        "no comments should have been posted (no claims): {posted:?}"
+    );
+}
+
+#[tokio::test]
+async fn scenario_preflight_dirty_tree_aborts_lead() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("preflight-lead-dirty");
+    repo.init_git();
+
+    repo.write_full_setup("lead", "lead-node-dirty", "echo noop");
+    repo.commit_all("setup");
+
+    // Modify a tracked file to simulate experiment leakage.
+    fs::write(repo.path.join("README.md"), "leaked experiment data\n").unwrap();
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Lead(LeadArgs {
+            once: true,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::lead::run(
+        &ctx,
+        &LeadArgs {
+            once: true,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(result.is_err(), "lead should fail with dirty working tree");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("uncommitted"),
+        "error should mention uncommitted changes: {err_msg}"
+    );
+}

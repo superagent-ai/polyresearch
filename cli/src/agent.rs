@@ -400,7 +400,7 @@ fn run_harness_in(harness: &HarnessSpec, work_dir: &Path, verbose: bool) -> Resu
     Ok(None)
 }
 
-fn shell_words(command: &str) -> Vec<String> {
+pub(crate) fn shell_words(command: &str) -> Vec<String> {
     let mut words = Vec::new();
     let mut current = String::new();
     let mut in_single_quote = false;
