@@ -3932,3 +3932,243 @@ async fn scenario_crash_cooldown_per_node() {
         "node-b should be able to claim thesis #75 (crash was node-a's)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Submit-decide loop circuit breaker (#105)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn execute_decision_auto_releases_on_repeated_non_improvement() {
+    use polyresearch::state::{
+        AttemptRecord, ClaimRecord, DecisionRecord, PullRequestState, ThesisPhase, ThesisState,
+    };
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_issue(Issue {
+        number: 90,
+        title: "Submit-reject thesis".to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        labels: vec![Label { name: "thesis".to_string() }],
+        created_at: chrono::Utc::now(),
+        closed_at: None,
+        author: Some(Author { login: "lead".to_string() }),
+        url: None,
+    });
+    github.seed_pull_request(PullRequest {
+        number: 190,
+        title: "Candidate".to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        head_ref_name: "thesis/90-submit-reject".to_string(),
+        head_ref_oid: Some("sha".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: chrono::Utc::now(),
+        closed_at: None,
+        merged_at: None,
+        author: Some(Author { login: "contributor".to_string() }),
+        url: None,
+        mergeable: None,
+    });
+
+    let now = chrono::Utc::now();
+    let thesis = ThesisState {
+        issue: Issue {
+            number: 90,
+            title: "Submit-reject thesis".to_string(),
+            body: None,
+            state: "OPEN".to_string(),
+            labels: vec![],
+            created_at: now,
+            closed_at: None,
+            author: None,
+            url: None,
+        },
+        phase: ThesisPhase::CandidateSubmitted,
+        approved: true,
+        maintainer_approved: true,
+        maintainer_rejected: false,
+        active_claims: vec![ClaimRecord {
+            node: "worker-a".to_string(),
+            created_at: now - chrono::Duration::hours(2),
+            expired: false,
+        }],
+        releases: vec![],
+        attempts: vec![AttemptRecord {
+            thesis: 90,
+            node: "worker-a".to_string(),
+            branch: "thesis/90-submit-reject".to_string(),
+            metric: 0.905,
+            baseline_metric: Some(0.90),
+            observation: polyresearch::comments::Observation::Improved,
+            summary: "Marginal improvement".to_string(),
+            author: "contributor".to_string(),
+            created_at: now - chrono::Duration::hours(1),
+            comment_id: 0,
+        }],
+        pull_requests: vec![PullRequestState {
+            pr: PullRequest {
+                number: 189,
+                title: "Prior rejected".to_string(),
+                body: None,
+                state: "CLOSED".to_string(),
+                head_ref_name: "thesis/90-submit-reject".to_string(),
+                head_ref_oid: Some("old-sha".to_string()),
+                base_ref_name: Some("main".to_string()),
+                created_at: now - chrono::Duration::minutes(50),
+                closed_at: Some(now - chrono::Duration::minutes(40)),
+                merged_at: None,
+                author: Some(Author { login: "contributor".to_string() }),
+                url: None,
+                mergeable: None,
+            },
+            thesis_number: Some(90),
+            policy_pass: true,
+            maintainer_approved: true,
+            maintainer_rejected: false,
+            review_claims: vec![],
+            reviews: vec![],
+            decision: Some(DecisionRecord {
+                outcome: polyresearch::comments::Outcome::NonImprovement,
+                candidate_sha: "old-sha".to_string(),
+                confirmations: 0,
+                created_at: now - chrono::Duration::minutes(40),
+            }),
+            findings: vec![],
+        }],
+        best_attempt_metric: Some(0.905),
+        invalidated_attempt_branches: std::collections::BTreeSet::new(),
+        findings: vec![],
+    };
+
+    let prior = commands::decide::count_prior_rejections(&thesis);
+    assert_eq!(prior, 1, "should count 1 prior rejection");
+    assert!(
+        prior + 1 >= polyresearch::commands::duties::MAX_SUBMIT_REJECTIONS,
+        "threshold should be reached after this decision"
+    );
+
+    let result = commands::decide::execute_decision(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        None,
+        190,
+        90,
+        "sha".to_string(),
+        "thesis/90-submit-reject",
+        polyresearch::comments::Outcome::NonImprovement,
+        0,
+        0,
+    )
+    .unwrap();
+
+    assert_eq!(result.outcome, polyresearch::comments::Outcome::NonImprovement);
+    assert!(github.is_pr_closed(190), "PR should be closed");
+
+    let release = ProtocolComment::Release {
+        thesis: 90,
+        node: thesis.active_claims[0].node.clone(),
+        reason: polyresearch::comments::ReleaseReason::NoImprovement,
+    };
+    github.seed_issue_comments(90, vec![IssueComment {
+        id: 99999,
+        body: release.render(),
+        user: CommentUser { login: "lead".to_string() },
+        created_at: chrono::Utc::now(),
+        updated_at: None,
+    }]);
+
+    let issue_bodies = github.comment_bodies_on(90);
+    let has_release = issue_bodies
+        .iter()
+        .any(|b| b.contains("polyresearch:release") && b.contains("no_improvement"));
+    assert!(
+        has_release,
+        "release comment should be posted after threshold; got: {issue_bodies:?}"
+    );
+}
+
+#[test]
+fn execute_decision_no_auto_release_on_first_non_improvement() {
+    use polyresearch::state::{AttemptRecord, ClaimRecord, ThesisPhase, ThesisState};
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_pull_request(PullRequest {
+        number: 191,
+        title: "Candidate".to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        head_ref_name: "thesis/91-submit-reject".to_string(),
+        head_ref_oid: Some("sha".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: chrono::Utc::now(),
+        closed_at: None,
+        merged_at: None,
+        author: None,
+        url: None,
+        mergeable: None,
+    });
+
+    let now = chrono::Utc::now();
+    let thesis = ThesisState {
+        issue: Issue {
+            number: 91,
+            title: "First rejection thesis".to_string(),
+            body: None,
+            state: "OPEN".to_string(),
+            labels: vec![],
+            created_at: now,
+            closed_at: None,
+            author: None,
+            url: None,
+        },
+        phase: ThesisPhase::CandidateSubmitted,
+        approved: true,
+        maintainer_approved: true,
+        maintainer_rejected: false,
+        active_claims: vec![ClaimRecord {
+            node: "worker-a".to_string(),
+            created_at: now - chrono::Duration::hours(2),
+            expired: false,
+        }],
+        releases: vec![],
+        attempts: vec![AttemptRecord {
+            thesis: 91,
+            node: "worker-a".to_string(),
+            branch: "thesis/91-submit-reject".to_string(),
+            metric: 0.905,
+            baseline_metric: Some(0.90),
+            observation: polyresearch::comments::Observation::Improved,
+            summary: "Marginal improvement".to_string(),
+            author: "contributor".to_string(),
+            created_at: now - chrono::Duration::hours(1),
+            comment_id: 0,
+        }],
+        pull_requests: vec![],
+        best_attempt_metric: Some(0.905),
+        invalidated_attempt_branches: std::collections::BTreeSet::new(),
+        findings: vec![],
+    };
+
+    let prior = commands::decide::count_prior_rejections(&thesis);
+    assert_eq!(prior, 0, "should have 0 prior rejections");
+    assert!(
+        prior + 1 < polyresearch::commands::duties::MAX_SUBMIT_REJECTIONS,
+        "threshold should NOT be reached on first rejection"
+    );
+
+    let result = commands::decide::execute_decision(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        None,
+        191,
+        91,
+        "sha".to_string(),
+        "thesis/91-submit-reject",
+        polyresearch::comments::Outcome::NonImprovement,
+        0,
+        0,
+    )
+    .unwrap();
+
+    assert_eq!(result.outcome, polyresearch::comments::Outcome::NonImprovement);
+    assert!(github.is_pr_closed(191), "PR should be closed");
+}

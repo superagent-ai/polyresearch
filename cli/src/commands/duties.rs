@@ -2,9 +2,11 @@ use color_eyre::eyre::Result;
 use serde::Serialize;
 
 use crate::commands::{AppContext, print_value, read_node_id};
-use crate::comments::{Observation, ReleaseReason};
+use crate::comments::{Observation, Outcome, ReleaseReason};
 use crate::ledger::Ledger;
 use crate::state::{RepositoryState, ThesisPhase};
+
+pub const MAX_SUBMIT_REJECTIONS: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DutyContext {
@@ -82,14 +84,45 @@ pub fn check(ctx: &AppContext, repo_state: &RepositoryState, context: DutyContex
             .iter()
             .any(|pr| pr.pr.state == "OPEN" || pr.pr.state == "MERGED");
         if has_improved && !has_open_or_merged_pr {
-            blocking.push(DutyItem {
-                category: "submit".to_string(),
-                message: format!(
-                    "Thesis #{}: improved attempt recorded but no PR submitted.",
-                    thesis.issue.number
-                ),
-                command: format!("polyresearch submit {}", thesis.issue.number),
-            });
+            let claim_start = thesis
+                .active_claims
+                .iter()
+                .find(|c| c.node == node_id)
+                .map(|c| c.created_at);
+            let rejection_count = thesis
+                .pull_requests
+                .iter()
+                .filter(|pr| {
+                    pr.pr.state == "CLOSED"
+                        && pr.decision.as_ref().is_some_and(|d| {
+                            matches!(d.outcome, Outcome::NonImprovement | Outcome::Stale)
+                                && claim_start.is_none_or(|cs| d.created_at >= cs)
+                        })
+                })
+                .count();
+
+            if rejection_count >= MAX_SUBMIT_REJECTIONS {
+                blocking.push(DutyItem {
+                    category: "release".to_string(),
+                    message: format!(
+                        "Thesis #{}: {} consecutive PR rejections; release the claim.",
+                        thesis.issue.number, rejection_count
+                    ),
+                    command: format!(
+                        "polyresearch release {} --reason no_improvement",
+                        thesis.issue.number
+                    ),
+                });
+            } else {
+                blocking.push(DutyItem {
+                    category: "submit".to_string(),
+                    message: format!(
+                        "Thesis #{}: improved attempt recorded but no PR submitted.",
+                        thesis.issue.number
+                    ),
+                    command: format!("polyresearch submit {}", thesis.issue.number),
+                });
+            }
         }
     }
 
