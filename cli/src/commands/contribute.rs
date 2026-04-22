@@ -2,6 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Result, eyre};
 
 use crate::cli::ContributeArgs;
@@ -12,6 +13,8 @@ use crate::github::{GitHubApi, GitHubClient, RepoRef};
 use crate::hardware;
 use crate::state::{RepositoryState, ThesisPhase, ThesisState};
 use crate::worker::{self, ThesisWorker, WorkerContext, WorkerOutcome};
+
+pub const MAX_CRASH_COOLDOWN_SECS: u64 = 3600;
 
 pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
     let ctx = if let Some(url) = &args.url {
@@ -200,7 +203,12 @@ async fn run_iteration(
     let eval_cores = parse_eval_footprint_cores(&ctx.repo_root);
     let eval_memory_gb = parse_eval_footprint_memory(&ctx.repo_root);
 
-    let claimable = claimable_theses(&repo_state, node_id);
+    let claimable_ignoring_cooldown = claimable_theses(&repo_state, node_id, 0);
+    let claimable = claimable_theses(&repo_state, node_id, args.sleep_secs);
+    let cooldown_skipped = claimable_ignoring_cooldown.len().saturating_sub(claimable.len());
+    if cooldown_skipped > 0 {
+        eprintln!("{cooldown_skipped} thesis(es) skipped due to crash cooldown");
+    }
     let resumable = resumable_theses(&repo_state, node_id);
     let available_work = claimable.len() + resumable.len();
 
@@ -367,7 +375,46 @@ fn cleanup_worktree(repo_root: &Path, worktree_path: &Path) {
     }
 }
 
-fn claimable_theses<'a>(repo_state: &'a RepositoryState, node_id: &str) -> Vec<&'a ThesisState> {
+pub fn is_crash_cooldown(
+    thesis: &ThesisState,
+    node_id: &str,
+    base_cooldown_secs: u64,
+    now: DateTime<Utc>,
+) -> bool {
+    let mut count = 0u32;
+    let mut last_crash: Option<DateTime<Utc>> = None;
+
+    for r in &thesis.releases {
+        if r.node == node_id
+            && matches!(r.reason, ReleaseReason::InfraFailure | ReleaseReason::Timeout)
+        {
+            count += 1;
+            last_crash = Some(match last_crash {
+                Some(prev) => prev.max(r.created_at),
+                None => r.created_at,
+            });
+        }
+    }
+
+    let Some(last) = last_crash else {
+        return false;
+    };
+
+    let multiplier = 2u64.saturating_pow(count.saturating_sub(1));
+    let cooldown_secs = base_cooldown_secs
+        .saturating_mul(multiplier)
+        .min(MAX_CRASH_COOLDOWN_SECS);
+    let cooldown = chrono::Duration::seconds(cooldown_secs as i64);
+
+    now.signed_duration_since(last) < cooldown
+}
+
+pub fn claimable_theses<'a>(
+    repo_state: &'a RepositoryState,
+    node_id: &str,
+    base_cooldown_secs: u64,
+) -> Vec<&'a ThesisState> {
+    let now = Utc::now();
     repo_state
         .theses
         .iter()
@@ -380,6 +427,7 @@ fn claimable_theses<'a>(repo_state: &'a RepositoryState, node_id: &str) -> Vec<&
                     .releases
                     .iter()
                     .any(|r| r.node == node_id && r.reason == ReleaseReason::NoImprovement)
+                && !is_crash_cooldown(thesis, node_id, base_cooldown_secs, now)
         })
         .collect()
 }
@@ -428,4 +476,212 @@ fn parse_eval_footprint_memory(repo_root: &Path) -> f64 {
     crate::agent::parse_prepare_key(repo_root, "eval_memory_gb")
         .and_then(|v| v.parse().ok())
         .unwrap_or(1.0)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::github::Issue;
+    use crate::state::{ReleaseRecord, ThesisPhase, ThesisState};
+
+    fn make_thesis_with_releases(releases: Vec<ReleaseRecord>) -> ThesisState {
+        ThesisState {
+            issue: Issue {
+                number: 5,
+                title: "Test thesis".to_string(),
+                body: None,
+                state: "OPEN".to_string(),
+                labels: vec![],
+                created_at: Utc::now(),
+                closed_at: None,
+                author: None,
+                url: None,
+            },
+            phase: ThesisPhase::Approved,
+            approved: true,
+            maintainer_approved: false,
+            maintainer_rejected: false,
+            active_claims: vec![],
+            releases,
+            attempts: vec![],
+            pull_requests: vec![],
+            best_attempt_metric: None,
+            invalidated_attempt_branches: std::collections::BTreeSet::new(),
+            findings: vec![],
+        }
+    }
+
+    fn infra_release(node: &str, at: DateTime<Utc>) -> ReleaseRecord {
+        ReleaseRecord {
+            node: node.to_string(),
+            reason: ReleaseReason::InfraFailure,
+            created_at: at,
+        }
+    }
+
+    fn timeout_release(node: &str, at: DateTime<Utc>) -> ReleaseRecord {
+        ReleaseRecord {
+            node: node.to_string(),
+            reason: ReleaseReason::Timeout,
+            created_at: at,
+        }
+    }
+
+    #[test]
+    fn crash_cooldown_excludes_after_crashes() {
+        let now = Utc::now();
+        let thesis = make_thesis_with_releases(vec![
+            infra_release("node-a", now - chrono::Duration::seconds(10)),
+            infra_release("node-a", now - chrono::Duration::seconds(5)),
+            infra_release("node-a", now - chrono::Duration::seconds(1)),
+        ]);
+
+        assert!(
+            is_crash_cooldown(&thesis, "node-a", 60, now),
+            "thesis should be in cooldown with 3 recent crashes"
+        );
+    }
+
+    #[test]
+    fn crash_cooldown_does_not_affect_other_nodes() {
+        let now = Utc::now();
+        let thesis = make_thesis_with_releases(vec![
+            infra_release("node-a", now - chrono::Duration::seconds(10)),
+            infra_release("node-a", now - chrono::Duration::seconds(5)),
+            infra_release("node-a", now - chrono::Duration::seconds(1)),
+        ]);
+
+        assert!(
+            !is_crash_cooldown(&thesis, "node-b", 60, now),
+            "node-b should not be affected by node-a's crashes"
+        );
+    }
+
+    #[test]
+    fn crash_cooldown_increases_exponentially() {
+        let base = 60u64;
+        let last_crash = Utc::now() - chrono::Duration::seconds(200);
+
+        let thesis_1 = make_thesis_with_releases(vec![infra_release("n", last_crash)]);
+        let now = last_crash + chrono::Duration::seconds(200);
+        assert!(
+            !is_crash_cooldown(&thesis_1, "n", base, now),
+            "1 crash, 200s later: cooldown (60s) should have expired"
+        );
+
+        let thesis_2 = make_thesis_with_releases(vec![
+            infra_release("n", last_crash - chrono::Duration::seconds(300)),
+            infra_release("n", last_crash),
+        ]);
+        let now = last_crash + chrono::Duration::seconds(100);
+        assert!(
+            is_crash_cooldown(&thesis_2, "n", base, now),
+            "2 crashes, 100s later: cooldown (120s) should still be active"
+        );
+
+        let thesis_3 = make_thesis_with_releases(vec![
+            infra_release("n", last_crash - chrono::Duration::seconds(600)),
+            infra_release("n", last_crash - chrono::Duration::seconds(300)),
+            infra_release("n", last_crash),
+        ]);
+        let now = last_crash + chrono::Duration::seconds(200);
+        assert!(
+            is_crash_cooldown(&thesis_3, "n", base, now),
+            "3 crashes, 200s later: cooldown (240s) should still be active"
+        );
+    }
+
+    #[test]
+    fn crash_cooldown_expires() {
+        let now = Utc::now();
+        let thesis = make_thesis_with_releases(vec![infra_release(
+            "node-a",
+            now - chrono::Duration::seconds(120),
+        )]);
+
+        assert!(
+            !is_crash_cooldown(&thesis, "node-a", 60, now),
+            "cooldown (60s) should have expired after 120s"
+        );
+    }
+
+    #[test]
+    fn crash_cooldown_capped_at_max() {
+        let now = Utc::now();
+        let mut releases = Vec::new();
+        for i in 0..20 {
+            releases.push(infra_release(
+                "node-a",
+                now - chrono::Duration::seconds(i),
+            ));
+        }
+        let thesis = make_thesis_with_releases(releases);
+
+        let after_max = now + chrono::Duration::seconds(MAX_CRASH_COOLDOWN_SECS as i64 + 1);
+        assert!(
+            !is_crash_cooldown(&thesis, "node-a", 60, after_max),
+            "cooldown should expire after MAX_CRASH_COOLDOWN_SECS even with 20 crashes"
+        );
+
+        let before_max = now + chrono::Duration::seconds(MAX_CRASH_COOLDOWN_SECS as i64 - 60);
+        assert!(
+            is_crash_cooldown(&thesis, "node-a", 60, before_max),
+            "cooldown should be active before MAX_CRASH_COOLDOWN_SECS with 20 crashes"
+        );
+    }
+
+    #[test]
+    fn crash_cooldown_ignores_no_improvement_releases() {
+        let now = Utc::now();
+        let thesis = make_thesis_with_releases(vec![ReleaseRecord {
+            node: "node-a".to_string(),
+            reason: ReleaseReason::NoImprovement,
+            created_at: now - chrono::Duration::seconds(1),
+        }]);
+
+        assert!(
+            !is_crash_cooldown(&thesis, "node-a", 60, now),
+            "NoImprovement releases should not trigger crash cooldown"
+        );
+    }
+
+    #[test]
+    fn crash_cooldown_counts_timeout_releases() {
+        let now = Utc::now();
+        let thesis = make_thesis_with_releases(vec![timeout_release(
+            "node-a",
+            now - chrono::Duration::seconds(10),
+        )]);
+
+        assert!(
+            is_crash_cooldown(&thesis, "node-a", 60, now),
+            "timeout releases should trigger crash cooldown"
+        );
+    }
+
+    #[test]
+    fn crash_cooldown_no_releases() {
+        let now = Utc::now();
+        let thesis = make_thesis_with_releases(vec![]);
+
+        assert!(
+            !is_crash_cooldown(&thesis, "node-a", 60, now),
+            "no releases should mean no cooldown"
+        );
+    }
+
+    #[test]
+    fn crash_cooldown_zero_base_always_expired() {
+        let now = Utc::now();
+        let thesis = make_thesis_with_releases(vec![infra_release(
+            "node-a",
+            now - chrono::Duration::milliseconds(1),
+        )]);
+
+        assert!(
+            !is_crash_cooldown(&thesis, "node-a", 0, now),
+            "zero base cooldown should never block"
+        );
+    }
 }

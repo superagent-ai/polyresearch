@@ -626,6 +626,7 @@ mod tests {
             attempts: vec![],
             pull_requests: vec![],
             best_attempt_metric: None,
+            invalidated_attempt_branches: std::collections::BTreeSet::new(),
             findings: vec![],
         };
         assert!(format_prior_attempts(&thesis).is_empty());
