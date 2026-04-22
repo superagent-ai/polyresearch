@@ -14,6 +14,7 @@ Your working directory is the project root, checked out to the default branch. Y
 - `polyresearch pace` — check API budget.
 - `polyresearch admin release-claim <issue> --node <node> --reason <reason>` — force-release a stuck claim.
 - `polyresearch admin acknowledge-invalid <comment-id> --note "<text>"` — acknowledge an invalid finding.
+- `polyresearch prune` — remove worktrees for resolved/rejected theses and clean up stale directories.
 
 ## The loop
 
@@ -40,6 +41,8 @@ If there are no policy-check duties, proceed to step 3.
 Look for decide duties. For each ready PR, run `polyresearch decide <pr>`. The CLI evaluates the PR's metric, compares it against the baseline and best accepted, and posts the decision.
 
 If decide fails because of merge conflicts, the CLI will attempt a rebase. If that also fails, the PR will be closed as stale — this is expected. The contributor can rebase and resubmit.
+
+After processing all decide duties, run `polyresearch prune` to remove worktrees left behind by decided theses. This is safe to run even when no worktrees exist.
 
 If there are no decide duties, proceed to step 4.
 

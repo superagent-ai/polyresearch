@@ -14,6 +14,7 @@ All coordination goes through the `polyresearch` CLI. Key commands:
 - `polyresearch submit <issue>` — push and create a PR for an improved thesis. Run from the thesis worktree.
 - `polyresearch release <issue> --reason <no_improvement|timeout|infra_failure>` — release a claim.
 - `polyresearch batch-claim --count N` — claim multiple theses at once.
+- `polyresearch prune` — remove worktrees for resolved/rejected theses and clean up stale directories.
 
 Use `--help` on any command for full flag documentation.
 
@@ -76,7 +77,9 @@ After the experiment, read `.polyresearch/result.json`:
 
 ### 6. Clean up
 
-After releasing or submitting, remove the worktree: `git worktree remove --force <path>`. For submitted (improved) theses, keep the worktree alive — the lead may request revisions.
+After releasing a thesis, remove its worktree: `git worktree remove --force <path>`. For submitted (improved) theses, keep the worktree alive until the lead decides the PR — the lead may request revisions.
+
+Then run `polyresearch prune` to remove worktrees for any theses that have been resolved or rejected since the last iteration. This covers submitted theses whose PRs were decided while you were working on other theses.
 
 ### 7. Sleep and repeat
 
