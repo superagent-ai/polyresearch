@@ -4941,6 +4941,67 @@ async fn prune_preserves_active_worktrees() {
     );
 }
 
+#[tokio::test]
+async fn prune_removes_worktrees_for_terminal_theses() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("prune-terminal");
+    init_git_repo(&repo.path);
+
+    let rejected_wt = repo.path.join(".worktrees").join("5-closed-thesis");
+    fs::create_dir_all(&rejected_wt).unwrap();
+    fs::write(rejected_wt.join("result.json"), "{}").unwrap();
+
+    let active_wt = repo.path.join(".worktrees").join("10-active-thesis");
+    fs::create_dir_all(&active_wt).unwrap();
+    fs::write(active_wt.join("result.json"), "{}").unwrap();
+
+    let closed_issue = Issue {
+        number: 5,
+        title: "Closed thesis".to_string(),
+        body: None,
+        state: "CLOSED".to_string(),
+        labels: vec![Label {
+            name: "thesis".to_string(),
+        }],
+        created_at: chrono::Utc::now(),
+        closed_at: Some(chrono::Utc::now()),
+        author: None,
+        url: None,
+    };
+    let open_issue = Issue {
+        number: 10,
+        title: "Active thesis".to_string(),
+        body: None,
+        state: "OPEN".to_string(),
+        labels: vec![Label {
+            name: "thesis".to_string(),
+        }],
+        created_at: chrono::Utc::now(),
+        closed_at: None,
+        author: None,
+        url: None,
+    };
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![closed_issue, open_issue],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Prune);
+
+    commands::prune::run(&ctx).await.unwrap();
+
+    assert!(
+        !rejected_wt.exists(),
+        "worktree for rejected (closed) thesis should be removed"
+    );
+    assert!(
+        active_wt.exists(),
+        "worktree for active (open) thesis should be preserved"
+    );
+}
+
 // ===========================================================================
 // Category 3 (partial): Multi-node contention
 // ===========================================================================
