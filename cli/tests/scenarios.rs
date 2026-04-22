@@ -111,21 +111,8 @@ Test scenario goal.
     }
 
     fn write_node_config(&self, node_id: &str, agent_command: &str) {
-        self.write_node_config_with_timeout(node_id, agent_command, None);
-    }
-
-    fn write_node_config_with_timeout(
-        &self,
-        node_id: &str,
-        agent_command: &str,
-        timeout_secs: Option<u64>,
-    ) {
-        let timeout_line = match timeout_secs {
-            Some(t) => format!("timeout_secs = {t}\n"),
-            None => String::new(),
-        };
         let content = format!(
-            "node_id = \"{node_id}\"\ncapacity = 75\n\n[agent]\ncommand = \"{agent_command}\"\n{timeout_line}"
+            "node_id = \"{node_id}\"\ncapacity = 75\n\n[agent]\ncommand = \"{agent_command}\"\n"
         );
         fs::write(self.path.join(".polyresearch-node.toml"), content).unwrap();
     }
