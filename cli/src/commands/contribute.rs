@@ -419,27 +419,13 @@ fn ensure_node_config(repo_root: &Path) -> Result<()> {
 }
 
 fn parse_eval_footprint_cores(repo_root: &Path) -> usize {
-    parse_prepare_key(repo_root, "eval_cores")
+    crate::agent::parse_prepare_key(repo_root, "eval_cores")
         .and_then(|v| v.parse().ok())
         .unwrap_or(1)
 }
 
 fn parse_eval_footprint_memory(repo_root: &Path) -> f64 {
-    parse_prepare_key(repo_root, "eval_memory_gb")
+    crate::agent::parse_prepare_key(repo_root, "eval_memory_gb")
         .and_then(|v| v.parse().ok())
         .unwrap_or(1.0)
-}
-
-fn parse_prepare_key(repo_root: &Path, key: &str) -> Option<String> {
-    let path = repo_root.join("PREPARE.md");
-    let contents = std::fs::read_to_string(path).ok()?;
-    for line in contents.lines() {
-        let trimmed = line.trim();
-        if let Some((k, v)) = trimmed.split_once(':')
-            && k.trim() == key
-        {
-            return Some(v.trim().to_string());
-        }
-    }
-    None
 }
