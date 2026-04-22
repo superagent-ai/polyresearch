@@ -88,13 +88,13 @@ pub async fn run(ctx: &AppContext) -> Result<()> {
         }
         if !value.removed_directories.is_empty() {
             parts.push(format!(
-                "Removed {} stale empty director(ies).",
+                "Removed {} stale empty directory(ies).",
                 value.removed_directories.len()
             ));
         }
         if !value.skipped_directories.is_empty() {
             parts.push(format!(
-                "Skipped {} non-empty director(ies).",
+                "Skipped {} non-empty directory(ies).",
                 value.skipped_directories.len()
             ));
         }
