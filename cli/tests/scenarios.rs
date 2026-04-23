@@ -192,7 +192,7 @@ fn expected_hostname() -> String {
     if let Ok(hostname) = env::var("HOSTNAME")
         && !hostname.trim().is_empty()
     {
-        return hostname;
+        return hostname.trim().to_string();
     }
 
     let output = Command::new("hostname").output();

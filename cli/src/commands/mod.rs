@@ -151,7 +151,7 @@ pub(crate) fn resolve_hostname() -> String {
     if let Ok(hostname) = env::var("HOSTNAME")
         && !hostname.trim().is_empty()
     {
-        return hostname;
+        return hostname.trim().to_string();
     }
 
     let output = Command::new("hostname").output();
@@ -305,4 +305,56 @@ pub fn slugify(input: &str) -> String {
         }
     }
     output.trim_matches('-').to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_hostname;
+    use std::env;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    fn hostname_env_lock() -> &'static Mutex<()> {
+        static HOSTNAME_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        HOSTNAME_ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct HostnameEnvGuard {
+        _guard: MutexGuard<'static, ()>,
+        previous: Option<String>,
+    }
+
+    impl HostnameEnvGuard {
+        fn set(value: &str) -> Self {
+            let guard = hostname_env_lock()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let previous = env::var("HOSTNAME").ok();
+            unsafe {
+                env::set_var("HOSTNAME", value);
+            }
+            Self {
+                _guard: guard,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for HostnameEnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(previous) => unsafe {
+                    env::set_var("HOSTNAME", previous);
+                },
+                None => unsafe {
+                    env::remove_var("HOSTNAME");
+                },
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_hostname_trims_hostname_env_var() {
+        let _guard = HostnameEnvGuard::set("worker-host  \n");
+        assert_eq!(resolve_hostname(), "worker-host");
+    }
 }
