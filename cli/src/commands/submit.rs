@@ -60,7 +60,7 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
         }
     }
 
-    let diff_ref = format!("origin/{default_branch}...HEAD");
+    let diff_ref = diff_ref(&ctx.repo_root, &default_branch);
     let diff_output = run_git(&ctx.repo_root, &["diff", "--name-only", &diff_ref])?;
     if diff_output.trim().is_empty() {
         return Err(eyre!(
@@ -113,13 +113,25 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
     })
 }
 
+fn submission_base_ref(repo_root: &PathBuf, default_branch: &str) -> String {
+    let remote_ref = format!("origin/{default_branch}");
+    if run_git(repo_root, &["rev-parse", "--verify", &remote_ref]).is_ok() {
+        remote_ref
+    } else {
+        default_branch.to_string()
+    }
+}
+
+fn diff_ref(repo_root: &PathBuf, default_branch: &str) -> String {
+    format!("{}...HEAD", submission_base_ref(repo_root, default_branch))
+}
+
 pub fn check_editable_surface(
     repo_root: &PathBuf,
     program: &ProgramSpec,
     default_branch: &str,
 ) -> Result<Vec<String>> {
-    let merge_base = format!("origin/{default_branch}");
-    let diff_ref = format!("{merge_base}...HEAD");
+    let diff_ref = diff_ref(repo_root, default_branch);
     let diff_output = run_git(repo_root, &["diff", "--name-only", &diff_ref])?;
 
     if diff_output.is_empty() {
@@ -144,7 +156,7 @@ pub fn strip_violating_files(
     violations: &[String],
     default_branch: &str,
 ) -> Result<()> {
-    let base_ref = format!("origin/{default_branch}");
+    let base_ref = submission_base_ref(repo_root, default_branch);
     for file in violations {
         let exists_on_base =
             run_git(repo_root, &["cat-file", "-e", &format!("{base_ref}:{file}")]).is_ok();
