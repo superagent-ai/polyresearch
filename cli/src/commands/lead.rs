@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use color_eyre::eyre::{Result, eyre};
@@ -40,17 +41,15 @@ pub async fn run(ctx: &AppContext, args: &LeadArgs) -> Result<()> {
     let sleep_secs = args.sleep_secs;
 
     loop {
-        let cmd = agent_command.clone();
-        let root = repo_root.clone();
-        let p = prompt.clone();
-
-        let result = tokio::task::spawn_blocking(move || {
-            agent::spawn_workflow_agent(&cmd, &root, &p, verbose)
-        })
+        match run_workflow_agent_once(
+            &agent_command,
+            &repo_root,
+            &prompt,
+            verbose,
+            "lead workflow",
+        )
         .await
-        .map_err(|e| eyre!("lead workflow agent task failed: {e}"))?;
-
-        match result {
+        {
             Ok(()) => {
                 match RepositoryState::derive(&ctx.github, &ctx.config).await {
                     Ok(repo_state) => {
@@ -58,16 +57,88 @@ pub async fn run(ctx: &AppContext, args: &LeadArgs) -> Result<()> {
                             eprintln!("Warning: post-agent decide sweep failed: {err}");
                         }
 
+                        let repo_state = match RepositoryState::derive(&ctx.github, &ctx.config)
+                            .await
+                        {
+                            Ok(repo_state) => repo_state,
+                            Err(err) => {
+                                eprintln!(
+                                    "Warning: could not verify queue depth after post-agent decide sweep: {err}"
+                                );
+                                break;
+                            }
+                        };
+
                         if repo_state.queue_depth < config.min_queue_depth {
                             eprintln!(
                                 "Warning: queue depth is {} (min = {}). \
                                  Lead agent may not have generated enough theses.",
                                 repo_state.queue_depth, config.min_queue_depth
                             );
-                            if !once {
-                                eprintln!("Restarting agent to refill queue in {sleep_secs}s...");
-                                tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
-                                continue;
+                            eprintln!("Running a focused queue refill retry...");
+
+                            let retry_prompt = agent::lead_generation_retry_prompt(
+                                repo_state.queue_depth,
+                                config.min_queue_depth,
+                            );
+                            match run_workflow_agent_once(
+                                &agent_command,
+                                &repo_root,
+                                &retry_prompt,
+                                verbose,
+                                "lead queue refill",
+                            )
+                            .await
+                            {
+                                Ok(()) => match RepositoryState::derive(&ctx.github, &ctx.config)
+                                    .await
+                                {
+                                    Ok(repo_state)
+                                        if repo_state.queue_depth < config.min_queue_depth =>
+                                    {
+                                        let err = eyre!(
+                                            "queue depth is {} (min = {}) after the lead workflow and focused refill retry",
+                                            repo_state.queue_depth,
+                                            config.min_queue_depth
+                                        );
+                                        if once {
+                                            return Err(err);
+                                        }
+                                        eprintln!("Warning: {err}");
+                                        eprintln!(
+                                            "Restarting agent to refill queue in {sleep_secs}s..."
+                                        );
+                                        tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+                                        continue;
+                                    }
+                                    Err(err) => {
+                                        if once {
+                                            return Err(eyre!(
+                                                "could not verify queue depth after focused refill retry: {err}"
+                                            ));
+                                        }
+                                        eprintln!(
+                                            "Warning: could not verify queue depth after focused refill retry: {err}"
+                                        );
+                                        eprintln!(
+                                            "Restarting agent to refill queue in {sleep_secs}s..."
+                                        );
+                                        tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+                                        continue;
+                                    }
+                                    _ => {}
+                                },
+                                Err(err) => {
+                                    eprintln!("Lead queue refill retry failed: {err}");
+                                    if once {
+                                        return Err(err);
+                                    }
+                                    eprintln!(
+                                        "Restarting agent to refill queue in {sleep_secs}s..."
+                                    );
+                                    tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+                                    continue;
+                                }
                             }
                         }
                     }
@@ -89,6 +160,22 @@ pub async fn run(ctx: &AppContext, args: &LeadArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn run_workflow_agent_once(
+    agent_command: &str,
+    repo_root: &Path,
+    prompt: &str,
+    verbose: bool,
+    task_name: &'static str,
+) -> Result<()> {
+    let cmd = agent_command.to_string();
+    let root = repo_root.to_path_buf();
+    let prompt = prompt.to_string();
+
+    tokio::task::spawn_blocking(move || agent::spawn_workflow_agent(&cmd, &root, &prompt, verbose))
+        .await
+        .map_err(|e| eyre!("{task_name} agent task failed: {e}"))?
 }
 
 pub fn decide_ready_prs(

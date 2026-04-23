@@ -97,7 +97,7 @@ Sleep 60 seconds, then go back to step 1.
 
 ## Important
 
-- Never run `polyresearch sync`, `polyresearch decide`, `polyresearch policy-check`, or `polyresearch generate`. Those are lead-only commands.
+- Never run `polyresearch init`, `polyresearch sync`, `polyresearch decide`, `polyresearch policy-check`, or `polyresearch generate`. Those are either setup-only or lead-only commands.
 - Never modify files in the project root checkout. Work only in .worktrees/ thesis worktrees.
 - Do not use raw `git add .` or `git commit` for code changes. `polyresearch commit` automatically stages only files within the editable surface.
 - Always record your attempt via `polyresearch attempt` before submitting or releasing. The protocol requires it.

@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use polyresearch::cli::{
-    BootstrapArgs, Cli, Commands, ContributeArgs, IssueArgs, LeadArgs, NodeOverrides, PrArgs,
+    BootstrapArgs, Cli, Commands, ContributeArgs, GenerateArgs, IssueArgs, LeadArgs,
+    NodeOverrides, PrArgs,
 };
 use polyresearch::commands::{self, AppContext};
 use polyresearch::comments::ProtocolComment;
@@ -881,10 +882,7 @@ async fn scenario_resume_reuses_existing_worktree_for_claimed_thesis() {
         workspace.branch
     );
     assert!(
-        workspace
-            .worktree_path
-            .join(".polyresearch-node.toml")
-            .exists(),
+        workspace.worktree_path.join(".polyresearch-node.toml").exists(),
         "resume should sync the node config into the existing worktree"
     );
     assert!(
@@ -1594,9 +1592,10 @@ async fn execute_decision_accepted_clears_claims_in_derived_state() {
         cli_version: None,
         default_branch: None,
     };
-    let repo_state = RepositoryState::derive(&(Arc::clone(&github) as Arc<dyn GitHubApi>), &config)
-        .await
-        .unwrap();
+    let repo_state =
+        RepositoryState::derive(&(Arc::clone(&github) as Arc<dyn GitHubApi>), &config)
+            .await
+            .unwrap();
     let thesis = repo_state.get_thesis(thesis_number).unwrap();
 
     assert!(github.is_pr_merged(pr_number), "PR should be merged");
@@ -3450,6 +3449,12 @@ async fn scenario_lead_run_decides_policy_passed_pr_after_agent_exit() {
 
     let agent_cmd = mock_agent_command("no_improvement");
     repo.write_full_setup("lead", "lead-node-post", &agent_cmd);
+    let program = fs::read_to_string(repo.path.join("PROGRAM.md")).unwrap();
+    fs::write(
+        repo.path.join("PROGRAM.md"),
+        program.replace("min_queue_depth: 5", "min_queue_depth: 0"),
+    )
+    .unwrap();
     repo.commit_all("setup");
 
     let github = Arc::new(ScenarioGitHub::new("lead"));

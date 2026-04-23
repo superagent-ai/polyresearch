@@ -22,6 +22,8 @@ You MUST complete ALL steps (1 through 6) in every iteration. Do not exit after 
 
 Keeping the queue at or above `min_queue_depth` is the primary goal of every iteration. Steps 1-3 are housekeeping; step 4 (queue check and generation) is the critical deliverable.
 
+Priority rule: if context, budget, or time is getting tight while you are in steps 1-3, stop starting new housekeeping work and go straight to step 4. Do not let sync, policy-check, or decide consume the whole iteration before the queue check runs.
+
 LOOP FOREVER:
 
 ### 1. Sync the ledger
@@ -55,10 +57,11 @@ Run `polyresearch status`. Read the queue depth (approved, unclaimed theses). Re
 If the queue is below `min_queue_depth`:
 1. Run `polyresearch audit`. If there are critical findings, resolve them first (acknowledge invalid ones, release stuck claims).
 2. Read PROGRAM.md for the research goal and strategy. Read results.tsv to understand what has been tried — including accepted (merged) work, not just failures.
-3. Generate thesis proposals: think of specific, actionable ideas that differ from everything already tried. Do not duplicate approaches from any prior thesis — whether accepted, no_improvement, or crashed. An accepted thesis means its optimization is already in the codebase; proposing the same idea again wastes a cycle.
-4. For each proposal, run: `polyresearch generate --title "<title>" --body "<body>"`
-5. Generate only enough theses to bring the queue back to `min_queue_depth`. Do not over-generate.
-6. After generating, run `polyresearch status` again to confirm queue depth is now at or above `min_queue_depth`.
+3. Run `polyresearch status --json` and extract the full list of thesis titles. Cross-reference those titles with results.tsv and build a dedup list of approaches that must not be repeated.
+4. Generate thesis proposals: think of specific, actionable ideas that differ from everything already tried. Before calling `polyresearch generate`, verify each proposal does not match any title or summary in your dedup list. Do not duplicate approaches from any prior thesis — whether accepted, no_improvement, or crashed. An accepted thesis means its optimization is already in the codebase; proposing the same idea again wastes a cycle.
+5. For each proposal, run: `polyresearch generate --title "<title>" --body "<body>"`. If the CLI rejects the title as a duplicate, do not retry with cosmetic rewording. Think of a genuinely different optimization.
+6. Generate only enough theses to bring the queue back to `min_queue_depth`. Do not over-generate.
+7. After generating, run `polyresearch status` again to confirm queue depth is now at or above `min_queue_depth`.
 
 If the queue is already at or above `min_queue_depth`, proceed to step 5.
 
@@ -87,4 +90,5 @@ Sleep 60 seconds, then go back to step 1.
 - Never create worktrees or modify code. Your job is coordination, not experimentation.
 - Stay on the default branch. All your git operations (sync, push) happen on the default branch.
 - Do not run manual `git pull` or `git push` around `polyresearch sync`; the CLI already handles the pull and retry logic internally.
+- The CLI will reject titles that match existing theses. If you see that error, treat it as proof the approach is a duplicate and generate a different idea.
 - If any step errors, do not stop. Log the error and move to the next step. The queue check in step 4 must always run.

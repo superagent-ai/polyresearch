@@ -401,6 +401,42 @@ fn clear_node_id_env() {
     }
 }
 
+fn expected_hostname() -> String {
+    if let Ok(hostname) = env::var("HOSTNAME")
+        && !hostname.trim().is_empty()
+    {
+        return hostname.trim().to_string();
+    }
+
+    let output = Command::new("hostname").output();
+    match output {
+        Ok(output) if output.status.success() => String::from_utf8(output.stdout)
+            .map(|value| value.trim().to_string())
+            .unwrap_or_else(|_| "local".to_string()),
+        _ => "local".to_string(),
+    }
+}
+
+fn assert_login_prefixed_node_id(node_id: &str, login: &str) {
+    let (actual_login, machine_id) = node_id
+        .split_once('/')
+        .unwrap_or_else(|| panic!("node_id should contain a login prefix: {node_id}"));
+    assert_eq!(actual_login, login);
+
+    let expected_prefix = format!("{}-", expected_hostname());
+    assert!(
+        machine_id.starts_with(&expected_prefix),
+        "node_id should start with hostname prefix `{expected_prefix}`, got `{machine_id}`"
+    );
+
+    let suffix = &machine_id[expected_prefix.len()..];
+    assert_eq!(suffix.len(), 4, "node suffix should be 4 hex chars");
+    assert!(
+        suffix.chars().all(|c| c.is_ascii_hexdigit()),
+        "node suffix should be hex, got `{suffix}`"
+    );
+}
+
 #[tokio::test]
 async fn init_writes_node_identity() {
     let _guard = NodeIdEnvGuard::lock_clean();
@@ -444,6 +480,29 @@ async fn init_writes_node_identity() {
     assert_eq!(config.node_id, "lead/test-node");
     assert_eq!(config.api_budget, DEFAULT_API_BUDGET);
     assert_eq!(config.capacity, 50);
+}
+
+#[test]
+fn ensure_node_config_includes_login_prefix() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("ensure-node-config-prefix");
+
+    commands::ensure_node_config(&repo.path, "alice").unwrap();
+
+    let config = NodeConfig::load(&repo.path).unwrap();
+    assert_login_prefixed_node_id(&config.node_id, "alice");
+}
+
+#[test]
+fn ensure_node_config_skips_existing_config() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("ensure-node-config-existing");
+    write_node_config(&repo.path, "alice/existing-node");
+
+    commands::ensure_node_config(&repo.path, "alice").unwrap();
+
+    let config = NodeConfig::load(&repo.path).unwrap();
+    assert_eq!(config.node_id, "alice/existing-node");
 }
 
 #[tokio::test]
@@ -892,6 +951,40 @@ async fn claim_rejects_already_claimed_thesis() {
 }
 
 #[tokio::test]
+async fn claim_rejects_thesis_with_active_claim_different_node_format() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("claim-format-mismatch");
+    let fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        false,
+        Commands::Claim(IssueArgs {
+            issue: fixture.issue.number,
+        }),
+    );
+    commands::write_node_id(&repo.path, "alice/node-a").unwrap();
+
+    let error = commands::claim::run(
+        &ctx,
+        &IssueArgs {
+            issue: fixture.issue.number,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("not claimable"));
+}
+
+#[tokio::test]
 async fn claim_rejects_closed_thesis() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("claim-closed");
@@ -1234,6 +1327,101 @@ async fn lead_only_command_rejects_non_lead_login() {
 
     let error = commands::sync::run(&ctx).await.unwrap_err();
     assert!(error.to_string().contains("lead-only"));
+}
+
+#[tokio::test]
+async fn lead_once_deficient_queue_spawns_retry_and_fails() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("lead-once-deficient");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(
+        repo.path.join("results.tsv"),
+        "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n",
+    )
+    .unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let args = polyresearch::cli::LeadArgs {
+        once: true,
+        sleep_secs: 0,
+        overrides: NodeOverrides {
+            agent_command: Some("true".to_string()),
+            ..Default::default()
+        },
+    };
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead",
+        false,
+        Commands::Lead(args.clone()),
+    );
+
+    let error = commands::lead::run(&ctx, &args).await.unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("queue depth") && message.contains("focused refill retry"),
+        "lead --once should fail when the queue stays deficient after retry: {message}"
+    );
+}
+
+#[tokio::test]
+async fn lead_once_sufficient_queue_succeeds() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("lead-once-sufficient");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(
+        repo.path.join("results.tsv"),
+        "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n",
+    )
+    .unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let mut issues = Vec::new();
+    let mut issue_comments = HashMap::new();
+    for number in 1..=5 {
+        issues.push(make_open_issue(
+            number,
+            &format!("Approved thesis {number}"),
+        ));
+        issue_comments.insert(number, vec![make_approval_comment(number, "lead")]);
+    }
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        issues,
+        issue_comments,
+        vec![],
+        HashMap::new(),
+    ));
+    let args = polyresearch::cli::LeadArgs {
+        once: true,
+        sleep_secs: 0,
+        overrides: NodeOverrides {
+            agent_command: Some("true".to_string()),
+            ..Default::default()
+        },
+    };
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead",
+        false,
+        Commands::Lead(args.clone()),
+    );
+
+    commands::lead::run(&ctx, &args).await.unwrap();
 }
 
 #[tokio::test]
@@ -2353,6 +2541,18 @@ fn make_open_issue(number: u64, title: &str) -> Issue {
         closed_at: None,
         author: None,
         url: None,
+    }
+}
+
+fn make_approval_comment(thesis: u64, lead_login: &str) -> IssueComment {
+    IssueComment {
+        id: thesis * 100,
+        body: ProtocolComment::Approval { thesis }.render(),
+        user: CommentUser {
+            login: lead_login.to_string(),
+        },
+        created_at: chrono::Utc::now(),
+        updated_at: None,
     }
 }
 
@@ -5690,6 +5890,39 @@ async fn admin_reopen_thesis_reopens_closed_issue() {
 // Category 8: Queue management / generate
 // ===========================================================================
 
+fn make_approved_generate_issue(
+    number: u64,
+    title: &str,
+    lead: &str,
+) -> (Issue, Vec<IssueComment>) {
+    let created_at = chrono::Utc::now();
+    let issue = Issue {
+        number,
+        title: title.to_string(),
+        body: Some("Test thesis body.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label {
+            name: "thesis".to_string(),
+        }],
+        created_at,
+        closed_at: None,
+        author: Some(Author {
+            login: lead.to_string(),
+        }),
+        url: Some(format!("https://github.com/test/repo/issues/{number}")),
+    };
+    let comments = vec![IssueComment {
+        id: number * 100,
+        body: ProtocolComment::Approval { thesis: number }.render(),
+        user: CommentUser {
+            login: lead.to_string(),
+        },
+        created_at: created_at + chrono::Duration::seconds(1),
+        updated_at: None,
+    }];
+    (issue, comments)
+}
+
 #[tokio::test]
 async fn generate_refuses_at_max_queue_depth() {
     let _guard = NodeIdEnvGuard::lock_clean();
@@ -5726,6 +5959,130 @@ async fn generate_refuses_at_max_queue_depth() {
 }
 
 #[tokio::test]
+async fn generate_rejects_duplicate_title() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("generate-duplicate-title");
+    let (issue, comments) = make_approved_generate_issue(41, "Regex caching optimization", "lead");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(41, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        "lead",
+        true,
+        Commands::Generate(GenerateArgs {
+            title: "Regex caching optimization".to_string(),
+            body: "Body".to_string(),
+        }),
+    );
+
+    let err = commands::generate::run(
+        &ctx,
+        &GenerateArgs {
+            title: "Regex caching optimization".to_string(),
+            body: "Body".to_string(),
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(err.to_string().contains("duplicates existing thesis"));
+    assert!(
+        err.to_string()
+            .contains("#41 (approved): Regex caching optimization")
+    );
+    assert!(
+        mock.created_issues.lock().unwrap().is_empty(),
+        "duplicate title should not create a new issue"
+    );
+}
+
+#[tokio::test]
+async fn generate_rejects_case_insensitive_duplicate() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("generate-case-insensitive-duplicate");
+    let (issue, comments) = make_approved_generate_issue(42, "Regex caching optimization", "lead");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(42, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        "lead",
+        true,
+        Commands::Generate(GenerateArgs {
+            title: "REGEX CACHING OPTIMIZATION".to_string(),
+            body: "Body".to_string(),
+        }),
+    );
+
+    let err = commands::generate::run(
+        &ctx,
+        &GenerateArgs {
+            title: "REGEX CACHING OPTIMIZATION".to_string(),
+            body: "Body".to_string(),
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(err.to_string().contains("duplicates existing thesis"));
+    assert!(
+        mock.created_issues.lock().unwrap().is_empty(),
+        "duplicate title should not create a new issue"
+    );
+}
+
+#[tokio::test]
+async fn generate_rejects_punctuation_variant_duplicate() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("generate-punctuation-duplicate");
+    let (issue, comments) = make_approved_generate_issue(44, "Regex caching optimization", "lead");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(44, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        "lead",
+        true,
+        Commands::Generate(GenerateArgs {
+            title: "regex-caching optimization".to_string(),
+            body: "Body".to_string(),
+        }),
+    );
+
+    let err = commands::generate::run(
+        &ctx,
+        &GenerateArgs {
+            title: "regex-caching optimization".to_string(),
+            body: "Body".to_string(),
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(err.to_string().contains("duplicates existing thesis"));
+    assert!(
+        mock.created_issues.lock().unwrap().is_empty(),
+        "punctuation-only title variation should not create a new issue"
+    );
+}
+
+#[tokio::test]
 async fn generate_succeeds_below_max_queue_depth() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("generate-below-max");
@@ -5757,6 +6114,44 @@ async fn generate_succeeds_below_max_queue_depth() {
     )
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn generate_allows_unique_title() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("generate-unique-title");
+    let (issue, comments) = make_approved_generate_issue(43, "Regex caching optimization", "lead");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(43, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        "lead",
+        false,
+        Commands::Generate(GenerateArgs {
+            title: "SIMD vectorization".to_string(),
+            body: "Body".to_string(),
+        }),
+    );
+
+    commands::generate::run(
+        &ctx,
+        &GenerateArgs {
+            title: "SIMD vectorization".to_string(),
+            body: "Body".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let created = mock.created_issues.lock().unwrap();
+    assert_eq!(created.len(), 1, "unique title should create one issue");
+    assert_eq!(created[0].title, "SIMD vectorization");
 }
 
 #[tokio::test]
