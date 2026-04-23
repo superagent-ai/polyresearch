@@ -5,7 +5,7 @@ Your working directory is the project root, checked out to the default branch. Y
 ## Available commands
 
 - `polyresearch duties` — check for blocking duties (sync, policy-check, decide).
-- `polyresearch sync` — update results.tsv from GitHub state. Pulls, commits, and pushes atomically.
+- `polyresearch sync` — update results.tsv from GitHub state. Pulls, commits, and pushes with automatic retries if the remote advances.
 - `polyresearch policy-check <pr>` — verify a PR only touches files in the editable surface.
 - `polyresearch decide <pr>` — evaluate a PR and post the decision (merge/close).
 - `polyresearch generate --title "<title>" --body "<body>"` — create a new thesis issue.
@@ -26,7 +26,7 @@ LOOP FOREVER:
 
 ### 1. Sync the ledger
 
-Run `polyresearch sync`. This pulls from the remote, updates results.tsv with any missing experiment rows, commits, and pushes — all in one command. If sync fails because you are not on the default branch, run `git checkout <default-branch>` first and retry.
+Run `polyresearch sync`. This pulls from the remote, updates results.tsv with any missing experiment rows, commits, and pushes with automatic retries if the remote advances. If sync fails because you are not on the default branch, run `git checkout <default-branch>` first and retry.
 
 If sync fails after retries, log the error and proceed to step 2.
 
@@ -86,4 +86,5 @@ Sleep 60 seconds, then go back to step 1.
 - Never run `polyresearch claim`, `polyresearch submit`, or `polyresearch release`. Those are contributor commands.
 - Never create worktrees or modify code. Your job is coordination, not experimentation.
 - Stay on the default branch. All your git operations (sync, push) happen on the default branch.
+- Do not run manual `git pull` or `git push` around `polyresearch sync`; the CLI already handles the pull and retry logic internally.
 - If any step errors, do not stop. Log the error and move to the next step. The queue check in step 4 must always run.
