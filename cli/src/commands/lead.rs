@@ -4,8 +4,8 @@ use color_eyre::eyre::{Result, eyre};
 
 use crate::agent;
 use crate::cli::LeadArgs;
-use crate::commands::{self, AppContext};
 use crate::commands::decide;
+use crate::commands::{self, AppContext};
 use crate::comments::{Outcome, ProtocolComment};
 use crate::config::{NodeConfig, ProtocolConfig};
 use crate::ledger::Ledger;
@@ -53,28 +53,27 @@ pub async fn run(ctx: &AppContext, args: &LeadArgs) -> Result<()> {
         match result {
             Ok(()) => {
                 match RepositoryState::derive(&ctx.github, &ctx.config).await {
-                    Ok(repo_state)
-                        if repo_state.queue_depth < config.min_queue_depth =>
-                    {
-                        eprintln!(
-                            "Warning: queue depth is {} (min = {}). \
-                             Lead agent may not have generated enough theses.",
-                            repo_state.queue_depth, config.min_queue_depth
-                        );
-                        if !once {
+                    Ok(repo_state) => {
+                        if let Err(err) = decide_ready_prs(ctx, &config, &repo_state) {
+                            eprintln!("Warning: post-agent decide sweep failed: {err}");
+                        }
+
+                        if repo_state.queue_depth < config.min_queue_depth {
                             eprintln!(
-                                "Restarting agent to refill queue in {sleep_secs}s..."
+                                "Warning: queue depth is {} (min = {}). \
+                                 Lead agent may not have generated enough theses.",
+                                repo_state.queue_depth, config.min_queue_depth
                             );
-                            tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
-                            continue;
+                            if !once {
+                                eprintln!("Restarting agent to refill queue in {sleep_secs}s...");
+                                tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+                                continue;
+                            }
                         }
                     }
                     Err(err) => {
-                        eprintln!(
-                            "Warning: could not verify queue depth after agent run: {err}"
-                        );
+                        eprintln!("Warning: could not verify queue depth after agent run: {err}");
                     }
-                    _ => {}
                 }
                 break;
             }

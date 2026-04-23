@@ -10,8 +10,7 @@ use color_eyre::eyre::{Result, eyre};
 use polyresearch::agent;
 use polyresearch::cli::{
     AdminArgs, AdminCommands, AdminReleaseClaimArgs, AdminReopenThesisArgs, AttemptArgs,
-    CommitArgs,
-    BatchClaimArgs, Cli, Commands, ContributeArgs, GenerateArgs, InitArgs, IssueArgs,
+    BatchClaimArgs, Cli, Commands, CommitArgs, ContributeArgs, GenerateArgs, InitArgs, IssueArgs,
     NodeOverrides, PrArgs, ReleaseArgs, StatusArgs,
 };
 use polyresearch::commands;
@@ -2167,6 +2166,89 @@ async fn duties_lead_duties_included_in_lead_context() {
 }
 
 #[tokio::test]
+async fn duties_transition_from_policy_check_to_decide_after_policy_pass() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("duties-policy-to-decide");
+    let now = chrono::Utc::now();
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+
+    let mut thesis = make_approved_thesis(1);
+    thesis.pull_requests.push(PullRequestState {
+        pr: PullRequest {
+            number: 8,
+            title: "Candidate PR".to_string(),
+            body: None,
+            state: "OPEN".to_string(),
+            head_ref_name: "thesis/1-test-attempt-1".to_string(),
+            head_ref_oid: Some("abc123".to_string()),
+            base_ref_name: Some("main".to_string()),
+            created_at: now,
+            closed_at: None,
+            merged_at: None,
+            author: Some(Author {
+                login: "alice".to_string(),
+            }),
+            url: None,
+            mergeable: None,
+        },
+        thesis_number: Some(1),
+        policy_pass: false,
+        maintainer_approved: true,
+        maintainer_rejected: false,
+        review_claims: vec![],
+        reviews: vec![],
+        decision: None,
+        findings: vec![],
+    });
+    thesis.phase = ThesisPhase::CandidateSubmitted;
+
+    let report = commands::duties::check(
+        &ctx,
+        &make_repo_state(vec![thesis.clone()], 1, 1, None),
+        DutyContext::Lead,
+    )
+    .unwrap();
+    assert!(
+        report.blocking.iter().any(|d| d.category == "policy-check"),
+        "lead context should require policy-check before policy_pass: {:?}",
+        report.blocking
+    );
+    assert!(
+        !report.blocking.iter().any(|d| d.category == "decide"),
+        "lead context should not offer decide before policy_pass: {:?}",
+        report.blocking
+    );
+
+    thesis.pull_requests[0].policy_pass = true;
+    thesis.phase = ThesisPhase::InReview;
+
+    let report = commands::duties::check(
+        &ctx,
+        &make_repo_state(vec![thesis], 1, 1, None),
+        DutyContext::Lead,
+    )
+    .unwrap();
+    assert!(
+        report.blocking.iter().any(|d| d.category == "decide"),
+        "lead context should offer decide after policy_pass: {:?}",
+        report.blocking
+    );
+    assert!(
+        !report.blocking.iter().any(|d| d.category == "policy-check"),
+        "policy-check duty should disappear after policy_pass: {:?}",
+        report.blocking
+    );
+}
+
+#[tokio::test]
 async fn duties_submit_skipped_for_closed_thesis() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("duties-closed-submit");
@@ -2347,9 +2429,13 @@ async fn duties_submit_replaced_by_release_after_two_rejections() {
                 head_ref_oid: Some("sha".to_string()),
                 base_ref_name: Some("main".to_string()),
                 created_at: now - chrono::Duration::hours(1) + chrono::Duration::minutes(i as i64),
-                closed_at: Some(now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64)),
+                closed_at: Some(
+                    now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64),
+                ),
                 merged_at: None,
-                author: Some(Author { login: "alice".to_string() }),
+                author: Some(Author {
+                    login: "alice".to_string(),
+                }),
                 url: None,
                 mergeable: None,
             },
@@ -2363,7 +2449,8 @@ async fn duties_submit_replaced_by_release_after_two_rejections() {
                 outcome: Outcome::NonImprovement,
                 candidate_sha: "sha".to_string(),
                 confirmations: 0,
-                created_at: now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64),
+                created_at: now - chrono::Duration::minutes(30)
+                    + chrono::Duration::minutes(i as i64),
             }),
             findings: vec![],
         });
@@ -2430,7 +2517,9 @@ async fn duties_submit_present_after_single_rejection() {
             created_at: now - chrono::Duration::hours(1),
             closed_at: Some(now - chrono::Duration::minutes(30)),
             merged_at: None,
-            author: Some(Author { login: "alice".to_string() }),
+            author: Some(Author {
+                login: "alice".to_string(),
+            }),
             url: None,
             mergeable: None,
         },
@@ -2509,9 +2598,13 @@ async fn duties_submit_replaced_by_release_after_stale_decisions() {
                 head_ref_oid: Some("sha".to_string()),
                 base_ref_name: Some("main".to_string()),
                 created_at: now - chrono::Duration::hours(1) + chrono::Duration::minutes(i as i64),
-                closed_at: Some(now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64)),
+                closed_at: Some(
+                    now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64),
+                ),
                 merged_at: None,
-                author: Some(Author { login: "alice".to_string() }),
+                author: Some(Author {
+                    login: "alice".to_string(),
+                }),
                 url: None,
                 mergeable: None,
             },
@@ -2525,7 +2618,8 @@ async fn duties_submit_replaced_by_release_after_stale_decisions() {
                 outcome: Outcome::Stale,
                 candidate_sha: "sha".to_string(),
                 confirmations: 0,
-                created_at: now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64),
+                created_at: now - chrono::Duration::minutes(30)
+                    + chrono::Duration::minutes(i as i64),
             }),
             findings: vec![],
         });
@@ -2641,9 +2735,13 @@ async fn duties_submit_present_when_prior_rejections_predate_claim() {
                 head_ref_oid: Some("old-sha".to_string()),
                 base_ref_name: Some("main".to_string()),
                 created_at: now - chrono::Duration::hours(8) + chrono::Duration::minutes(i as i64),
-                closed_at: Some(now - chrono::Duration::hours(5) + chrono::Duration::minutes(i as i64)),
+                closed_at: Some(
+                    now - chrono::Duration::hours(5) + chrono::Duration::minutes(i as i64),
+                ),
                 merged_at: None,
-                author: Some(Author { login: "alice".to_string() }),
+                author: Some(Author {
+                    login: "alice".to_string(),
+                }),
                 url: None,
                 mergeable: None,
             },
@@ -2983,9 +3081,7 @@ Test goal.
 fn write_node_config(path: &PathBuf, node_id: &str) {
     fs::write(
         path.join(".polyresearch-node.toml"),
-        format!(
-            "node_id = \"{node_id}\"\ncapacity = 75\n\n[agent]\ncommand = \"true\"\n"
-        ),
+        format!("node_id = \"{node_id}\"\ncapacity = 75\n\n[agent]\ncommand = \"true\"\n"),
     )
     .unwrap();
 }
@@ -4668,6 +4764,61 @@ fn make_decidable_state(
         vec![pr],
         HashMap::from([(pr_number, pr_comments)]),
     )
+}
+
+#[tokio::test]
+async fn lead_decide_ready_prs_decides_policy_passed_pr() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("lead-decide-ready");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(
+        repo.path.join("results.tsv"),
+        "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n",
+    )
+    .unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let (issues, issue_comments, prs, pr_comments) =
+        make_decidable_state(10, 50, 95.0, 90.0, "lead");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        issues,
+        issue_comments,
+        prs,
+        pr_comments,
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        "lead",
+        false,
+        Commands::Duties,
+    );
+    let config = ProtocolConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(&ctx.github, &config).await.unwrap();
+
+    commands::lead::decide_ready_prs(&ctx, &config, &repo_state).unwrap();
+
+    assert!(
+        mock.merged_prs.lock().unwrap().contains(&50),
+        "policy-passed PR should be decided and merged"
+    );
+    assert!(
+        mock.closed_issues.lock().unwrap().contains(&10),
+        "accepted thesis should be closed"
+    );
+    assert!(
+        mock.posted_issue_comments
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(number, body)| *number == 50
+                && body.contains("polyresearch:decision")
+                && body.contains("accepted")),
+        "should post an accepted decision comment on the PR"
+    );
 }
 
 #[tokio::test]

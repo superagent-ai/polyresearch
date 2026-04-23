@@ -7,7 +7,9 @@ use std::process::Command;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use polyresearch::cli::{BootstrapArgs, Cli, Commands, ContributeArgs, LeadArgs, NodeOverrides};
+use polyresearch::cli::{
+    BootstrapArgs, Cli, Commands, ContributeArgs, LeadArgs, NodeOverrides, PrArgs,
+};
 use polyresearch::commands::{self, AppContext};
 use polyresearch::comments::ProtocolComment;
 use polyresearch::config::{DEFAULT_API_BUDGET, ProgramSpec, ProtocolConfig};
@@ -2940,6 +2942,199 @@ fn seed_decidable_pr(github: &ScenarioGitHub, thesis_num: u64, pr_num: u64, lead
             filename: "src/decidable.js".to_string(),
         }],
     );
+}
+
+fn seed_pr_needing_policy_check(github: &ScenarioGitHub, thesis_num: u64, pr_num: u64, lead: &str) {
+    let now = chrono::Utc::now();
+    let branch = format!("thesis/{thesis_num}-policy-check-thesis");
+    let (issue, mut issue_comments) = make_approved_thesis(thesis_num, "Policy-check thesis", lead);
+
+    issue_comments.push(IssueComment {
+        id: thesis_num * 100 + 1,
+        body: ProtocolComment::Claim {
+            thesis: thesis_num,
+            node: "worker-a".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(30),
+        updated_at: None,
+    });
+
+    issue_comments.push(IssueComment {
+        id: thesis_num * 100 + 2,
+        body: ProtocolComment::Attempt {
+            thesis: thesis_num,
+            branch: branch.clone(),
+            metric: 0.95,
+            baseline_metric: Some(0.90),
+            observation: polyresearch::comments::Observation::Improved,
+            summary: "Improvement awaiting policy check".to_string(),
+            annotations: None,
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(20),
+        updated_at: None,
+    });
+
+    let pr = PullRequest {
+        number: pr_num,
+        title: format!("Thesis #{thesis_num}: Policy-check thesis"),
+        body: Some(format!("References #{thesis_num}")),
+        state: "OPEN".to_string(),
+        head_ref_name: branch,
+        head_ref_oid: Some("candidate-sha".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: now - chrono::Duration::minutes(15),
+        closed_at: None,
+        merged_at: None,
+        author: Some(Author {
+            login: "contributor".to_string(),
+        }),
+        url: Some(format!("https://github.com/test/repo/pull/{pr_num}")),
+        mergeable: Some("MERGEABLE".to_string()),
+    };
+
+    github.seed_issue(issue);
+    github.seed_issue_comments(thesis_num, issue_comments);
+    github.seed_pull_request(pr);
+    github.seed_pr_comments(pr_num, vec![]);
+    github.seed_pr_files(
+        pr_num,
+        vec![polyresearch::github::PullRequestFile {
+            filename: "src/policy-check.js".to_string(),
+        }],
+    );
+}
+
+#[tokio::test]
+async fn scenario_policy_check_then_decide_catches_up() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("policy-then-decide");
+    repo.init_git();
+    repo.write_full_setup("lead", "lead-node-policy", "echo noop");
+    repo.commit_all("setup");
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    seed_pr_needing_policy_check(&github, 64, 164, "lead");
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::PolicyCheck(PrArgs { pr: 164 }),
+    );
+
+    commands::policy_check::run(&ctx, &PrArgs { pr: 164 })
+        .await
+        .unwrap();
+
+    let pr_bodies = github.comment_bodies_on(164);
+    assert!(
+        pr_bodies
+            .iter()
+            .any(|body| body.contains("polyresearch:policy-pass")),
+        "policy_check should post a policy-pass comment: {pr_bodies:?}"
+    );
+
+    let config = ProtocolConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(&(Arc::clone(&github) as Arc<dyn GitHubApi>), &config)
+        .await
+        .unwrap();
+    let pr_state = repo_state
+        .theses
+        .iter()
+        .flat_map(|thesis| thesis.pull_requests.iter())
+        .find(|pr_state| pr_state.pr.number == 164)
+        .expect("PR #164 should be present in derived state");
+    assert!(
+        pr_state.policy_pass,
+        "policy_check should make PR #164 decidable"
+    );
+    assert!(
+        pr_state.decision.is_none(),
+        "policy_check alone should not post a decision"
+    );
+
+    let lead_ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Lead(LeadArgs {
+            once: true,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+    commands::lead::decide_ready_prs(&lead_ctx, &config, &repo_state).unwrap();
+
+    let pr_bodies = github.comment_bodies_on(164);
+    assert!(
+        pr_bodies
+            .iter()
+            .any(|body| body.contains("polyresearch:decision") && body.contains("accepted")),
+        "decide_ready_prs should post an accepted decision after policy-check: {pr_bodies:?}"
+    );
+    assert!(github.is_pr_merged(164), "PR #164 should be merged");
+    assert!(github.is_issue_closed(64), "thesis #64 should be closed");
+}
+
+#[tokio::test]
+async fn scenario_lead_run_decides_policy_passed_pr_after_agent_exit() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("lead-post-agent-decide");
+    repo.init_git();
+
+    let agent_cmd = mock_agent_command("no_improvement");
+    repo.write_full_setup("lead", "lead-node-post", &agent_cmd);
+    repo.commit_all("setup");
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    seed_decidable_pr(&github, 65, 165, "lead");
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Lead(LeadArgs {
+            once: true,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::lead::run(
+        &ctx,
+        &LeadArgs {
+            once: true,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "lead::run should succeed and apply the post-agent decide sweep: {result:?}"
+    );
+
+    let pr_bodies = github.comment_bodies_on(165);
+    assert!(
+        pr_bodies
+            .iter()
+            .any(|body| body.contains("polyresearch:decision") && body.contains("accepted")),
+        "lead::run should post a decision comment after the agent exits: {pr_bodies:?}"
+    );
+    assert!(github.is_pr_merged(165), "PR #165 should be merged");
+    assert!(github.is_issue_closed(65), "thesis #65 should be closed");
 }
 
 #[tokio::test]
