@@ -885,4 +885,22 @@ mod tests {
             "base prompt must frame queue depth as the primary goal"
         );
     }
+
+    #[test]
+    fn lead_prompt_reruns_duties_before_decide() {
+        let prompt = lead_workflow_prompt(false, 60);
+        let step3 = prompt
+            .split("### 3. Decide ready PRs")
+            .nth(1)
+            .and_then(|rest| {
+                rest.split("### 4. Check the queue and generate theses")
+                    .next()
+            })
+            .expect("prompt should contain steps 3 and 4");
+
+        assert!(
+            step3.contains("Run `polyresearch duties` again"),
+            "step 3 should refresh duties after policy checks: {step3}"
+        );
+    }
 }

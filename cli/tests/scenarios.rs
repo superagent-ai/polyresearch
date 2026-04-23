@@ -8,11 +8,11 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use polyresearch::cli::{
-    BootstrapArgs, Cli, Commands, ContributeArgs, IssueArgs, LeadArgs, NodeOverrides,
+    BootstrapArgs, Cli, Commands, ContributeArgs, IssueArgs, LeadArgs, NodeOverrides, PrArgs,
 };
 use polyresearch::commands::{self, AppContext};
 use polyresearch::comments::ProtocolComment;
-use polyresearch::config::{DEFAULT_API_BUDGET, ProgramSpec, ProtocolConfig};
+use polyresearch::config::{DEFAULT_API_BUDGET, NodeConfig, ProgramSpec, ProtocolConfig};
 use polyresearch::github::{
     Author, CommentUser, GitHubApi, Issue, IssueComment, Label, PullRequest, RepoRef,
 };
@@ -832,10 +832,7 @@ async fn scenario_resume_reuses_existing_worktree_for_claimed_thesis() {
         workspace.branch
     );
     assert!(
-        workspace
-            .worktree_path
-            .join(".polyresearch-node.toml")
-            .exists(),
+        workspace.worktree_path.join(".polyresearch-node.toml").exists(),
         "resume should sync the node config into the existing worktree"
     );
     assert!(
