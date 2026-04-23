@@ -1264,6 +1264,168 @@ fn execute_decision_accepted_merges_and_closes() {
     );
 }
 
+#[tokio::test]
+async fn execute_decision_accepted_clears_claims_in_derived_state() {
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    let now = chrono::Utc::now();
+    let thesis_number = 73;
+    let pr_number = 173;
+
+    github.seed_issue(Issue {
+        number: thesis_number,
+        title: "Accepted thesis".to_string(),
+        body: Some("Test accepted thesis.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label {
+            name: "thesis".to_string(),
+        }],
+        created_at: now - chrono::Duration::hours(1),
+        closed_at: None,
+        author: Some(Author {
+            login: "lead".to_string(),
+        }),
+        url: Some(format!(
+            "https://github.com/test/repo/issues/{thesis_number}"
+        )),
+    });
+    github.seed_issue_comments(
+        thesis_number,
+        vec![
+            IssueComment {
+                id: 7301,
+                body: ProtocolComment::Approval {
+                    thesis: thesis_number,
+                }
+                .render(),
+                user: CommentUser {
+                    login: "lead".to_string(),
+                },
+                created_at: now - chrono::Duration::minutes(50),
+                updated_at: None,
+            },
+            IssueComment {
+                id: 7302,
+                body: ProtocolComment::Claim {
+                    thesis: thesis_number,
+                    node: "worker-a".to_string(),
+                }
+                .render(),
+                user: CommentUser {
+                    login: "contributor".to_string(),
+                },
+                created_at: now - chrono::Duration::minutes(40),
+                updated_at: None,
+            },
+            IssueComment {
+                id: 7303,
+                body: ProtocolComment::Attempt {
+                    thesis: thesis_number,
+                    branch: "thesis/73-test".to_string(),
+                    metric: 0.95,
+                    baseline_metric: Some(0.90),
+                    observation: polyresearch::comments::Observation::Improved,
+                    summary: "Improved result".to_string(),
+                    annotations: None,
+                }
+                .render(),
+                user: CommentUser {
+                    login: "contributor".to_string(),
+                },
+                created_at: now - chrono::Duration::minutes(30),
+                updated_at: None,
+            },
+        ],
+    );
+    github.seed_pull_request(PullRequest {
+        number: pr_number,
+        title: "Candidate".to_string(),
+        body: Some(format!("References #{thesis_number}")),
+        state: "OPEN".to_string(),
+        head_ref_name: "thesis/73-test".to_string(),
+        head_ref_oid: Some("sha73".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: now - chrono::Duration::minutes(20),
+        closed_at: None,
+        merged_at: None,
+        author: Some(Author {
+            login: "contributor".to_string(),
+        }),
+        url: Some(format!("https://github.com/test/repo/pull/{pr_number}")),
+        mergeable: None,
+    });
+    github.seed_pr_comments(
+        pr_number,
+        vec![IssueComment {
+            id: 17301,
+            body: ProtocolComment::PolicyPass {
+                thesis: thesis_number,
+                candidate_sha: "sha73".to_string(),
+            }
+            .render(),
+            user: CommentUser {
+                login: "lead".to_string(),
+            },
+            created_at: now - chrono::Duration::minutes(10),
+            updated_at: None,
+        }],
+    );
+
+    commands::decide::execute_decision(
+        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
+        None,
+        pr_number,
+        thesis_number,
+        "sha73".to_string(),
+        "thesis/73-test",
+        polyresearch::comments::Outcome::Accepted,
+        0,
+        0,
+    )
+    .unwrap();
+
+    let config = ProtocolConfig {
+        required_confirmations: 0,
+        metric_tolerance: Some(0.01),
+        metric_direction: polyresearch::config::MetricDirection::HigherIsBetter,
+        metric_bound: None,
+        lead_github_login: Some("lead".to_string()),
+        maintainer_github_login: Some("lead".to_string()),
+        auto_approve: true,
+        assignment_timeout: std::time::Duration::from_secs(24 * 60 * 60),
+        review_timeout: std::time::Duration::from_secs(12 * 60 * 60),
+        min_queue_depth: 5,
+        max_queue_depth: Some(10),
+        cli_version: None,
+        default_branch: None,
+    };
+    let repo_state = RepositoryState::derive(&(Arc::clone(&github) as Arc<dyn GitHubApi>), &config)
+        .await
+        .unwrap();
+    let thesis = repo_state.get_thesis(thesis_number).unwrap();
+
+    assert!(github.is_pr_merged(pr_number), "PR should be merged");
+    assert!(
+        github.is_issue_closed(thesis_number),
+        "thesis should be closed after acceptance"
+    );
+    assert!(matches!(
+        thesis.phase,
+        polyresearch::state::ThesisPhase::Resolved {
+            outcome: polyresearch::comments::Outcome::Accepted
+        }
+    ));
+    assert!(
+        thesis.active_claims.is_empty(),
+        "resolved thesis should not retain stale claims, got: {:?}",
+        thesis.active_claims
+    );
+    assert!(
+        repo_state.active_nodes.is_empty(),
+        "resolved thesis should be removed from active_nodes, got: {:?}",
+        repo_state.active_nodes
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Lead hybrid loop error handling (issue #126)
 // ---------------------------------------------------------------------------

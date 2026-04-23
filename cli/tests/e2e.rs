@@ -7160,6 +7160,151 @@ fn admin_note_acknowledge_invalid_format_detected() {
     }
 }
 
+#[tokio::test]
+async fn repository_state_derive_excludes_resolved_claims_from_active_nodes() {
+    let resolved_fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    let now = chrono::Utc::now();
+    let active_issue = Issue {
+        number: 21,
+        title: "Still claimed thesis".to_string(),
+        body: Some("Thesis with an active claim.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label {
+            name: "thesis".to_string(),
+        }],
+        created_at: now - chrono::Duration::hours(2),
+        closed_at: None,
+        author: Some(Author {
+            login: resolved_fixture.lead_github_login.clone(),
+        }),
+        url: Some("https://example.test/issues/21".to_string()),
+    };
+    let active_issue_comments = vec![
+        IssueComment {
+            id: 2101,
+            body: ProtocolComment::Approval { thesis: 21 }.render(),
+            user: CommentUser {
+                login: resolved_fixture.lead_github_login.clone(),
+            },
+            created_at: now - chrono::Duration::minutes(90),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 2102,
+            body: ProtocolComment::Claim {
+                thesis: 21,
+                node: "worker-live".to_string(),
+            }
+            .render(),
+            user: CommentUser {
+                login: "bob".to_string(),
+            },
+            created_at: now - chrono::Duration::minutes(60),
+            updated_at: None,
+        },
+    ];
+    let resolved_pr = PullRequest {
+        number: 90,
+        title: "Candidate for thesis #20".to_string(),
+        body: None,
+        state: "MERGED".to_string(),
+        head_ref_name: "thesis/20-claimed-attempt-1".to_string(),
+        head_ref_oid: Some("deadbeef".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: now - chrono::Duration::minutes(30),
+        closed_at: None,
+        merged_at: Some(now),
+        author: Some(Author {
+            login: "alice".to_string(),
+        }),
+        url: Some("https://example.test/pulls/90".to_string()),
+        mergeable: None,
+    };
+    let resolved_pr_comments = vec![
+        IssueComment {
+            id: 9000,
+            body: ProtocolComment::PolicyPass {
+                thesis: resolved_fixture.issue.number,
+                candidate_sha: "deadbeef".to_string(),
+            }
+            .render(),
+            user: CommentUser {
+                login: resolved_fixture.lead_github_login.clone(),
+            },
+            created_at: now - chrono::Duration::minutes(20),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 9001,
+            body: ProtocolComment::Decision {
+                thesis: resolved_fixture.issue.number,
+                candidate_sha: "deadbeef".to_string(),
+                outcome: Outcome::Accepted,
+                confirmations: 0,
+            }
+            .render(),
+            user: CommentUser {
+                login: resolved_fixture.lead_github_login.clone(),
+            },
+            created_at: now - chrono::Duration::minutes(10),
+            updated_at: None,
+        },
+    ];
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![resolved_fixture.issue.clone(), active_issue.clone()],
+        HashMap::from([
+            (
+                resolved_fixture.issue.number,
+                resolved_fixture.comments.clone(),
+            ),
+            (active_issue.number, active_issue_comments),
+        ]),
+        vec![resolved_pr],
+        HashMap::from([(90, resolved_pr_comments)]),
+    ));
+    let config = ProtocolConfig {
+        required_confirmations: 0,
+        metric_tolerance: Some(0.01),
+        metric_direction: MetricDirection::HigherIsBetter,
+        metric_bound: None,
+        lead_github_login: Some(resolved_fixture.lead_github_login.clone()),
+        maintainer_github_login: Some("maintainer".to_string()),
+        auto_approve: true,
+        assignment_timeout: Duration::from_secs(24 * 60 * 60),
+        review_timeout: Duration::from_secs(12 * 60 * 60),
+        min_queue_depth: 5,
+        max_queue_depth: Some(10),
+        cli_version: None,
+        default_branch: None,
+    };
+
+    let state = RepositoryState::derive(&(mock as Arc<dyn GitHubApi>), &config)
+        .await
+        .unwrap();
+    let resolved = state.get_thesis(resolved_fixture.issue.number).unwrap();
+    let active = state.get_thesis(active_issue.number).unwrap();
+
+    assert!(matches!(
+        resolved.phase,
+        ThesisPhase::Resolved {
+            outcome: Outcome::Accepted
+        }
+    ));
+    assert!(
+        resolved.active_claims.is_empty(),
+        "resolved thesis should not keep stale claims, got: {:?}",
+        resolved.active_claims
+    );
+    assert!(matches!(active.phase, ThesisPhase::Claimed));
+    assert_eq!(
+        state.active_nodes,
+        vec!["worker-live".to_string()],
+        "only still-claimed theses should contribute to active_nodes"
+    );
+}
+
 fn load_issue_fixture(name: &str) -> IssueFixture {
     serde_json::from_str(include_fixture(name)).unwrap()
 }
