@@ -24,6 +24,7 @@ use scenario_mock::ScenarioGitHub;
 
 struct ScenarioRepo {
     path: PathBuf,
+    bare_path: Option<PathBuf>,
 }
 
 impl ScenarioRepo {
@@ -34,7 +35,10 @@ impl ScenarioRepo {
             .as_nanos();
         let path = env::temp_dir().join(format!("poly-scenario-{name}-{unique}"));
         fs::create_dir_all(&path).unwrap();
-        Self { path }
+        Self {
+            path,
+            bare_path: None,
+        }
     }
 
     fn init_git(&self) {
@@ -154,11 +158,26 @@ Test scenario goal.
         run_git(&self.path, &["add", "-A"]);
         run_git(&self.path, &["commit", "-m", message, "--allow-empty"]);
     }
+
+    fn add_bare_remote(&mut self, branch: &str) {
+        let bare = self.path.with_extension("bare.git");
+        fs::create_dir_all(&bare).unwrap();
+        run_git(&bare, &["init", "--bare"]);
+        run_git(
+            &self.path,
+            &["remote", "add", "origin", &bare.to_string_lossy()],
+        );
+        run_git(&self.path, &["push", "-u", "origin", branch]);
+        self.bare_path = Some(bare);
+    }
 }
 
 impl Drop for ScenarioRepo {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
+        if let Some(bare) = &self.bare_path {
+            let _ = fs::remove_dir_all(bare);
+        }
     }
 }
 
@@ -2933,13 +2952,14 @@ async fn scenario_decide_idempotent_no_duplicate_comment() {
 #[tokio::test]
 async fn scenario_sync_accepts_master_default_branch() {
     let _guard = EnvGuard::lock_clean();
-    let repo = ScenarioRepo::new("sync-master");
+    let mut repo = ScenarioRepo::new("sync-master");
     repo.init_git_on_branch("master");
     repo.write_program_md_with_branch("lead", Some("master"));
     repo.write_prepare_md();
     repo.write_results_tsv();
     repo.write_node_config("test-node", "echo noop");
     repo.commit_all("setup");
+    repo.add_bare_remote("master");
 
     let github = Arc::new(ScenarioGitHub::new("lead"));
 
