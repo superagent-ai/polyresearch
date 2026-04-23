@@ -60,8 +60,7 @@ fn pull_default_branch(repo_root: &PathBuf, branch: &str) -> Result<PullOutcome>
     }
 
     let rebase_result = run_git(repo_root, &["rebase", &remote_ref]);
-    if rebase_result.is_err() {
-        let rebase_error = rebase_result.unwrap_err();
+    if let Err(rebase_error) = rebase_result {
         let _ = run_git(repo_root, &["rebase", "--abort"]);
         if local_sync_commits_only(repo_root, &remote_ref)? {
             eprintln!(
@@ -111,12 +110,10 @@ pub async fn run(ctx: &AppContext) -> Result<()> {
 
     let default_branch = ctx.config.resolve_default_branch(&ctx.repo_root)?;
 
-    if !ctx.cli.dry_run {
-        if current_branch(&ctx.repo_root)? != default_branch {
-            return Err(eyre!(
-                "`polyresearch sync` must run from the `{default_branch}` branch"
-            ));
-        }
+    if !ctx.cli.dry_run && current_branch(&ctx.repo_root)? != default_branch {
+        return Err(eyre!(
+            "`polyresearch sync` must run from the `{default_branch}` branch"
+        ));
     }
 
     let mut restart_count = 0;

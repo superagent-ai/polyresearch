@@ -17,6 +17,7 @@ pub mod pace;
 pub mod policy_check;
 pub mod prune;
 pub mod release;
+pub mod resume;
 pub mod review;
 pub mod review_claim;
 pub mod status;
@@ -69,6 +70,7 @@ pub async fn run(ctx: AppContext) -> Result<()> {
         Commands::Pace => pace::run(&ctx).await,
         Commands::Status(args) => status::run(&ctx, args).await,
         Commands::Claim(args) => claim::run(&ctx, args).await,
+        Commands::Resume(args) => resume::run(&ctx, args).await,
         Commands::Commit(args) => commit::run(&ctx, args).await,
         Commands::BatchClaim(args) => batch_claim::run(&ctx, args).await,
         Commands::Attempt(args) => attempt::run(&ctx, args).await,
@@ -173,6 +175,17 @@ pub fn ensure_node_config(repo_root: &Path, login: &str) -> Result<()> {
     let node_id = format!("{login}/{machine_id}");
     write_node_config(repo_root, &node_id, &crate::cli::NodeOverrides::default())?;
     eprintln!("Initialized node as `{node_id}`");
+    Ok(())
+}
+
+pub fn sync_node_config_to_worktree(repo_root: &Path, worktree_path: &Path) -> Result<()> {
+    let src = repo_root.join(".polyresearch-node.toml");
+    if src.exists() {
+        let dst = worktree_path.join(".polyresearch-node.toml");
+        fs::copy(&src, &dst).wrap_err_with(|| {
+            format!("failed to sync node config to {}", worktree_path.display())
+        })?;
+    }
     Ok(())
 }
 

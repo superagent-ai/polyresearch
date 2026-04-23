@@ -34,6 +34,7 @@ pub enum Commands {
     Pace,
     Status(StatusArgs),
     Claim(IssueArgs),
+    Resume(IssueArgs),
     Commit(CommitArgs),
     BatchClaim(BatchClaimArgs),
     Attempt(AttemptArgs),

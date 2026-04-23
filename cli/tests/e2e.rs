@@ -1727,6 +1727,218 @@ async fn claim_creates_worktree_by_default() {
 }
 
 #[tokio::test]
+async fn resume_command_sets_up_worktree_for_existing_claim() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("resume-create");
+    init_git_repo(&repo.path);
+    let fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture.lead_github_login,
+        false,
+        Commands::Resume(IssueArgs {
+            issue: fixture.issue.number,
+        }),
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    commands::resume::run(
+        &ctx,
+        &IssueArgs {
+            issue: fixture.issue.number,
+        },
+    )
+    .await
+    .unwrap();
+
+    let expected_branch = format!(
+        "thesis/{}-{}",
+        fixture.issue.number,
+        commands::slugify(&fixture.issue.title)
+    );
+    let worktree_path = repo.path.join(".worktrees").join(format!(
+        "{}-{}",
+        fixture.issue.number,
+        commands::slugify(&fixture.issue.title)
+    ));
+
+    assert!(
+        worktree_path.exists(),
+        "expected worktree at {}",
+        worktree_path.display()
+    );
+    assert_eq!(
+        commands::current_branch(&worktree_path).unwrap(),
+        expected_branch
+    );
+    assert!(
+        worktree_path.join(".polyresearch/thesis.md").exists(),
+        "resume should write thesis context"
+    );
+    assert!(
+        worktree_path.join(".polyresearch-node.toml").exists(),
+        "resume should sync node config into the worktree"
+    );
+    assert!(
+        mock.posted_issue_comments.lock().unwrap().is_empty(),
+        "resume should not post a duplicate claim comment"
+    );
+}
+
+#[tokio::test]
+async fn resume_command_reuses_existing_worktree() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("resume-reuse");
+    init_git_repo(&repo.path);
+    let fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture.lead_github_login,
+        false,
+        Commands::Resume(IssueArgs {
+            issue: fixture.issue.number,
+        }),
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let workspace = commands::create_thesis_worktree(
+        &repo.path,
+        fixture.issue.number,
+        &fixture.issue.title,
+        "main",
+    )
+    .unwrap();
+    let thesis_dir = workspace.worktree_path.join(".polyresearch");
+    fs::create_dir_all(&thesis_dir).unwrap();
+    fs::write(thesis_dir.join("thesis.md"), "stale thesis context\n").unwrap();
+
+    commands::resume::run(
+        &ctx,
+        &IssueArgs {
+            issue: fixture.issue.number,
+        },
+    )
+    .await
+    .unwrap();
+
+    let thesis_content =
+        fs::read_to_string(workspace.worktree_path.join(".polyresearch/thesis.md")).unwrap();
+    assert!(
+        thesis_content.contains(&format!("# Thesis: {}", fixture.issue.title)),
+        "resume should refresh thesis context in an existing worktree"
+    );
+    assert_eq!(
+        commands::current_branch(&workspace.worktree_path).unwrap(),
+        workspace.branch
+    );
+    assert!(
+        workspace
+            .worktree_path
+            .join(".polyresearch-node.toml")
+            .exists(),
+        "resume should sync node config into the existing worktree"
+    );
+    assert!(
+        mock.posted_issue_comments.lock().unwrap().is_empty(),
+        "resume should not post a duplicate claim comment"
+    );
+}
+
+#[tokio::test]
+async fn resume_command_rejects_unclaimed_thesis() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("resume-unclaimed");
+    init_git_repo(&repo.path);
+    let fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        false,
+        Commands::Resume(IssueArgs {
+            issue: fixture.issue.number,
+        }),
+    );
+    commands::write_node_id(&repo.path, "other-node").unwrap();
+
+    let error = commands::resume::run(
+        &ctx,
+        &IssueArgs {
+            issue: fixture.issue.number,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("is not currently claimed by node `other-node`")
+    );
+}
+
+#[tokio::test]
+async fn resume_command_rejects_approved_not_claimed() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("resume-not-claimed");
+    init_git_repo(&repo.path);
+    let fixture = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        false,
+        Commands::Resume(IssueArgs {
+            issue: fixture.issue.number,
+        }),
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let error = commands::resume::run(
+        &ctx,
+        &IssueArgs {
+            issue: fixture.issue.number,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("is not currently claimed by node `test-node`")
+    );
+}
+
+#[tokio::test]
 async fn batch_claim_claims_requested_count() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("batch-claim");
@@ -2237,7 +2449,7 @@ fn observation_value_enum_accepts_snake_case() {
 // --- B5: Duties command ---
 
 #[tokio::test]
-async fn duties_reports_advisory_when_claim_has_no_attempts() {
+async fn duties_blocks_on_uncompleted_claims_for_contribute() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("duties-claim");
     let fixture = load_issue_fixture("claimed_no_attempts_issue.json");
@@ -2262,8 +2474,53 @@ async fn duties_reports_advisory_when_claim_has_no_attempts() {
         .unwrap();
     let report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
     assert!(
+        report.blocking.iter().any(|d| {
+            d.category == "resume"
+                && d.command == format!("polyresearch resume {}", fixture.issue.number)
+        }),
+        "should require contributors to resume their stale claim before claiming more work"
+    );
+    assert!(
+        report
+            .advisory
+            .iter()
+            .all(|d| d.category != "attempt" && d.category != "resume"),
+        "the claim-without-attempt item should not remain advisory for contributors"
+    );
+}
+
+#[tokio::test]
+async fn duties_advisory_on_uncompleted_claims_for_lead() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("duties-claim-lead");
+    let fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        false,
+        Commands::Duties,
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
+    let report = commands::duties::check(&ctx, &repo_state, DutyContext::Lead).unwrap();
+    assert!(
         report.advisory.iter().any(|d| d.category == "attempt"),
-        "should report a claim-without-attempt advisory"
+        "lead duties should keep the claim-without-attempt item advisory"
+    );
+    assert!(
+        report.blocking.iter().all(|d| d.category != "resume"),
+        "lead duties should not block on resume"
     );
 }
 
@@ -2509,7 +2766,7 @@ async fn duties_reports_waiting_for_approval_when_queue_has_only_submitted_these
 // --- B6: Duty gate on claim ---
 
 #[tokio::test]
-async fn claim_allows_additional_claims_under_sub_agent_capacity() {
+async fn claim_rejects_new_claim_when_resume_duty_exists() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("claim-gate");
     init_git_repo(&repo.path);
@@ -2539,6 +2796,60 @@ async fn claim_allows_additional_claims_under_sub_agent_capacity() {
     );
     commands::write_node_id(&repo.path, "test-node").unwrap();
 
+    let error = commands::claim::run(
+        &ctx,
+        &IssueArgs {
+            issue: fixture_open.issue.number,
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("cannot claim while blocking duties exist"),
+        "claim should be blocked until the stale claim is resumed"
+    );
+    assert!(
+        error.to_string().contains(&format!(
+            "polyresearch resume {}",
+            fixture_claimed.issue.number
+        )),
+        "claim error should point the user at the resume command"
+    );
+}
+
+#[tokio::test]
+async fn lead_claim_allows_new_claim_when_resume_duty_is_advisory() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("lead-claim-gate");
+    let fixture_claimed = load_issue_fixture("claimed_no_attempts_issue.json");
+    let fixture_open = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![fixture_claimed.issue.clone(), fixture_open.issue.clone()],
+        HashMap::from([
+            (
+                fixture_claimed.issue.number,
+                fixture_claimed.comments.clone(),
+            ),
+            (fixture_open.issue.number, fixture_open.comments.clone()),
+        ]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture_claimed.lead_github_login,
+        true,
+        Commands::Claim(IssueArgs {
+            issue: fixture_open.issue.number,
+        }),
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
     commands::claim::run(
         &ctx,
         &IssueArgs {
@@ -2547,6 +2858,49 @@ async fn claim_allows_additional_claims_under_sub_agent_capacity() {
     )
     .await
     .unwrap();
+
+    assert!(
+        mock.posted_issue_comments.lock().unwrap().is_empty(),
+        "dry-run lead claim should not post any claim comments"
+    );
+}
+
+#[tokio::test]
+async fn lead_batch_claim_allows_new_claim_when_resume_duty_is_advisory() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("lead-batch-claim-gate");
+    let fixture_claimed = load_issue_fixture("claimed_no_attempts_issue.json");
+    let fixture_open = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![fixture_claimed.issue.clone(), fixture_open.issue.clone()],
+        HashMap::from([
+            (
+                fixture_claimed.issue.number,
+                fixture_claimed.comments.clone(),
+            ),
+            (fixture_open.issue.number, fixture_open.comments.clone()),
+        ]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture_claimed.lead_github_login,
+        true,
+        Commands::BatchClaim(BatchClaimArgs { count: Some(1) }),
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    commands::batch_claim::run(&ctx, &BatchClaimArgs { count: Some(1) })
+        .await
+        .unwrap();
+
+    assert!(
+        mock.posted_issue_comments.lock().unwrap().is_empty(),
+        "dry-run lead batch-claim should not post any claim comments"
+    );
 }
 
 fn make_ctx(
@@ -5518,9 +5872,9 @@ async fn lead_decide_ready_prs_decides_policy_passed_pr() {
             .lock()
             .unwrap()
             .iter()
-            .any(|(number, body)| *number == 50
-                && body.contains("polyresearch:decision")
-                && body.contains("accepted")),
+            .any(|(number, body)| {
+                *number == 50 && body.contains("polyresearch:decision") && body.contains("accepted")
+            }),
         "should post an accepted decision comment on the PR"
     );
 }

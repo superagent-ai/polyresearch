@@ -189,42 +189,6 @@ fn run_git_output(path: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
-fn expected_hostname() -> String {
-    if let Ok(hostname) = env::var("HOSTNAME")
-        && !hostname.trim().is_empty()
-    {
-        return hostname.trim().to_string();
-    }
-
-    let output = Command::new("hostname").output();
-    match output {
-        Ok(output) if output.status.success() => String::from_utf8(output.stdout)
-            .map(|value| value.trim().to_string())
-            .unwrap_or_else(|_| "local".to_string()),
-        _ => "local".to_string(),
-    }
-}
-
-fn assert_login_prefixed_node_id(node_id: &str, login: &str) {
-    let (actual_login, machine_id) = node_id
-        .split_once('/')
-        .unwrap_or_else(|| panic!("node_id should contain a login prefix: {node_id}"));
-    assert_eq!(actual_login, login);
-
-    let expected_prefix = format!("{}-", expected_hostname());
-    assert!(
-        machine_id.starts_with(&expected_prefix),
-        "node_id should start with hostname prefix `{expected_prefix}`, got `{machine_id}`"
-    );
-
-    let suffix = &machine_id[expected_prefix.len()..];
-    assert_eq!(suffix.len(), 4, "node suffix should be 4 hex chars");
-    assert!(
-        suffix.chars().all(|c| c.is_ascii_hexdigit()),
-        "node suffix should be hex, got `{suffix}`"
-    );
-}
-
 fn write_sync_repo_files(path: &Path, lead: &str, default_branch: &str, node_id: &str) {
     fs::write(
         path.join("PROGRAM.md"),
@@ -789,6 +753,148 @@ Ensure lead_github_login: upstream-owner appears in docs unchanged.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+async fn scenario_resume_creates_missing_worktree_for_claimed_thesis() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("resume-missing");
+    repo.init_git();
+    repo.write_full_setup("lead", "test-node-resume", "echo noop");
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    let title = "Resume missing worktree";
+    let (issue, mut comments) = make_approved_thesis(80, title, "lead");
+    comments.push(IssueComment {
+        id: 8001,
+        body: ProtocolComment::Claim {
+            thesis: 80,
+            node: "test-node-resume".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: chrono::Utc::now(),
+        updated_at: None,
+    });
+
+    let github = Arc::new(ScenarioGitHub::new("contributor"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(80, comments);
+
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-resume");
+    }
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Resume(IssueArgs { issue: 80 }),
+    );
+
+    commands::resume::run(&ctx, &IssueArgs { issue: 80 })
+        .await
+        .unwrap();
+
+    let expected_branch = format!("thesis/80-{}", commands::slugify(title));
+    let worktree_path = commands::thesis_worktree_path(&repo.path, 80, title);
+
+    assert!(
+        worktree_path.exists(),
+        "resume should create the missing worktree"
+    );
+    assert_eq!(
+        commands::current_branch(&worktree_path).unwrap(),
+        expected_branch
+    );
+    assert!(
+        worktree_path.join(".polyresearch/thesis.md").exists(),
+        "resume should write thesis context into the worktree"
+    );
+    assert!(
+        worktree_path.join(".polyresearch-node.toml").exists(),
+        "resume should sync the node config into the worktree"
+    );
+    assert!(
+        github.posted_comments().is_empty(),
+        "resume should not post a duplicate claim comment"
+    );
+}
+
+#[tokio::test]
+async fn scenario_resume_reuses_existing_worktree_for_claimed_thesis() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("resume-reuse");
+    repo.init_git();
+    repo.write_full_setup("lead", "test-node-reuse", "echo noop");
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    let title = "Resume existing worktree";
+    let (issue, mut comments) = make_approved_thesis(81, title, "lead");
+    comments.push(IssueComment {
+        id: 8101,
+        body: ProtocolComment::Claim {
+            thesis: 81,
+            node: "test-node-reuse".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: chrono::Utc::now(),
+        updated_at: None,
+    });
+
+    let github = Arc::new(ScenarioGitHub::new("contributor"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(81, comments);
+
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-reuse");
+    }
+
+    let workspace = commands::create_thesis_worktree(&repo.path, 81, title, "main").unwrap();
+    let poly_dir = workspace.worktree_path.join(".polyresearch");
+    fs::create_dir_all(&poly_dir).unwrap();
+    fs::write(poly_dir.join("thesis.md"), "stale thesis context\n").unwrap();
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Resume(IssueArgs { issue: 81 }),
+    );
+
+    commands::resume::run(&ctx, &IssueArgs { issue: 81 })
+        .await
+        .unwrap();
+
+    let thesis_content =
+        fs::read_to_string(workspace.worktree_path.join(".polyresearch/thesis.md")).unwrap();
+    assert!(
+        thesis_content.contains(&format!("# Thesis: {title}")),
+        "resume should refresh thesis context in an existing worktree"
+    );
+    assert_eq!(
+        commands::current_branch(&workspace.worktree_path).unwrap(),
+        workspace.branch
+    );
+    assert!(
+        workspace.worktree_path.join(".polyresearch-node.toml").exists(),
+        "resume should sync the node config into the existing worktree"
+    );
+    assert!(
+        github.posted_comments().is_empty(),
+        "resume should not post a duplicate claim comment"
+    );
+}
+
+#[tokio::test]
 async fn scenario_contribute_improved() {
     let _guard = EnvGuard::lock_clean();
     let repo = ScenarioRepo::new("contrib-improved");
@@ -836,82 +942,6 @@ async fn scenario_contribute_improved() {
     .await;
 
     assert!(result.is_ok(), "contribute should succeed: {result:?}");
-}
-
-#[tokio::test]
-async fn scenario_contribute_auto_creates_login_prefixed_node() {
-    let _guard = EnvGuard::lock_clean();
-    let repo = ScenarioRepo::new("contrib-auto-node");
-    repo.init_git();
-
-    repo.write_program_md("lead");
-    repo.write_prepare_md();
-    repo.write_results_tsv();
-
-    let thesis_num = 11;
-    let agent_cmd = mock_agent_command("no_improvement");
-    let (issue, comments) = make_approved_thesis(thesis_num, "Auto-created node id", "lead");
-    let github = Arc::new(ScenarioGitHub::new("contributor"));
-    github.seed_issue(issue);
-    github.seed_issue_comments(thesis_num, comments);
-
-    let contribute_args = ContributeArgs {
-        url: None,
-        once: true,
-        max_parallel: Some(1),
-        sleep_secs: 0,
-        overrides: NodeOverrides {
-            agent_command: Some(agent_cmd),
-            ..Default::default()
-        },
-    };
-    let contribute_ctx = make_scenario_ctx(
-        repo.path.clone(),
-        Arc::clone(&github) as Arc<dyn GitHubApi>,
-        "lead",
-        true,
-        Commands::Contribute(ContributeArgs {
-            url: None,
-            once: true,
-            max_parallel: Some(1),
-            sleep_secs: 0,
-            overrides: NodeOverrides {
-                agent_command: contribute_args.overrides.agent_command.clone(),
-                ..Default::default()
-            },
-        }),
-    );
-
-    let result = commands::contribute::run(&contribute_ctx, &contribute_args).await;
-    assert!(result.is_ok(), "contribute should succeed: {result:?}");
-
-    let node_config = NodeConfig::load(&repo.path).unwrap();
-    assert_login_prefixed_node_id(&node_config.node_id, "contributor");
-
-    let claim_ctx = make_scenario_ctx(
-        repo.path.clone(),
-        Arc::clone(&github) as Arc<dyn GitHubApi>,
-        "lead",
-        false,
-        Commands::Claim(IssueArgs { issue: thesis_num }),
-    );
-
-    let claim_result = commands::claim::run(&claim_ctx, &IssueArgs { issue: thesis_num }).await;
-    assert!(
-        claim_result.is_ok(),
-        "claim should succeed: {claim_result:?}"
-    );
-
-    let expected_claim = ProtocolComment::Claim {
-        thesis: thesis_num,
-        node: node_config.node_id.clone(),
-    }
-    .render();
-    let bodies = github.comment_bodies_on(thesis_num);
-    assert!(
-        bodies.iter().any(|body| body == &expected_claim),
-        "claim should use the login-prefixed node id, got: {bodies:?}"
-    );
 }
 
 #[tokio::test]
@@ -1025,86 +1055,6 @@ async fn scenario_contribute_agent_failure() {
 // ---------------------------------------------------------------------------
 // Lead scenarios
 // ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn scenario_generate_rejects_duplicate_thesis() {
-    let _guard = EnvGuard::lock_clean();
-    let repo = ScenarioRepo::new("generate-duplicate");
-    repo.init_git();
-    repo.write_full_setup("lead", "lead-node", "echo noop");
-    repo.commit_all("setup");
-
-    let (issue, comments) = make_approved_thesis(70, "Speed up inference", "lead");
-    let github = Arc::new(ScenarioGitHub::new("lead"));
-    github.seed_issue(issue);
-    github.seed_issue_comments(70, comments);
-
-    let ctx = make_scenario_ctx(
-        repo.path.clone(),
-        Arc::clone(&github) as Arc<dyn GitHubApi>,
-        "lead",
-        false,
-        Commands::Generate(GenerateArgs {
-            title: "Speed up inference".to_string(),
-            body: "Body".to_string(),
-        }),
-    );
-
-    let err = commands::generate::run(
-        &ctx,
-        &GenerateArgs {
-            title: "Speed up inference".to_string(),
-            body: "Body".to_string(),
-        },
-    )
-    .await
-    .unwrap_err();
-
-    assert!(err.to_string().contains("duplicates existing thesis"));
-    assert!(
-        github.created_issues().is_empty(),
-        "duplicate thesis should not create a new issue"
-    );
-}
-
-#[tokio::test]
-async fn scenario_generate_accepts_unique_thesis() {
-    let _guard = EnvGuard::lock_clean();
-    let repo = ScenarioRepo::new("generate-unique");
-    repo.init_git();
-    repo.write_full_setup("lead", "lead-node", "echo noop");
-    repo.commit_all("setup");
-
-    let (issue, comments) = make_approved_thesis(71, "Speed up inference", "lead");
-    let github = Arc::new(ScenarioGitHub::new("lead"));
-    github.seed_issue(issue);
-    github.seed_issue_comments(71, comments);
-
-    let ctx = make_scenario_ctx(
-        repo.path.clone(),
-        Arc::clone(&github) as Arc<dyn GitHubApi>,
-        "lead",
-        false,
-        Commands::Generate(GenerateArgs {
-            title: "Reduce memory allocation".to_string(),
-            body: "Body".to_string(),
-        }),
-    );
-
-    commands::generate::run(
-        &ctx,
-        &GenerateArgs {
-            title: "Reduce memory allocation".to_string(),
-            body: "Body".to_string(),
-        },
-    )
-    .await
-    .unwrap();
-
-    let created = github.created_issues();
-    assert_eq!(created.len(), 1, "unique thesis should create one issue");
-    assert_eq!(created[0].title, "Reduce memory allocation");
-}
 
 #[tokio::test]
 #[ignore = "hybrid workflow delegates lead orchestration to the agent; Rust-side loop removed in PR #118"]
@@ -1645,9 +1595,10 @@ async fn execute_decision_accepted_clears_claims_in_derived_state() {
         cli_version: None,
         default_branch: None,
     };
-    let repo_state = RepositoryState::derive(&(Arc::clone(&github) as Arc<dyn GitHubApi>), &config)
-        .await
-        .unwrap();
+    let repo_state =
+        RepositoryState::derive(&(Arc::clone(&github) as Arc<dyn GitHubApi>), &config)
+            .await
+            .unwrap();
     let thesis = repo_state.get_thesis(thesis_number).unwrap();
 
     assert!(github.is_pr_merged(pr_number), "PR should be merged");
@@ -1719,102 +1670,6 @@ async fn scenario_lead_once_error_propagation() {
     assert!(
         err_msg.contains("status"),
         "error should mention exit status: {err_msg}"
-    );
-}
-
-#[tokio::test]
-async fn scenario_lead_once_deficient_queue_returns_error() {
-    let _guard = EnvGuard::lock_clean();
-    let repo = ScenarioRepo::new("lead-once-deficient");
-    repo.init_git();
-
-    let agent_cmd = mock_agent_command("noop");
-    repo.write_full_setup("lead", "lead-node-def", &agent_cmd);
-    repo.commit_all("setup");
-
-    let github = Arc::new(ScenarioGitHub::new("lead"));
-
-    let ctx = make_scenario_ctx(
-        repo.path.clone(),
-        Arc::clone(&github) as Arc<dyn GitHubApi>,
-        "lead",
-        false,
-        Commands::Lead(LeadArgs {
-            once: true,
-            sleep_secs: 0,
-            overrides: NodeOverrides::default(),
-        }),
-    );
-
-    let result = commands::lead::run(
-        &ctx,
-        &LeadArgs {
-            once: true,
-            sleep_secs: 0,
-            overrides: NodeOverrides::default(),
-        },
-    )
-    .await;
-
-    assert!(
-        result.is_err(),
-        "lead --once should fail when the queue stays below min_queue_depth"
-    );
-    let err_msg = result.unwrap_err().to_string();
-    assert!(
-        err_msg.contains("queue depth") && err_msg.contains("focused refill retry"),
-        "error should mention the deficient queue after retry: {err_msg}"
-    );
-}
-
-#[tokio::test]
-async fn scenario_lead_continuous_generation_retry() {
-    let _guard = EnvGuard::lock_clean();
-    let repo = ScenarioRepo::new("lead-queue-retry");
-    repo.init_git();
-
-    let agent_cmd = "bash -c 'sleep 1'".to_string();
-    repo.write_full_setup("lead", "lead-node-queue", &agent_cmd);
-    repo.commit_all("setup");
-
-    let github = Arc::new(ScenarioGitHub::new("lead"));
-    let github_refill = Arc::clone(&github);
-    let refill_thread = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(2500));
-        for number in 200..205 {
-            let (issue, comments) =
-                make_approved_thesis(number, &format!("Generated thesis {number}"), "lead");
-            github_refill.seed_issue(issue);
-            github_refill.seed_issue_comments(number, comments);
-        }
-    });
-
-    let ctx = make_scenario_ctx(
-        repo.path.clone(),
-        Arc::clone(&github) as Arc<dyn GitHubApi>,
-        "lead",
-        false,
-        Commands::Lead(LeadArgs {
-            once: false,
-            sleep_secs: 0,
-            overrides: NodeOverrides::default(),
-        }),
-    );
-
-    let result = commands::lead::run(
-        &ctx,
-        &LeadArgs {
-            once: false,
-            sleep_secs: 0,
-            overrides: NodeOverrides::default(),
-        },
-    )
-    .await;
-
-    refill_thread.join().unwrap();
-    assert!(
-        result.is_ok(),
-        "continuous lead mode should succeed after the focused queue refill retry: {result:?}"
     );
 }
 

@@ -226,7 +226,10 @@ mod tests {
         let result = smoke_test_agent("/nonexistent/binary", &dir, Duration::from_secs(5));
         assert!(result.is_err(), "should fail with nonexistent binary");
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("failed to start"), "error should mention start failure: {msg}");
+        assert!(
+            msg.contains("failed to start"),
+            "error should mention start failure: {msg}"
+        );
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -257,8 +260,14 @@ mod tests {
         let result = check_clean_working_tree(&dir);
         assert!(result.is_err(), "dirty tree should fail");
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("uncommitted"), "error should mention uncommitted: {msg}");
-        assert!(msg.contains("README.md"), "error should list the file: {msg}");
+        assert!(
+            msg.contains("uncommitted"),
+            "error should mention uncommitted: {msg}"
+        );
+        assert!(
+            msg.contains("README.md"),
+            "error should list the file: {msg}"
+        );
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -301,7 +310,10 @@ mod tests {
     #[test]
     fn root_flag_check_passes_without_flag() {
         let result = check_root_dangerous_flag("claude -p");
-        assert!(result.is_ok(), "command without the flag should always pass: {result:?}");
+        assert!(
+            result.is_ok(),
+            "command without the flag should always pass: {result:?}"
+        );
     }
 
     fn test_is_root() -> bool {

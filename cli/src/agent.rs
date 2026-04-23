@@ -277,12 +277,12 @@ pub fn parse_prepare_key(worktree_path: &Path, key: &str) -> Option<String> {
     let contents = fs::read_to_string(path).ok()?;
     for line in contents.lines() {
         let trimmed = line.trim();
-        if let Some((k, v)) = trimmed.split_once(':') {
-            if k.trim() == key {
-                let val = v.trim();
-                if !val.is_empty() {
-                    return Some(val.to_string());
-                }
+        if let Some((k, v)) = trimmed.split_once(':')
+            && k.trim() == key
+        {
+            let val = v.trim();
+            if !val.is_empty() {
+                return Some(val.to_string());
             }
         }
     }
@@ -847,6 +847,24 @@ mod tests {
         assert!(
             prompt.contains("50%"),
             "prompt must include the capacity percentage"
+        );
+    }
+
+    #[test]
+    fn contribute_prompt_mentions_resume_command() {
+        let prompt = contribute_workflow_prompt(false, 60, None, 75);
+        assert!(
+            prompt.contains("polyresearch resume <issue>"),
+            "prompt must teach the workflow agent how to resume stale claims"
+        );
+    }
+
+    #[test]
+    fn contribute_prompt_mentions_resume_duty_resolution() {
+        let prompt = contribute_workflow_prompt(false, 60, None, 75);
+        assert!(
+            prompt.contains("**resume**: run `polyresearch resume <issue>`"),
+            "prompt must explain how to resolve resume duties"
         );
     }
 
