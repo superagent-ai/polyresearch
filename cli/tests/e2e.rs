@@ -3,15 +3,17 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{
+    Arc, Mutex, MutexGuard, OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Result, eyre};
 use polyresearch::agent;
 use polyresearch::cli::{
     AdminArgs, AdminCommands, AdminReleaseClaimArgs, AdminReopenThesisArgs, AttemptArgs,
-    CommitArgs,
-    BatchClaimArgs, Cli, Commands, ContributeArgs, GenerateArgs, InitArgs, IssueArgs,
+    BatchClaimArgs, Cli, Commands, CommitArgs, ContributeArgs, GenerateArgs, InitArgs, IssueArgs,
     NodeOverrides, PrArgs, ReleaseArgs, StatusArgs,
 };
 use polyresearch::commands;
@@ -68,6 +70,7 @@ struct MockGitHubClient {
     created_issues: Mutex<Vec<Issue>>,
     assigned_issues: Mutex<Vec<(u64, Vec<String>)>>,
     next_issue_id: Mutex<u64>,
+    rate_limit_remaining: AtomicU64,
 }
 
 impl MockGitHubClient {
@@ -94,12 +97,18 @@ impl MockGitHubClient {
             created_issues: Mutex::new(Vec::new()),
             assigned_issues: Mutex::new(Vec::new()),
             next_issue_id: Mutex::new(max_issue + 100),
+            rate_limit_remaining: AtomicU64::new(4_000),
         }
     }
 
     fn with_pr_files(mut self, pr_number: u64, files: Vec<PullRequestFile>) -> Self {
         self.pr_files.insert(pr_number, files);
         self
+    }
+
+    fn set_rate_limit_remaining(&self, remaining: u64) {
+        self.rate_limit_remaining
+            .store(remaining, Ordering::Relaxed);
     }
 }
 
@@ -117,7 +126,9 @@ impl GitHubApi for MockGitHubClient {
     }
 
     fn get_rate_limit_status(&self) -> Result<RateLimitStatus> {
-        Ok(default_rate_limit_status(4_000))
+        Ok(default_rate_limit_status(
+            self.rate_limit_remaining.load(Ordering::Relaxed),
+        ))
     }
 
     fn repo_has_issues(&self) -> Result<bool> {
@@ -601,6 +612,62 @@ async fn pace_reports_exhausted_when_quota_below_derive_cost() {
     assert_eq!(output.rate_limit.commands_left, 0);
     assert!(output.rate_limit.is_low);
     assert!(output.rate_limit.remaining < output.rate_limit.derive_cost);
+}
+
+#[tokio::test]
+async fn pace_exits_with_rate_limit_code_when_remaining_below_derive_cost() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("pace-run-exhausted");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    mock.set_rate_limit_remaining(1);
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Pace);
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let err = commands::pace::run(&ctx).await.unwrap_err();
+    let process_exit = err
+        .downcast_ref::<commands::ProcessExit>()
+        .expect("pace should return a process exit when quota is exhausted");
+    assert_eq!(process_exit.code, 75);
+    assert!(process_exit.message.contains("RATE LIMITED"));
+}
+
+#[tokio::test]
+async fn pace_reports_secondary_headroom_context() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("pace-headroom");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    mock.set_rate_limit_remaining(4_500);
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Pace);
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let node_config = NodeConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
+    let rate_limit = ctx.github.get_rate_limit_status().unwrap();
+    let output = commands::pace::build_output(
+        ctx.repo.slug(),
+        ctx.api_budget,
+        &node_config,
+        &repo_state,
+        &rate_limit,
+    );
+
+    assert_eq!(output.rate_limit.remaining, 4_500);
+    assert!(!output.rate_limit.is_low);
+    assert!(output.rate_limit.commands_left > 0);
 }
 
 #[tokio::test]
@@ -2347,9 +2414,13 @@ async fn duties_submit_replaced_by_release_after_two_rejections() {
                 head_ref_oid: Some("sha".to_string()),
                 base_ref_name: Some("main".to_string()),
                 created_at: now - chrono::Duration::hours(1) + chrono::Duration::minutes(i as i64),
-                closed_at: Some(now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64)),
+                closed_at: Some(
+                    now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64),
+                ),
                 merged_at: None,
-                author: Some(Author { login: "alice".to_string() }),
+                author: Some(Author {
+                    login: "alice".to_string(),
+                }),
                 url: None,
                 mergeable: None,
             },
@@ -2363,7 +2434,8 @@ async fn duties_submit_replaced_by_release_after_two_rejections() {
                 outcome: Outcome::NonImprovement,
                 candidate_sha: "sha".to_string(),
                 confirmations: 0,
-                created_at: now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64),
+                created_at: now - chrono::Duration::minutes(30)
+                    + chrono::Duration::minutes(i as i64),
             }),
             findings: vec![],
         });
@@ -2430,7 +2502,9 @@ async fn duties_submit_present_after_single_rejection() {
             created_at: now - chrono::Duration::hours(1),
             closed_at: Some(now - chrono::Duration::minutes(30)),
             merged_at: None,
-            author: Some(Author { login: "alice".to_string() }),
+            author: Some(Author {
+                login: "alice".to_string(),
+            }),
             url: None,
             mergeable: None,
         },
@@ -2509,9 +2583,13 @@ async fn duties_submit_replaced_by_release_after_stale_decisions() {
                 head_ref_oid: Some("sha".to_string()),
                 base_ref_name: Some("main".to_string()),
                 created_at: now - chrono::Duration::hours(1) + chrono::Duration::minutes(i as i64),
-                closed_at: Some(now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64)),
+                closed_at: Some(
+                    now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64),
+                ),
                 merged_at: None,
-                author: Some(Author { login: "alice".to_string() }),
+                author: Some(Author {
+                    login: "alice".to_string(),
+                }),
                 url: None,
                 mergeable: None,
             },
@@ -2525,7 +2603,8 @@ async fn duties_submit_replaced_by_release_after_stale_decisions() {
                 outcome: Outcome::Stale,
                 candidate_sha: "sha".to_string(),
                 confirmations: 0,
-                created_at: now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64),
+                created_at: now - chrono::Duration::minutes(30)
+                    + chrono::Duration::minutes(i as i64),
             }),
             findings: vec![],
         });
@@ -2641,9 +2720,13 @@ async fn duties_submit_present_when_prior_rejections_predate_claim() {
                 head_ref_oid: Some("old-sha".to_string()),
                 base_ref_name: Some("main".to_string()),
                 created_at: now - chrono::Duration::hours(8) + chrono::Duration::minutes(i as i64),
-                closed_at: Some(now - chrono::Duration::hours(5) + chrono::Duration::minutes(i as i64)),
+                closed_at: Some(
+                    now - chrono::Duration::hours(5) + chrono::Duration::minutes(i as i64),
+                ),
                 merged_at: None,
-                author: Some(Author { login: "alice".to_string() }),
+                author: Some(Author {
+                    login: "alice".to_string(),
+                }),
                 url: None,
                 mergeable: None,
             },
@@ -2983,9 +3066,7 @@ Test goal.
 fn write_node_config(path: &PathBuf, node_id: &str) {
     fs::write(
         path.join(".polyresearch-node.toml"),
-        format!(
-            "node_id = \"{node_id}\"\ncapacity = 75\n\n[agent]\ncommand = \"true\"\n"
-        ),
+        format!("node_id = \"{node_id}\"\ncapacity = 75\n\n[agent]\ncommand = \"true\"\n"),
     )
     .unwrap();
 }
