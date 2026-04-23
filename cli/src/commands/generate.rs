@@ -152,7 +152,7 @@ fn normalize_title(title: &str) -> String {
     let stripped: String = title
         .to_lowercase()
         .chars()
-        .filter(|ch| ch.is_alphanumeric() || ch.is_whitespace())
+        .map(|ch| if ch.is_alphanumeric() { ch } else { ' ' })
         .collect();
     stripped.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -176,6 +176,14 @@ mod tests {
 
     #[test]
     fn normalize_title_strips_punctuation() {
-        assert_eq!(normalize_title("use SIMD (AVX-512)"), "use simd avx512");
+        assert_eq!(normalize_title("use SIMD (AVX-512)"), "use simd avx 512");
+    }
+
+    #[test]
+    fn normalize_title_treats_punctuation_as_separator() {
+        assert_eq!(
+            normalize_title("regex-caching/optimization"),
+            "regex caching optimization"
+        );
     }
 }

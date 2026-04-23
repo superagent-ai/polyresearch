@@ -5596,6 +5596,46 @@ async fn generate_rejects_case_insensitive_duplicate() {
 }
 
 #[tokio::test]
+async fn generate_rejects_punctuation_variant_duplicate() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("generate-punctuation-duplicate");
+    let (issue, comments) = make_approved_generate_issue(44, "Regex caching optimization", "lead");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(44, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        "lead",
+        true,
+        Commands::Generate(GenerateArgs {
+            title: "regex-caching optimization".to_string(),
+            body: "Body".to_string(),
+        }),
+    );
+
+    let err = commands::generate::run(
+        &ctx,
+        &GenerateArgs {
+            title: "regex-caching optimization".to_string(),
+            body: "Body".to_string(),
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(err.to_string().contains("duplicates existing thesis"));
+    assert!(
+        mock.created_issues.lock().unwrap().is_empty(),
+        "punctuation-only title variation should not create a new issue"
+    );
+}
+
+#[tokio::test]
 async fn generate_succeeds_below_max_queue_depth() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("generate-below-max");
