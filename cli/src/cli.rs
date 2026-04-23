@@ -34,6 +34,7 @@ pub enum Commands {
     Pace,
     Status(StatusArgs),
     Claim(IssueArgs),
+    Commit(CommitArgs),
     BatchClaim(BatchClaimArgs),
     Attempt(AttemptArgs),
     Annotate(AnnotateArgs),
@@ -100,6 +101,14 @@ pub struct StatusArgs {
 #[derive(Debug, Args, Clone)]
 pub struct IssueArgs {
     pub issue: u64,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct CommitArgs {
+    pub issue: u64,
+
+    #[arg(long)]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Args, Clone)]

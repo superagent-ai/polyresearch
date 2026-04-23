@@ -445,6 +445,13 @@ pub struct ProgramSpec {
 }
 
 impl ProgramSpec {
+    pub fn from_globs(can_modify: Vec<String>, cannot_modify: Vec<String>) -> Self {
+        Self {
+            can_modify,
+            cannot_modify,
+        }
+    }
+
     pub fn load(repo_root: &Path, _config: &ProtocolConfig) -> Result<Self> {
         let path = repo_root.join("PROGRAM.md");
         let contents = fs::read_to_string(&path)
@@ -453,10 +460,7 @@ impl ProgramSpec {
         let can_modify = parse_markdown_list(&contents, "## What you CAN modify");
         let cannot_modify = parse_markdown_list(&contents, "## What you CANNOT modify");
 
-        Ok(Self {
-            can_modify,
-            cannot_modify,
-        })
+        Ok(Self::from_globs(can_modify, cannot_modify))
     }
 
     pub fn editable_globset(&self) -> Result<GlobSet> {

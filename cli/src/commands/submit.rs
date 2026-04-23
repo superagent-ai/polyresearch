@@ -1,10 +1,15 @@
+use std::path::PathBuf;
+
 use color_eyre::eyre::{Result, eyre};
 use serde::Serialize;
 
 use crate::cli::IssueArgs;
 use crate::commands::guards::require_claimed_thesis;
-use crate::commands::{AppContext, current_branch, print_value, push_current_branch, read_node_id};
+use crate::commands::{
+    AppContext, current_branch, print_value, push_current_branch, read_node_id, run_git,
+};
 use crate::comments::Observation;
+use crate::editable_surface::EditableSurface;
 use crate::state::RepositoryState;
 
 #[derive(Debug, Serialize)]
@@ -40,11 +45,19 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
         return Err(eyre!("branch `{branch}` already has an open PR"));
     }
 
+    let default_branch = ctx.config.resolve_default_branch(&ctx.repo_root)?;
+    ensure_submittable(
+        &ctx.repo_root,
+        &EditableSurface::from_program(&ctx.program),
+        &default_branch,
+        &branch,
+        args.issue,
+    )?;
+
     if !ctx.cli.dry_run {
         push_current_branch(&ctx.repo_root)?;
     }
 
-    let default_branch = ctx.config.resolve_default_branch(&ctx.repo_root)?;
     let pr = if ctx.cli.dry_run {
         None
     } else {
@@ -85,4 +98,61 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
             )
         }
     })
+}
+
+pub fn ensure_submittable(
+    repo_root: &PathBuf,
+    surface: &EditableSurface,
+    default_branch: &str,
+    branch: &str,
+    issue: u64,
+) -> Result<()> {
+    let changed_files = changed_submission_files(repo_root, surface, default_branch)?;
+    if changed_files.is_empty() {
+        return Err(eyre!(
+            "branch `{branch}` has no file changes compared to `{default_branch}`; nothing to submit"
+        ));
+    }
+
+    let violations = check_editable_surface(repo_root, surface, default_branch)?;
+    if !violations.is_empty() {
+        return Err(eyre!(
+            "branch `{branch}` has {} file(s) outside the editable surface: {}. Use `polyresearch commit {issue}` to re-commit only editable changes.",
+            violations.len(),
+            violations.join(", ")
+        ));
+    }
+
+    Ok(())
+}
+
+pub fn changed_submission_files(
+    repo_root: &PathBuf,
+    surface: &EditableSurface,
+    default_branch: &str,
+) -> Result<Vec<String>> {
+    let diff_ref = diff_ref(repo_root, default_branch);
+    surface.changed_files_against(repo_root, &diff_ref)
+}
+
+pub fn check_editable_surface(
+    repo_root: &PathBuf,
+    surface: &EditableSurface,
+    default_branch: &str,
+) -> Result<Vec<String>> {
+    let diff_ref = diff_ref(repo_root, default_branch);
+    surface.violations_against(repo_root, &diff_ref)
+}
+
+fn submission_base_ref(repo_root: &PathBuf, default_branch: &str) -> String {
+    let remote_ref = format!("origin/{default_branch}");
+    if run_git(repo_root, &["rev-parse", "--verify", &remote_ref]).is_ok() {
+        remote_ref
+    } else {
+        default_branch.to_string()
+    }
+}
+
+fn diff_ref(repo_root: &PathBuf, default_branch: &str) -> String {
+    format!("{}...HEAD", submission_base_ref(repo_root, default_branch))
 }

@@ -3,6 +3,7 @@ pub mod cli;
 pub mod commands;
 pub mod comments;
 pub mod config;
+pub mod editable_surface;
 pub mod github;
 pub mod github_debug;
 pub mod hardware;

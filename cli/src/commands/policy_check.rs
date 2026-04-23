@@ -5,6 +5,7 @@ use crate::cli::PrArgs;
 use crate::commands::guards::{ensure_current_ledger, ensure_lead, require_pull_request};
 use crate::commands::{AppContext, print_value};
 use crate::comments::{Outcome, ProtocolComment};
+use crate::editable_surface::EditableSurface;
 use crate::state::{RepositoryState, parse_thesis_number_from_branch};
 
 #[derive(Debug, Serialize)]
@@ -30,19 +31,10 @@ pub async fn run(ctx: &AppContext, args: &PrArgs) -> Result<()> {
         return Err(eyre!("PR #{} already has a policy-pass", args.pr));
     }
 
+    let surface = EditableSurface::from_program(&ctx.program);
     let files = ctx.github.list_pull_request_files(args.pr)?;
-    let violations = files
-        .into_iter()
-        .filter_map(|file| {
-            let editable = ctx.program.is_editable(&file.filename).unwrap_or(false);
-            let protected = ctx.program.is_protected(&file.filename);
-            if editable && !protected {
-                None
-            } else {
-                Some(file.filename)
-            }
-        })
-        .collect::<Vec<_>>();
+    let violations =
+        surface.violations_for_paths(files.iter().map(|file| file.filename.as_str()))?;
 
     let passed = violations.is_empty();
     if !ctx.cli.dry_run {

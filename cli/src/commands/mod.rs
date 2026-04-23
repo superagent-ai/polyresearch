@@ -5,6 +5,7 @@ pub mod audit;
 pub mod batch_claim;
 pub mod bootstrap;
 pub mod claim;
+pub mod commit;
 pub mod contribute;
 pub mod decide;
 pub mod duties;
@@ -66,6 +67,7 @@ pub async fn run(ctx: AppContext) -> Result<()> {
         Commands::Pace => pace::run(&ctx).await,
         Commands::Status(args) => status::run(&ctx, args).await,
         Commands::Claim(args) => claim::run(&ctx, args).await,
+        Commands::Commit(args) => commit::run(&ctx, args).await,
         Commands::BatchClaim(args) => batch_claim::run(&ctx, args).await,
         Commands::Attempt(args) => attempt::run(&ctx, args).await,
         Commands::Annotate(args) => annotate::run(&ctx, args).await,

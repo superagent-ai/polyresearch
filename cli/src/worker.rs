@@ -8,6 +8,7 @@ use crate::agent::{self, AgentOutcome, ExperimentResult, RecoveredMetric};
 use crate::commands;
 use crate::comments::{Observation, ProtocolComment, ReleaseReason};
 use crate::config::MetricDirection;
+use crate::editable_surface::EditableSurface;
 use crate::github::GitHubApi;
 use crate::state::ThesisState;
 
@@ -200,6 +201,16 @@ impl ThesisWorker {
 
         if result.is_improved() && !dry_run {
             self.commit_editable_surface()?;
+            commands::submit::ensure_submittable(
+                &self.worktree_path,
+                &EditableSurface::new(
+                    self.ctx.editable_globs.clone(),
+                    self.ctx.protected_globs.clone(),
+                ),
+                &self.ctx.default_branch,
+                &self.branch,
+                self.ctx.issue_number,
+            )?;
             commands::run_git(&self.worktree_path, &["push", "-u", "origin", &self.branch])?;
 
             let default_branch = &self.ctx.default_branch;
@@ -392,28 +403,11 @@ impl ThesisWorker {
     }
 
     fn commit_editable_surface(&self) -> Result<()> {
-        for glob in &self.ctx.editable_globs {
-            let _ = commands::run_git(&self.worktree_path, &["add", glob]);
-        }
-
-        let always_protected = [
-            ".polyresearch/",
-            ".polyresearch-node.toml",
-            "PROGRAM.md",
-            "PREPARE.md",
-        ];
-        for path in &always_protected {
-            let _ = commands::run_git(&self.worktree_path, &["reset", "HEAD", "--", path]);
-        }
-        for glob in &self.ctx.protected_globs {
-            let _ = commands::run_git(&self.worktree_path, &["reset", "HEAD", "--", glob]);
-        }
-
-        let has_staged =
-            commands::run_git(&self.worktree_path, &["diff", "--cached", "--quiet"]).is_err();
-        if !has_staged {
-            return Err(eyre!("no changes to commit within the editable surface"));
-        }
+        EditableSurface::new(
+            self.ctx.editable_globs.clone(),
+            self.ctx.protected_globs.clone(),
+        )
+        .stage_and_validate(&self.worktree_path)?;
 
         commands::run_git(
             &self.worktree_path,

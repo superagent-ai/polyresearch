@@ -9,6 +9,7 @@ use crate::cli::ContributeArgs;
 use crate::commands::{self, AppContext};
 use crate::comments::{Observation, ProtocolComment, ReleaseReason};
 use crate::config::{NodeConfig, ProgramSpec, ProtocolConfig};
+use crate::editable_surface::EditableSurface;
 use crate::github::{GitHubApi, GitHubClient, RepoRef};
 use crate::hardware;
 use crate::state::{RepositoryState, ThesisPhase, ThesisState};
@@ -109,6 +110,7 @@ async fn run_iteration(
     node_config: &NodeConfig,
 ) -> Result<()> {
     let mut repo_state = RepositoryState::derive(&ctx.github, config).await?;
+    let surface = EditableSurface::from_program(program);
 
     // Auto-submit any improved theses that lack an open PR.
     let mut submitted_any = false;
@@ -153,6 +155,19 @@ async fn run_iteration(
                     }
                     continue;
                 }
+                if let Err(err) = commands::submit::ensure_submittable(
+                    &worktree_path,
+                    &surface,
+                    default_branch,
+                    &branch,
+                    thesis.issue.number,
+                ) {
+                    eprintln!(
+                        "Warning: thesis #{} is not ready to submit: {err}",
+                        thesis.issue.number
+                    );
+                    continue;
+                }
                 if !ctx.cli.dry_run {
                     match commands::run_git(&worktree_path, &["push", "-u", "origin", &branch]) {
                         Ok(_) => match ctx.github.create_pull_request(
@@ -183,7 +198,11 @@ async fn run_iteration(
         repo_state = RepositoryState::derive(&ctx.github, config).await?;
     }
 
-    let duty_report = crate::commands::duties::check(ctx, &repo_state, crate::commands::duties::DutyContext::Contribute)?;
+    let duty_report = crate::commands::duties::check(
+        ctx,
+        &repo_state,
+        crate::commands::duties::DutyContext::Contribute,
+    )?;
     if !duty_report.blocking.is_empty() {
         let items: Vec<String> = duty_report
             .blocking
@@ -205,7 +224,9 @@ async fn run_iteration(
 
     let claimable_ignoring_cooldown = claimable_theses(&repo_state, node_id, 0);
     let claimable = claimable_theses(&repo_state, node_id, args.sleep_secs);
-    let cooldown_skipped = claimable_ignoring_cooldown.len().saturating_sub(claimable.len());
+    let cooldown_skipped = claimable_ignoring_cooldown
+        .len()
+        .saturating_sub(claimable.len());
     if cooldown_skipped > 0 {
         eprintln!("{cooldown_skipped} thesis(es) skipped due to crash cooldown");
     }
@@ -386,7 +407,10 @@ pub fn is_crash_cooldown(
 
     for r in &thesis.releases {
         if r.node == node_id
-            && matches!(r.reason, ReleaseReason::InfraFailure | ReleaseReason::Timeout)
+            && matches!(
+                r.reason,
+                ReleaseReason::InfraFailure | ReleaseReason::Timeout
+            )
         {
             count += 1;
             last_crash = Some(match last_crash {
@@ -477,7 +501,6 @@ fn parse_eval_footprint_memory(repo_root: &Path) -> f64 {
         .and_then(|v| v.parse().ok())
         .unwrap_or(1.0)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -611,10 +634,7 @@ mod tests {
         let now = Utc::now();
         let mut releases = Vec::new();
         for i in 0..20 {
-            releases.push(infra_release(
-                "node-a",
-                now - chrono::Duration::seconds(i),
-            ));
+            releases.push(infra_release("node-a", now - chrono::Duration::seconds(i)));
         }
         let thesis = make_thesis_with_releases(releases);
 
