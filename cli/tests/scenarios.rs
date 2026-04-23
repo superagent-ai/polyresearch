@@ -24,6 +24,7 @@ use scenario_mock::ScenarioGitHub;
 
 struct ScenarioRepo {
     path: PathBuf,
+    bare_path: Option<PathBuf>,
 }
 
 impl ScenarioRepo {
@@ -34,7 +35,10 @@ impl ScenarioRepo {
             .as_nanos();
         let path = env::temp_dir().join(format!("poly-scenario-{name}-{unique}"));
         fs::create_dir_all(&path).unwrap();
-        Self { path }
+        Self {
+            path,
+            bare_path: None,
+        }
     }
 
     fn init_git(&self) {
@@ -128,11 +132,26 @@ Test scenario goal.
         run_git(&self.path, &["add", "-A"]);
         run_git(&self.path, &["commit", "-m", message, "--allow-empty"]);
     }
+
+    fn add_bare_remote(&mut self, branch: &str) {
+        let bare = self.path.with_extension("bare.git");
+        fs::create_dir_all(&bare).unwrap();
+        run_git(&bare, &["init", "--bare"]);
+        run_git(
+            &self.path,
+            &["remote", "add", "origin", &bare.to_string_lossy()],
+        );
+        run_git(&self.path, &["push", "-u", "origin", branch]);
+        self.bare_path = Some(bare);
+    }
 }
 
 impl Drop for ScenarioRepo {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
+        if let Some(bare) = &self.bare_path {
+            let _ = fs::remove_dir_all(bare);
+        }
     }
 }
 
@@ -663,7 +682,7 @@ async fn scenario_contribute_agent_failure() {
 
     assert!(
         result.is_err(),
-        "contribute --once should propagate agent failure"
+        "contribute --once should propagate agent failure: {result:?}"
     );
     let err_msg = result.unwrap_err().to_string();
     assert!(
@@ -677,6 +696,7 @@ async fn scenario_contribute_agent_failure() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "hybrid workflow delegates lead orchestration to the agent; Rust-side loop removed in PR #118"]
 async fn scenario_lead_accept_pr() {
     let _guard = EnvGuard::lock_clean();
     let repo = ScenarioRepo::new("lead-accept");
@@ -805,6 +825,7 @@ async fn scenario_lead_accept_pr() {
 }
 
 #[tokio::test]
+#[ignore = "hybrid workflow delegates lead orchestration to the agent; Rust-side loop removed in PR #118"]
 async fn scenario_lead_reject_non_improvement() {
     let _guard = EnvGuard::lock_clean();
     let repo = ScenarioRepo::new("lead-reject");
@@ -1181,6 +1202,7 @@ async fn scenario_lead_continuous_recovery() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "hybrid workflow delegates lead orchestration to the agent; Rust-side loop removed in PR #118"]
 async fn scenario_lead_closes_conflicting_pr_as_stale() {
     let _guard = EnvGuard::lock_clean();
     let repo = ScenarioRepo::new("lead-conflict");
@@ -3009,13 +3031,14 @@ async fn scenario_decide_idempotent_no_duplicate_comment() {
 #[tokio::test]
 async fn scenario_sync_accepts_master_default_branch() {
     let _guard = EnvGuard::lock_clean();
-    let repo = ScenarioRepo::new("sync-master");
+    let mut repo = ScenarioRepo::new("sync-master");
     repo.init_git_on_branch("master");
     repo.write_program_md_with_branch("lead", Some("master"));
     repo.write_prepare_md();
     repo.write_results_tsv();
     repo.write_node_config("test-node", "echo noop");
     repo.commit_all("setup");
+    repo.add_bare_remote("master");
 
     let github = Arc::new(ScenarioGitHub::new("lead"));
 
@@ -3385,7 +3408,10 @@ async fn scenario_preflight_broken_agent_aborts_contribute() {
     )
     .await;
 
-    assert!(result.is_err(), "contribute should fail on broken agent command");
+    assert!(
+        result.is_err(),
+        "contribute should fail on broken agent command"
+    );
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("pre-flight"),
@@ -3459,7 +3485,11 @@ async fn scenario_preflight_dirty_tree_aborts_contribute() {
     repo.commit_all("setup");
 
     // Modify a tracked file to simulate experiment leakage.
-    fs::write(repo.path.join("src/main.js"), "// leaked experiment change\n").unwrap();
+    fs::write(
+        repo.path.join("src/main.js"),
+        "// leaked experiment change\n",
+    )
+    .unwrap();
 
     let (issue, comments) = make_approved_thesis(201, "Dirty tree thesis", "lead");
     let github = Arc::new(ScenarioGitHub::new("contributor"));
@@ -3496,7 +3526,10 @@ async fn scenario_preflight_dirty_tree_aborts_contribute() {
     )
     .await;
 
-    assert!(result.is_err(), "contribute should fail with dirty working tree");
+    assert!(
+        result.is_err(),
+        "contribute should fail with dirty working tree"
+    );
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("uncommitted"),
@@ -3834,20 +3867,14 @@ async fn scenario_crash_cooldown_filters_claimable_theses() {
     github.seed_issue_comments(71, comments2);
 
     let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
-    let repo_state = RepositoryState::derive(
-        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
-        &config,
-    )
-    .await
-    .unwrap();
+    let repo_state = RepositoryState::derive(&(Arc::clone(&github) as Arc<dyn GitHubApi>), &config)
+        .await
+        .unwrap();
 
     // With a 60s base cooldown, thesis #70 (2 crashes, last 10s ago, cooldown = 120s)
     // should be excluded.
-    let claimable = polyresearch::commands::contribute::claimable_theses(
-        &repo_state,
-        "test-node",
-        60,
-    );
+    let claimable =
+        polyresearch::commands::contribute::claimable_theses(&repo_state, "test-node", 60);
     let claimable_numbers: Vec<u64> = claimable.iter().map(|t| t.issue.number).collect();
     assert!(
         !claimable_numbers.contains(&70),
@@ -3859,13 +3886,12 @@ async fn scenario_crash_cooldown_filters_claimable_theses() {
     );
 
     // With base_cooldown_secs = 0, cooldown is disabled; both should be claimable.
-    let claimable_no_cooldown = polyresearch::commands::contribute::claimable_theses(
-        &repo_state,
-        "test-node",
-        0,
-    );
-    let numbers_no_cooldown: Vec<u64> =
-        claimable_no_cooldown.iter().map(|t| t.issue.number).collect();
+    let claimable_no_cooldown =
+        polyresearch::commands::contribute::claimable_theses(&repo_state, "test-node", 0);
+    let numbers_no_cooldown: Vec<u64> = claimable_no_cooldown
+        .iter()
+        .map(|t| t.issue.number)
+        .collect();
     assert!(
         numbers_no_cooldown.contains(&70),
         "thesis #70 should be claimable with zero cooldown, got: {numbers_no_cooldown:?}"
@@ -3921,30 +3947,21 @@ async fn scenario_crash_cooldown_per_node() {
     github.seed_issue_comments(75, comments);
 
     let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
-    let repo_state = RepositoryState::derive(
-        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
-        &config,
-    )
-    .await
-    .unwrap();
+    let repo_state = RepositoryState::derive(&(Arc::clone(&github) as Arc<dyn GitHubApi>), &config)
+        .await
+        .unwrap();
 
     // node-a should be blocked by cooldown.
-    let claimable_a = polyresearch::commands::contribute::claimable_theses(
-        &repo_state,
-        "node-a",
-        60,
-    );
+    let claimable_a =
+        polyresearch::commands::contribute::claimable_theses(&repo_state, "node-a", 60);
     assert!(
         !claimable_a.iter().any(|t| t.issue.number == 75),
         "node-a should be blocked by crash cooldown on thesis #75"
     );
 
     // node-b should NOT be blocked -- the crash is local to node-a.
-    let claimable_b = polyresearch::commands::contribute::claimable_theses(
-        &repo_state,
-        "node-b",
-        60,
-    );
+    let claimable_b =
+        polyresearch::commands::contribute::claimable_theses(&repo_state, "node-b", 60);
     assert!(
         claimable_b.iter().any(|t| t.issue.number == 75),
         "node-b should be able to claim thesis #75 (crash was node-a's)"
