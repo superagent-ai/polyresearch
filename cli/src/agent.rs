@@ -452,10 +452,7 @@ pub fn spawn_workflow_agent(
     cmd.stdout(Stdio::inherit());
     cmd.stderr(Stdio::inherit());
 
-    eprintln!(
-        "Spawning workflow agent in {}...",
-        work_dir.display(),
-    );
+    eprintln!("Spawning workflow agent in {}...", work_dir.display(),);
     let mut child = cmd.spawn().wrap_err("failed to spawn workflow agent")?;
 
     {
@@ -468,9 +465,7 @@ pub fn spawn_workflow_agent(
             .wrap_err("failed to write prompt to agent stdin")?;
     }
 
-    let status = child
-        .wait()
-        .wrap_err("failed to wait for workflow agent")?;
+    let status = child.wait().wrap_err("failed to wait for workflow agent")?;
 
     if !status.success() {
         let code = status
@@ -761,10 +756,7 @@ mod tests {
             parse_prepare_key(&dir, "prereq_command"),
             Some("npm run build".to_string())
         );
-        assert_eq!(
-            parse_prepare_key(&dir, "eval_cores"),
-            Some("2".to_string())
-        );
+        assert_eq!(parse_prepare_key(&dir, "eval_cores"), Some("2".to_string()));
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -773,11 +765,7 @@ mod tests {
     fn parse_prepare_key_returns_none_for_missing_key() {
         let dir = std::env::temp_dir().join(format!("prepare-missing-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            dir.join("PREPARE.md"),
-            "# Evaluation\n\neval_cores: 1\n",
-        )
-        .unwrap();
+        fs::write(dir.join("PREPARE.md"), "# Evaluation\n\neval_cores: 1\n").unwrap();
 
         assert_eq!(parse_prepare_key(&dir, "prereq_command"), None);
 
@@ -788,11 +776,7 @@ mod tests {
     fn parse_prepare_key_returns_none_for_empty_value() {
         let dir = std::env::temp_dir().join(format!("prepare-empty-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            dir.join("PREPARE.md"),
-            "# Evaluation\n\nprereq_command:\n",
-        )
-        .unwrap();
+        fs::write(dir.join("PREPARE.md"), "# Evaluation\n\nprereq_command:\n").unwrap();
 
         assert_eq!(parse_prepare_key(&dir, "prereq_command"), None);
 
@@ -881,6 +865,24 @@ mod tests {
         assert!(
             prompt.contains("primary goal"),
             "base prompt must frame queue depth as the primary goal"
+        );
+    }
+
+    #[test]
+    fn lead_prompt_reruns_duties_before_decide() {
+        let prompt = lead_workflow_prompt(false, 60);
+        let step3 = prompt
+            .split("### 3. Decide ready PRs")
+            .nth(1)
+            .and_then(|rest| {
+                rest.split("### 4. Check the queue and generate theses")
+                    .next()
+            })
+            .expect("prompt should contain steps 3 and 4");
+
+        assert!(
+            step3.contains("Run `polyresearch duties` again"),
+            "step 3 should refresh duties after policy checks: {step3}"
         );
     }
 }

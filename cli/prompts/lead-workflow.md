@@ -38,7 +38,7 @@ If there are no policy-check duties, proceed to step 3.
 
 ### 3. Decide ready PRs
 
-Look for decide duties. For each ready PR, run `polyresearch decide <pr>`. The CLI evaluates the PR's metric, compares it against the baseline and best accepted, and posts the decision.
+Run `polyresearch duties` again to refresh the duty list. Policy-checks from step 2 may have made new PRs eligible for decisions. Look for decide duties. For each ready PR, run `polyresearch decide <pr>`. The CLI evaluates the PR's metric, compares it against the baseline and best accepted, and posts the decision.
 
 If decide fails because of merge conflicts, the CLI will attempt a rebase. If that also fails, the PR will be closed as stale — this is expected. The contributor can rebase and resubmit.
 
