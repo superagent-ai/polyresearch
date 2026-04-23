@@ -2989,7 +2989,7 @@ async fn bootstrap_commit_cleans_agent_whitespace_diffs() {
     fs::write(&program_path, staged_program.trim_end()).unwrap();
     fs::write(&prepare_path, format!("{}  \n", staged_prepare.trim_end())).unwrap();
 
-    commands::bootstrap::commit_and_push_setup_files(&repo.path).unwrap();
+    commands::bootstrap::commit_and_push_setup_files(&repo.path, &[]).unwrap();
 
     let status_output = Command::new("git")
         .args([
@@ -3078,7 +3078,7 @@ async fn bootstrap_commits_setup_files_with_allowlist_gitignore() {
         "expected setup files to be ignored by allowlist .gitignore, got: {ignored}"
     );
 
-    commands::bootstrap::commit_and_push_setup_files(&repo.path).unwrap();
+    commands::bootstrap::commit_and_push_setup_files(&repo.path, &[]).unwrap();
 
     // Verify git status is clean for setup files even though .gitignore hides them.
     let status_output = Command::new("git")
