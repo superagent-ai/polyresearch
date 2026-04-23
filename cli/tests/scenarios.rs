@@ -170,6 +170,170 @@ fn run_git(path: &Path, args: &[&str]) {
     );
 }
 
+fn run_git_output(path: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {:?} failed in {}: {}",
+        args,
+        path.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+fn write_sync_repo_files(path: &Path, lead: &str, default_branch: &str, node_id: &str) {
+    fs::write(
+        path.join("PROGRAM.md"),
+        format!(
+            r#"# Research Program
+
+cli_version: {version}
+default_branch: {default_branch}
+lead_github_login: {lead}
+maintainer_github_login: {lead}
+metric_tolerance: 0.01
+metric_direction: higher_is_better
+required_confirmations: 0
+auto_approve: true
+min_queue_depth: 5
+assignment_timeout: 24h
+
+## Goal
+
+Test scenario goal.
+
+## What you CAN modify
+
+- `src/`
+
+## What you CANNOT modify
+
+- `PREPARE.md`
+- `docs/`
+"#,
+            version = env!("CARGO_PKG_VERSION")
+        ),
+    )
+    .unwrap();
+    fs::write(
+        path.join("PREPARE.md"),
+        "# Evaluation\n\neval_cores: 1\neval_memory_gb: 1.0\n",
+    )
+    .unwrap();
+    fs::write(
+        path.join("results.tsv"),
+        "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n",
+    )
+    .unwrap();
+    fs::write(
+        path.join(".polyresearch-node.toml"),
+        format!("node_id = \"{node_id}\"\ncapacity = 75\n\n[agent]\ncommand = \"echo noop\"\n"),
+    )
+    .unwrap();
+}
+
+fn setup_remote_clone(parent: &ScenarioRepo, clone_dir: &str, branch: &str) -> (PathBuf, PathBuf) {
+    let bare_path = parent.path.join(format!("{clone_dir}-remote.git"));
+    let clone_path = parent.path.join(clone_dir);
+    let bare_path_arg = bare_path.to_string_lossy().into_owned();
+
+    fs::create_dir_all(&bare_path).unwrap();
+    run_git(&bare_path, &["init", "--bare"]);
+    run_git(&parent.path, &["clone", &bare_path_arg, clone_dir]);
+    run_git(&clone_path, &["config", "user.name", "Test"]);
+    run_git(&clone_path, &["config", "user.email", "test@test.com"]);
+    fs::write(clone_path.join("README.md"), "initial\n").unwrap();
+    run_git(&clone_path, &["add", "README.md"]);
+    run_git(&clone_path, &["commit", "-m", "init"]);
+    run_git(&clone_path, &["branch", "-M", branch]);
+    run_git(&clone_path, &["push", "-u", "origin", branch]);
+
+    (clone_path, bare_path)
+}
+
+fn install_one_time_remote_advance_hook(repo_path: &Path, racer_path: &Path, branch: &str) {
+    let hook_path = repo_path.join(".git").join("hooks").join("pre-push");
+    let hook_path_arg = hook_path.to_string_lossy().into_owned();
+    let marker_path = repo_path.join(".git").join("sync-push-race-ran");
+    let race_file = racer_path.join("race.txt");
+    let script = format!(
+        "#!/bin/sh\n\
+MARKER=\"{marker}\"\n\
+if [ -f \"$MARKER\" ]; then\n\
+  exit 0\n\
+fi\n\
+touch \"$MARKER\"\n\
+git -C \"{racer}\" fetch origin {branch}\n\
+git -C \"{racer}\" checkout -B {branch} origin/{branch}\n\
+printf 'race\\n' >> \"{race_file}\"\n\
+git -C \"{racer}\" add race.txt\n\
+git -C \"{racer}\" commit -m \"advance remote during sync push\"\n\
+git -C \"{racer}\" push origin {branch}\n",
+        marker = marker_path.display(),
+        racer = racer_path.display(),
+        branch = branch,
+        race_file = race_file.display(),
+    );
+
+    fs::write(&hook_path, script).unwrap();
+    let status = Command::new("chmod")
+        .args(["+x", hook_path_arg.as_str()])
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "chmod +x failed for {}",
+        hook_path.display()
+    );
+}
+
+fn install_one_time_conflicting_results_hook(
+    repo_path: &Path,
+    racer_path: &Path,
+    branch: &str,
+    results_line: &str,
+) {
+    let hook_path = repo_path.join(".git").join("hooks").join("pre-push");
+    let hook_path_arg = hook_path.to_string_lossy().into_owned();
+    let marker_path = repo_path.join(".git").join("sync-push-conflict-ran");
+    let results_path = racer_path.join("results.tsv");
+    let script = format!(
+        "#!/bin/sh\n\
+MARKER=\"{marker}\"\n\
+if [ -f \"$MARKER\" ]; then\n\
+  exit 0\n\
+fi\n\
+touch \"$MARKER\"\n\
+git -C \"{racer}\" fetch origin {branch}\n\
+git -C \"{racer}\" checkout -B {branch} origin/{branch}\n\
+printf '%s\\n' '{results_line}' >> \"{results_path}\"\n\
+git -C \"{racer}\" add results.tsv\n\
+git -C \"{racer}\" commit -m \"add conflicting results row during sync push\"\n\
+git -C \"{racer}\" push origin {branch}\n",
+        marker = marker_path.display(),
+        racer = racer_path.display(),
+        branch = branch,
+        results_line = results_line,
+        results_path = results_path.display(),
+    );
+
+    fs::write(&hook_path, script).unwrap();
+    let status = Command::new("chmod")
+        .args(["+x", hook_path_arg.as_str()])
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "chmod +x failed for {}",
+        hook_path.display()
+    );
+}
+
 fn mock_agent_path() -> String {
     let manifest = env!("CARGO_MANIFEST_DIR");
     format!("{manifest}/tests/mock_agent.sh")
@@ -798,16 +962,16 @@ async fn scenario_lead_accept_pr() {
     );
 
     let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
-    let repo_state = RepositoryState::derive(
-        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
-        &config,
-    )
-    .await
-    .unwrap();
+    let repo_state = RepositoryState::derive(&(Arc::clone(&github) as Arc<dyn GitHubApi>), &config)
+        .await
+        .unwrap();
 
     let result = commands::lead::decide_ready_prs(&ctx, &config, &repo_state);
 
-    assert!(result.is_ok(), "decide_ready_prs should succeed: {result:?}");
+    assert!(
+        result.is_ok(),
+        "decide_ready_prs should succeed: {result:?}"
+    );
     assert!(github.is_pr_merged(50), "PR #50 should be merged");
     assert!(
         github.is_issue_closed(40),
@@ -927,16 +1091,16 @@ async fn scenario_lead_reject_non_improvement() {
     );
 
     let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
-    let repo_state = RepositoryState::derive(
-        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
-        &config,
-    )
-    .await
-    .unwrap();
+    let repo_state = RepositoryState::derive(&(Arc::clone(&github) as Arc<dyn GitHubApi>), &config)
+        .await
+        .unwrap();
 
     let result = commands::lead::decide_ready_prs(&ctx, &config, &repo_state);
 
-    assert!(result.is_ok(), "decide_ready_prs should succeed: {result:?}");
+    assert!(
+        result.is_ok(),
+        "decide_ready_prs should succeed: {result:?}"
+    );
     assert!(github.is_pr_closed(51), "PR #51 should be closed");
     assert!(
         !github.is_issue_closed(41),
@@ -1303,16 +1467,16 @@ async fn scenario_lead_closes_conflicting_pr_as_stale() {
     );
 
     let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
-    let repo_state = RepositoryState::derive(
-        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
-        &config,
-    )
-    .await
-    .unwrap();
+    let repo_state = RepositoryState::derive(&(Arc::clone(&github) as Arc<dyn GitHubApi>), &config)
+        .await
+        .unwrap();
 
     let result = commands::lead::decide_ready_prs(&ctx, &config, &repo_state);
 
-    assert!(result.is_ok(), "decide_ready_prs should succeed: {result:?}");
+    assert!(
+        result.is_ok(),
+        "decide_ready_prs should succeed: {result:?}"
+    );
     assert!(
         !github.is_pr_merged(55),
         "conflicting PR #55 should NOT be merged"
@@ -3031,19 +3195,17 @@ async fn scenario_decide_idempotent_no_duplicate_comment() {
 #[tokio::test]
 async fn scenario_sync_accepts_master_default_branch() {
     let _guard = EnvGuard::lock_clean();
-    let mut repo = ScenarioRepo::new("sync-master");
-    repo.init_git_on_branch("master");
-    repo.write_program_md_with_branch("lead", Some("master"));
-    repo.write_prepare_md();
-    repo.write_results_tsv();
-    repo.write_node_config("test-node", "echo noop");
-    repo.commit_all("setup");
-    repo.add_bare_remote("master");
+    let parent = ScenarioRepo::new("sync-master");
+    let (clone_path, _bare_path) = setup_remote_clone(&parent, "sync-master-work", "master");
+    write_sync_repo_files(&clone_path, "lead", "master", "test-node");
+    run_git(&clone_path, &["add", "-A"]);
+    run_git(&clone_path, &["commit", "-m", "setup"]);
+    run_git(&clone_path, &["push", "origin", "master"]);
 
     let github = Arc::new(ScenarioGitHub::new("lead"));
 
     let ctx = make_scenario_ctx(
-        repo.path.clone(),
+        clone_path,
         Arc::clone(&github) as Arc<dyn GitHubApi>,
         "lead",
         false,
@@ -3054,6 +3216,347 @@ async fn scenario_sync_accepts_master_default_branch() {
     assert!(
         result.is_ok(),
         "sync should succeed on master with default_branch: master: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn scenario_sync_retries_push_after_remote_advances() {
+    let _guard = EnvGuard::lock_clean();
+    let parent = ScenarioRepo::new("sync-push-retry");
+    let (clone_path, bare_path) = setup_remote_clone(&parent, "sync-push-work", "master");
+    write_sync_repo_files(&clone_path, "lead", "master", "test-node");
+    run_git(&clone_path, &["add", "-A"]);
+    run_git(&clone_path, &["commit", "-m", "setup"]);
+    run_git(&clone_path, &["push", "origin", "master"]);
+
+    let bare_path_arg = bare_path.to_string_lossy().into_owned();
+    run_git(&parent.path, &["clone", &bare_path_arg, "sync-push-racer"]);
+    let racer_path = parent.path.join("sync-push-racer");
+    run_git(&racer_path, &["config", "user.name", "Race"]);
+    run_git(&racer_path, &["config", "user.email", "race@test.com"]);
+    install_one_time_remote_advance_hook(&clone_path, &racer_path, "master");
+
+    let now = chrono::Utc::now();
+    let issue = Issue {
+        number: 1,
+        title: "Test thesis".to_string(),
+        body: Some("Test".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label {
+            name: "thesis".to_string(),
+        }],
+        created_at: now - chrono::Duration::hours(2),
+        closed_at: None,
+        author: Some(Author {
+            login: "lead".to_string(),
+        }),
+        url: None,
+    };
+    let approval_comment = IssueComment {
+        id: 100,
+        body: ProtocolComment::Approval { thesis: 1 }.render(),
+        user: CommentUser {
+            login: "lead".to_string(),
+        },
+        created_at: now - chrono::Duration::hours(1),
+        updated_at: None,
+    };
+    let claim_comment = IssueComment {
+        id: 101,
+        body: ProtocolComment::Claim {
+            thesis: 1,
+            node: "worker".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: "contrib".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(50),
+        updated_at: None,
+    };
+    let attempt_comment = IssueComment {
+        id: 102,
+        body: ProtocolComment::Attempt {
+            thesis: 1,
+            branch: "thesis/1-test".to_string(),
+            metric: 0.95,
+            baseline_metric: Some(0.90),
+            observation: polyresearch::comments::Observation::Improved,
+            summary: "Test".to_string(),
+            annotations: None,
+        }
+        .render(),
+        user: CommentUser {
+            login: "contrib".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(40),
+        updated_at: None,
+    };
+    let pr = PullRequest {
+        number: 2,
+        title: "Thesis #1: Test thesis".to_string(),
+        body: Some("References #1".to_string()),
+        state: "MERGED".to_string(),
+        head_ref_name: "thesis/1-test".to_string(),
+        head_ref_oid: Some("abc".to_string()),
+        base_ref_name: Some("master".to_string()),
+        created_at: now - chrono::Duration::minutes(30),
+        closed_at: None,
+        merged_at: Some(now - chrono::Duration::minutes(20)),
+        author: Some(Author {
+            login: "contrib".to_string(),
+        }),
+        url: None,
+        mergeable: None,
+    };
+    let policy_pass_comment = IssueComment {
+        id: 199,
+        body: ProtocolComment::PolicyPass {
+            thesis: 1,
+            candidate_sha: "abc".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: "lead".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(18),
+        updated_at: None,
+    };
+    let decision_comment = IssueComment {
+        id: 200,
+        body: ProtocolComment::Decision {
+            thesis: 1,
+            candidate_sha: "abc".to_string(),
+            outcome: polyresearch::comments::Outcome::Accepted,
+            confirmations: 0,
+        }
+        .render(),
+        user: CommentUser {
+            login: "lead".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(15),
+        updated_at: None,
+    };
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(1, vec![approval_comment, claim_comment, attempt_comment]);
+    github.seed_pull_request(pr);
+    github.seed_pr_comments(2, vec![policy_pass_comment, decision_comment]);
+
+    let ctx = make_scenario_ctx(
+        clone_path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Sync,
+    );
+
+    let result = commands::sync::run(&ctx).await;
+    assert!(
+        result.is_ok(),
+        "sync should recover after the first push loses a non-fast-forward race: {result:?}"
+    );
+
+    let local_results = fs::read_to_string(clone_path.join("results.tsv")).unwrap();
+    assert!(
+        local_results.contains("thesis/1-test"),
+        "local results.tsv should include the merged attempt after retry"
+    );
+
+    let remote_results = run_git_output(
+        &parent.path,
+        &["--git-dir", &bare_path_arg, "show", "master:results.tsv"],
+    );
+    assert!(
+        remote_results.contains("thesis/1-test"),
+        "remote results.tsv should include the merged attempt after retry"
+    );
+
+    let race_file = run_git_output(
+        &parent.path,
+        &["--git-dir", &bare_path_arg, "show", "master:race.txt"],
+    );
+    assert_eq!(
+        race_file.trim(),
+        "race",
+        "remote advance hook should have fired exactly once"
+    );
+}
+
+#[tokio::test]
+async fn scenario_sync_rederives_after_resetting_conflicting_sync_commit() {
+    let _guard = EnvGuard::lock_clean();
+    let parent = ScenarioRepo::new("sync-reset-retry");
+    let (clone_path, bare_path) = setup_remote_clone(&parent, "sync-reset-work", "master");
+    write_sync_repo_files(&clone_path, "lead", "master", "test-node");
+    run_git(&clone_path, &["add", "-A"]);
+    run_git(&clone_path, &["commit", "-m", "setup"]);
+    run_git(&clone_path, &["push", "origin", "master"]);
+
+    let bare_path_arg = bare_path.to_string_lossy().into_owned();
+    run_git(&parent.path, &["clone", &bare_path_arg, "sync-reset-racer"]);
+    let racer_path = parent.path.join("sync-reset-racer");
+    run_git(&racer_path, &["config", "user.name", "Race"]);
+    run_git(&racer_path, &["config", "user.email", "race@test.com"]);
+    install_one_time_conflicting_results_hook(
+        &clone_path,
+        &racer_path,
+        "master",
+        "#999\tthesis/race\t1.0000\t0.9000\taccepted\tRace row",
+    );
+
+    let now = chrono::Utc::now();
+    let issue = Issue {
+        number: 1,
+        title: "Test thesis".to_string(),
+        body: Some("Test".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label {
+            name: "thesis".to_string(),
+        }],
+        created_at: now - chrono::Duration::hours(2),
+        closed_at: None,
+        author: Some(Author {
+            login: "lead".to_string(),
+        }),
+        url: None,
+    };
+    let approval_comment = IssueComment {
+        id: 100,
+        body: ProtocolComment::Approval { thesis: 1 }.render(),
+        user: CommentUser {
+            login: "lead".to_string(),
+        },
+        created_at: now - chrono::Duration::hours(1),
+        updated_at: None,
+    };
+    let claim_comment = IssueComment {
+        id: 101,
+        body: ProtocolComment::Claim {
+            thesis: 1,
+            node: "worker".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: "contrib".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(50),
+        updated_at: None,
+    };
+    let attempt_comment = IssueComment {
+        id: 102,
+        body: ProtocolComment::Attempt {
+            thesis: 1,
+            branch: "thesis/1-test".to_string(),
+            metric: 0.95,
+            baseline_metric: Some(0.90),
+            observation: polyresearch::comments::Observation::Improved,
+            summary: "Test".to_string(),
+            annotations: None,
+        }
+        .render(),
+        user: CommentUser {
+            login: "contrib".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(40),
+        updated_at: None,
+    };
+    let pr = PullRequest {
+        number: 2,
+        title: "Thesis #1: Test thesis".to_string(),
+        body: Some("References #1".to_string()),
+        state: "MERGED".to_string(),
+        head_ref_name: "thesis/1-test".to_string(),
+        head_ref_oid: Some("abc".to_string()),
+        base_ref_name: Some("master".to_string()),
+        created_at: now - chrono::Duration::minutes(30),
+        closed_at: None,
+        merged_at: Some(now - chrono::Duration::minutes(20)),
+        author: Some(Author {
+            login: "contrib".to_string(),
+        }),
+        url: None,
+        mergeable: None,
+    };
+    let policy_pass_comment = IssueComment {
+        id: 199,
+        body: ProtocolComment::PolicyPass {
+            thesis: 1,
+            candidate_sha: "abc".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: "lead".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(18),
+        updated_at: None,
+    };
+    let decision_comment = IssueComment {
+        id: 200,
+        body: ProtocolComment::Decision {
+            thesis: 1,
+            candidate_sha: "abc".to_string(),
+            outcome: polyresearch::comments::Outcome::Accepted,
+            confirmations: 0,
+        }
+        .render(),
+        user: CommentUser {
+            login: "lead".to_string(),
+        },
+        created_at: now - chrono::Duration::minutes(15),
+        updated_at: None,
+    };
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(1, vec![approval_comment, claim_comment, attempt_comment]);
+    github.seed_pull_request(pr);
+    github.seed_pr_comments(2, vec![policy_pass_comment, decision_comment]);
+
+    let ctx = make_scenario_ctx(
+        clone_path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Sync,
+    );
+
+    let result = commands::sync::run(&ctx).await;
+    assert!(
+        result.is_ok(),
+        "sync should re-derive and push results.tsv after resetting a conflicting sync commit: {result:?}"
+    );
+
+    let local_results = fs::read_to_string(clone_path.join("results.tsv")).unwrap();
+    assert!(
+        local_results.contains("thesis/1-test"),
+        "local results.tsv should still include the merged attempt after restart"
+    );
+    assert!(
+        local_results.contains("thesis/race"),
+        "local results.tsv should preserve the remote row that caused the conflict"
+    );
+
+    let remote_results = run_git_output(
+        &parent.path,
+        &["--git-dir", &bare_path_arg, "show", "master:results.tsv"],
+    );
+    assert!(
+        remote_results.contains("thesis/1-test"),
+        "remote results.tsv should include the merged attempt after restart"
+    );
+    assert!(
+        remote_results.contains("thesis/race"),
+        "remote results.tsv should keep the conflicting remote row after restart"
+    );
+    assert_eq!(
+        remote_results
+            .lines()
+            .filter(|line| line.contains("thesis/1-test"))
+            .count(),
+        1,
+        "the restarted sync should push exactly one row for the merged attempt"
     );
 }
 
@@ -4026,7 +4529,9 @@ fn count_prior_rejections_excludes_rejections_that_predate_claim() {
                 created_at: now - chrono::Duration::hours(8),
                 closed_at: Some(now - chrono::Duration::hours(5)),
                 merged_at: None,
-                author: Some(Author { login: "contributor-a".to_string() }),
+                author: Some(Author {
+                    login: "contributor-a".to_string(),
+                }),
                 url: None,
                 mergeable: None,
             },
