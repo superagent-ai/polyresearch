@@ -140,6 +140,7 @@ pub async fn run(ctx: &AppContext, args: &LeadArgs) -> Result<()> {
                                     continue;
                                 }
                             }
+                        }
                     }
                     Err(err) => {
                         eprintln!("Warning: could not verify queue depth after agent run: {err}");
