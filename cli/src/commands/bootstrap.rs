@@ -88,7 +88,7 @@ pub fn scaffold(ctx: &AppContext, args: &BootstrapArgs) -> Result<(std::path::Pa
 
     write_templates(&repo_root, args.goal.as_deref(), &login)?;
     ensure_lead_login(&repo_root, &login)?;
-    initialize_node(&repo_root, &args.overrides)?;
+    initialize_node(&repo_root, &args.overrides, &login)?;
     normalize_program_md(&repo_root)?;
 
     Ok((repo_root, login))
@@ -351,8 +351,12 @@ fn replace_goal_section(template: &str, goal: &str) -> String {
     )
 }
 
-fn initialize_node(repo_root: &Path, overrides: &crate::cli::NodeOverrides) -> Result<()> {
-    commands::ensure_node_config(repo_root)?;
+fn initialize_node(
+    repo_root: &Path,
+    overrides: &crate::cli::NodeOverrides,
+    login: &str,
+) -> Result<()> {
+    commands::ensure_node_config(repo_root, login)?;
     if overrides.has_any() {
         let config = NodeConfig::load(repo_root)?;
         config.with_overrides(overrides).save(repo_root)?;

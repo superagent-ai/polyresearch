@@ -390,6 +390,42 @@ fn clear_node_id_env() {
     }
 }
 
+fn expected_hostname() -> String {
+    if let Ok(hostname) = env::var("HOSTNAME")
+        && !hostname.trim().is_empty()
+    {
+        return hostname;
+    }
+
+    let output = Command::new("hostname").output();
+    match output {
+        Ok(output) if output.status.success() => String::from_utf8(output.stdout)
+            .map(|value| value.trim().to_string())
+            .unwrap_or_else(|_| "local".to_string()),
+        _ => "local".to_string(),
+    }
+}
+
+fn assert_login_prefixed_node_id(node_id: &str, login: &str) {
+    let (actual_login, machine_id) = node_id
+        .split_once('/')
+        .unwrap_or_else(|| panic!("node_id should contain a login prefix: {node_id}"));
+    assert_eq!(actual_login, login);
+
+    let expected_prefix = format!("{}-", expected_hostname());
+    assert!(
+        machine_id.starts_with(&expected_prefix),
+        "node_id should start with hostname prefix `{expected_prefix}`, got `{machine_id}`"
+    );
+
+    let suffix = &machine_id[expected_prefix.len()..];
+    assert_eq!(suffix.len(), 4, "node suffix should be 4 hex chars");
+    assert!(
+        suffix.chars().all(|c| c.is_ascii_hexdigit()),
+        "node suffix should be hex, got `{suffix}`"
+    );
+}
+
 #[tokio::test]
 async fn init_writes_node_identity() {
     let _guard = NodeIdEnvGuard::lock_clean();
@@ -433,6 +469,29 @@ async fn init_writes_node_identity() {
     assert_eq!(config.node_id, "lead/test-node");
     assert_eq!(config.api_budget, DEFAULT_API_BUDGET);
     assert_eq!(config.capacity, 50);
+}
+
+#[test]
+fn ensure_node_config_includes_login_prefix() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("ensure-node-config-prefix");
+
+    commands::ensure_node_config(&repo.path, "alice").unwrap();
+
+    let config = NodeConfig::load(&repo.path).unwrap();
+    assert_login_prefixed_node_id(&config.node_id, "alice");
+}
+
+#[test]
+fn ensure_node_config_skips_existing_config() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("ensure-node-config-existing");
+    write_node_config(&repo.path, "alice/existing-node");
+
+    commands::ensure_node_config(&repo.path, "alice").unwrap();
+
+    let config = NodeConfig::load(&repo.path).unwrap();
+    assert_eq!(config.node_id, "alice/existing-node");
 }
 
 #[tokio::test]
@@ -812,6 +871,40 @@ async fn claim_rejects_already_claimed_thesis() {
         }),
     );
     commands::write_node_id(&repo.path, "node-b").unwrap();
+
+    let error = commands::claim::run(
+        &ctx,
+        &IssueArgs {
+            issue: fixture.issue.number,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("not claimable"));
+}
+
+#[tokio::test]
+async fn claim_rejects_thesis_with_active_claim_different_node_format() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("claim-format-mismatch");
+    let fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture.issue.clone()],
+        HashMap::from([(fixture.issue.number, fixture.comments.clone())]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        &fixture.lead_github_login,
+        false,
+        Commands::Claim(IssueArgs {
+            issue: fixture.issue.number,
+        }),
+    );
+    commands::write_node_id(&repo.path, "alice/node-a").unwrap();
 
     let error = commands::claim::run(
         &ctx,

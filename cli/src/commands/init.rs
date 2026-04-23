@@ -1,12 +1,10 @@
-use std::env;
-use std::process::Command;
-
 use color_eyre::eyre::Result;
-use rand::RngExt;
 use serde::Serialize;
 
 use crate::cli::InitArgs;
-use crate::commands::{AppContext, print_value, read_node_config, write_node_config};
+use crate::commands::{
+    AppContext, default_machine_id, print_value, read_node_config, write_node_config,
+};
 use crate::config::DEFAULT_CAPACITY;
 
 #[derive(Debug, Serialize)]
@@ -58,26 +56,4 @@ pub async fn run(ctx: &AppContext, args: &InitArgs) -> Result<()> {
             value.repo, value.node, value.github_login, value.capacity
         )
     })
-}
-
-fn default_machine_id() -> String {
-    let hostname = resolve_hostname();
-    let suffix: u16 = rand::rng().random();
-    format!("{hostname}-{suffix:04x}")
-}
-
-fn resolve_hostname() -> String {
-    if let Ok(hostname) = env::var("HOSTNAME")
-        && !hostname.trim().is_empty()
-    {
-        return hostname;
-    }
-
-    let output = Command::new("hostname").output();
-    match output {
-        Ok(output) if output.status.success() => String::from_utf8(output.stdout)
-            .map(|value| value.trim().to_string())
-            .unwrap_or_else(|_| "local".to_string()),
-        _ => "local".to_string(),
-    }
 }

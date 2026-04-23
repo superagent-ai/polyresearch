@@ -7,10 +7,12 @@ use std::process::Command;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use polyresearch::cli::{BootstrapArgs, Cli, Commands, ContributeArgs, LeadArgs, NodeOverrides};
+use polyresearch::cli::{
+    BootstrapArgs, Cli, Commands, ContributeArgs, IssueArgs, LeadArgs, NodeOverrides,
+};
 use polyresearch::commands::{self, AppContext};
 use polyresearch::comments::ProtocolComment;
-use polyresearch::config::{DEFAULT_API_BUDGET, ProgramSpec, ProtocolConfig};
+use polyresearch::config::{DEFAULT_API_BUDGET, NodeConfig, ProgramSpec, ProtocolConfig};
 use polyresearch::github::{
     Author, CommentUser, GitHubApi, Issue, IssueComment, Label, PullRequest, RepoRef,
 };
@@ -184,6 +186,42 @@ fn run_git_output(path: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+fn expected_hostname() -> String {
+    if let Ok(hostname) = env::var("HOSTNAME")
+        && !hostname.trim().is_empty()
+    {
+        return hostname;
+    }
+
+    let output = Command::new("hostname").output();
+    match output {
+        Ok(output) if output.status.success() => String::from_utf8(output.stdout)
+            .map(|value| value.trim().to_string())
+            .unwrap_or_else(|_| "local".to_string()),
+        _ => "local".to_string(),
+    }
+}
+
+fn assert_login_prefixed_node_id(node_id: &str, login: &str) {
+    let (actual_login, machine_id) = node_id
+        .split_once('/')
+        .unwrap_or_else(|| panic!("node_id should contain a login prefix: {node_id}"));
+    assert_eq!(actual_login, login);
+
+    let expected_prefix = format!("{}-", expected_hostname());
+    assert!(
+        machine_id.starts_with(&expected_prefix),
+        "node_id should start with hostname prefix `{expected_prefix}`, got `{machine_id}`"
+    );
+
+    let suffix = &machine_id[expected_prefix.len()..];
+    assert_eq!(suffix.len(), 4, "node suffix should be 4 hex chars");
+    assert!(
+        suffix.chars().all(|c| c.is_ascii_hexdigit()),
+        "node suffix should be hex, got `{suffix}`"
+    );
 }
 
 fn write_sync_repo_files(path: &Path, lead: &str, default_branch: &str, node_id: &str) {
@@ -745,6 +783,82 @@ async fn scenario_contribute_improved() {
     .await;
 
     assert!(result.is_ok(), "contribute should succeed: {result:?}");
+}
+
+#[tokio::test]
+async fn scenario_contribute_auto_creates_login_prefixed_node() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("contrib-auto-node");
+    repo.init_git();
+
+    repo.write_program_md("lead");
+    repo.write_prepare_md();
+    repo.write_results_tsv();
+
+    let thesis_num = 11;
+    let agent_cmd = mock_agent_command("no_improvement");
+    let (issue, comments) = make_approved_thesis(thesis_num, "Auto-created node id", "lead");
+    let github = Arc::new(ScenarioGitHub::new("contributor"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(thesis_num, comments);
+
+    let contribute_args = ContributeArgs {
+        url: None,
+        once: true,
+        max_parallel: Some(1),
+        sleep_secs: 0,
+        overrides: NodeOverrides {
+            agent_command: Some(agent_cmd),
+            ..Default::default()
+        },
+    };
+    let contribute_ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        true,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides {
+                agent_command: contribute_args.overrides.agent_command.clone(),
+                ..Default::default()
+            },
+        }),
+    );
+
+    let result = commands::contribute::run(&contribute_ctx, &contribute_args).await;
+    assert!(result.is_ok(), "contribute should succeed: {result:?}");
+
+    let node_config = NodeConfig::load(&repo.path).unwrap();
+    assert_login_prefixed_node_id(&node_config.node_id, "contributor");
+
+    let claim_ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Claim(IssueArgs { issue: thesis_num }),
+    );
+
+    let claim_result = commands::claim::run(&claim_ctx, &IssueArgs { issue: thesis_num }).await;
+    assert!(
+        claim_result.is_ok(),
+        "claim should succeed: {claim_result:?}"
+    );
+
+    let expected_claim = ProtocolComment::Claim {
+        thesis: thesis_num,
+        node: node_config.node_id.clone(),
+    }
+    .render();
+    let bodies = github.comment_bodies_on(thesis_num);
+    assert!(
+        bodies.iter().any(|body| body == &expected_claim),
+        "claim should use the login-prefixed node id, got: {bodies:?}"
+    );
 }
 
 #[tokio::test]
