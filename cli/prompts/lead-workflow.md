@@ -22,6 +22,8 @@ You MUST complete ALL steps (1 through 6) in every iteration. Do not exit after 
 
 Keeping the queue at or above `min_queue_depth` is the primary goal of every iteration. Steps 1-3 are housekeeping; step 4 (queue check and generation) is the critical deliverable.
 
+Priority rule: if context, budget, or time is getting tight while you are in steps 1-3, stop starting new housekeeping work and go straight to step 4. Do not let sync, policy-check, or decide consume the whole iteration before the queue check runs.
+
 LOOP FOREVER:
 
 ### 1. Sync the ledger

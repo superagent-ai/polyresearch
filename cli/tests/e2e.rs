@@ -1237,6 +1237,101 @@ async fn lead_only_command_rejects_non_lead_login() {
 }
 
 #[tokio::test]
+async fn lead_once_deficient_queue_spawns_retry_and_fails() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("lead-once-deficient");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(
+        repo.path.join("results.tsv"),
+        "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n",
+    )
+    .unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let args = polyresearch::cli::LeadArgs {
+        once: true,
+        sleep_secs: 0,
+        overrides: NodeOverrides {
+            agent_command: Some("true".to_string()),
+            ..Default::default()
+        },
+    };
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead",
+        false,
+        Commands::Lead(args.clone()),
+    );
+
+    let error = commands::lead::run(&ctx, &args).await.unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("queue depth") && message.contains("focused refill retry"),
+        "lead --once should fail when the queue stays deficient after retry: {message}"
+    );
+}
+
+#[tokio::test]
+async fn lead_once_sufficient_queue_succeeds() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("lead-once-sufficient");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(
+        repo.path.join("results.tsv"),
+        "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n",
+    )
+    .unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let mut issues = Vec::new();
+    let mut issue_comments = HashMap::new();
+    for number in 1..=5 {
+        issues.push(make_open_issue(
+            number,
+            &format!("Approved thesis {number}"),
+        ));
+        issue_comments.insert(number, vec![make_approval_comment(number, "lead")]);
+    }
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        issues,
+        issue_comments,
+        vec![],
+        HashMap::new(),
+    ));
+    let args = polyresearch::cli::LeadArgs {
+        once: true,
+        sleep_secs: 0,
+        overrides: NodeOverrides {
+            agent_command: Some("true".to_string()),
+            ..Default::default()
+        },
+    };
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead",
+        false,
+        Commands::Lead(args.clone()),
+    );
+
+    commands::lead::run(&ctx, &args).await.unwrap();
+}
+
+#[tokio::test]
 async fn valid_claim_succeeds_in_dry_run_without_writing() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("valid-claim");
@@ -1999,6 +2094,18 @@ fn make_open_issue(number: u64, title: &str) -> Issue {
         closed_at: None,
         author: None,
         url: None,
+    }
+}
+
+fn make_approval_comment(thesis: u64, lead_login: &str) -> IssueComment {
+    IssueComment {
+        id: thesis * 100,
+        body: ProtocolComment::Approval { thesis }.render(),
+        user: CommentUser {
+            login: lead_login.to_string(),
+        },
+        created_at: chrono::Utc::now(),
+        updated_at: None,
     }
 }
 
