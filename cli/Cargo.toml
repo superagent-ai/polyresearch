@@ -1,6 +1,6 @@
 [package]
 name = "polyresearch"
-version = "0.4.1"
+version = "0.5.3"
 edition = "2024"
 description = "Distributed autoresearch across multiple machines and contributors"
 license = "MIT"
@@ -15,9 +15,10 @@ path = "src/main.rs"
 
 [dependencies]
 chrono = { version = "0.4.44", features = ["serde"] }
-clap = { version = "4.6.0", features = ["derive"] }
+clap = { version = "4.6.0", features = ["derive", "env"] }
 color-eyre = "0.6.5"
 crossterm = "0.29.0"
+dialoguer = "0.12.0"
 globset = "0.4.18"
 octocrab = "0.49.7"
 rand = "0.10.1"

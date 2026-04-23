@@ -5,6 +5,7 @@ use crate::cli::BatchClaimArgs;
 use crate::commands::claim::{ClaimOutput, claim_selected_thesis};
 use crate::commands::duties;
 use crate::commands::{AppContext, node_active_claims, print_value, read_node_id};
+use crate::comments::ReleaseReason;
 use crate::state::{RepositoryState, ThesisPhase, ThesisState};
 
 #[derive(Debug, Serialize)]
@@ -17,10 +18,11 @@ struct BatchClaimOutput {
 }
 
 pub async fn run(ctx: &AppContext, args: &BatchClaimArgs) -> Result<()> {
+    crate::cycle_guard::check_cycle_limit()?;
     let node = read_node_id(&ctx.repo_root)?;
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
 
-    let duty_report = duties::check(ctx, &repo_state)?;
+    let duty_report = duties::claim_gate(ctx, &repo_state)?;
     if !duty_report.blocking.is_empty() {
         let items: Vec<String> = duty_report
             .blocking
@@ -131,7 +133,11 @@ fn select_claimable_theses<'a>(
         .filter(|thesis| thesis.approved)
         .filter(|thesis| matches!(thesis.phase, ThesisPhase::Approved))
         .filter(|thesis| thesis.active_claims.is_empty())
-        .filter(|thesis| !thesis.releases.iter().any(|release| release.node == node))
+        .filter(|thesis| {
+            !thesis.releases.iter().any(|release| {
+                release.node == node && release.reason == ReleaseReason::NoImprovement
+            })
+        })
         .collect::<Vec<_>>();
     theses.sort_by_key(|thesis| thesis.issue.number);
     theses.truncate(count);

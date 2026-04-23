@@ -28,6 +28,7 @@ pub async fn run(ctx: &AppContext, args: &ReleaseArgs) -> Result<()> {
         ctx.github
             .post_issue_comment(args.issue, &comment.render())?;
         close_if_exhausted(ctx, args.issue, args.reason).await?;
+        crate::cycle_guard::mark_done()?;
     }
 
     let output = ReleaseOutput {

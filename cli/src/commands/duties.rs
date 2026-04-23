@@ -2,9 +2,17 @@ use color_eyre::eyre::Result;
 use serde::Serialize;
 
 use crate::commands::{AppContext, print_value, read_node_id};
-use crate::comments::Observation;
+use crate::comments::{Observation, ReleaseReason};
 use crate::ledger::Ledger;
 use crate::state::{RepositoryState, ThesisPhase};
+
+pub const MAX_SUBMIT_REJECTIONS: usize = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DutyContext {
+    Lead,
+    Contribute,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DutyItem {
@@ -20,7 +28,42 @@ pub struct DutyReport {
     pub clean: bool,
 }
 
-pub fn check(ctx: &AppContext, repo_state: &RepositoryState) -> Result<DutyReport> {
+pub fn context_for(ctx: &AppContext) -> DutyContext {
+    match (
+        ctx.github.current_login().ok(),
+        ctx.config.lead_github_login.as_deref(),
+    ) {
+        (Some(login), Some(lead)) if login == lead => DutyContext::Lead,
+        _ => DutyContext::Contribute,
+    }
+}
+
+pub fn claim_gate(ctx: &AppContext, repo_state: &RepositoryState) -> Result<DutyReport> {
+    let node_id = read_node_id(&ctx.repo_root).unwrap_or_default();
+    let mut blocking = Vec::new();
+    let mut advisory = Vec::new();
+
+    collect_claim_lifecycle_duties(
+        repo_state,
+        &node_id,
+        context_for(ctx),
+        &mut blocking,
+        &mut advisory,
+    );
+
+    let clean = blocking.is_empty();
+    Ok(DutyReport {
+        blocking,
+        advisory,
+        clean,
+    })
+}
+
+pub fn check(
+    ctx: &AppContext,
+    repo_state: &RepositoryState,
+    context: DutyContext,
+) -> Result<DutyReport> {
     let node_id = read_node_id(&ctx.repo_root).unwrap_or_default();
     let login = ctx.github.current_login().unwrap_or_default();
     let is_lead = ctx
@@ -33,12 +76,44 @@ pub fn check(ctx: &AppContext, repo_state: &RepositoryState) -> Result<DutyRepor
     let mut blocking = Vec::new();
     let mut advisory = Vec::new();
 
+    collect_claim_lifecycle_duties(
+        repo_state,
+        &node_id,
+        context,
+        &mut blocking,
+        &mut advisory,
+    );
+
+    if is_lead && context == DutyContext::Lead {
+        check_lead_duties(ctx, repo_state, &mut blocking, &mut advisory)?;
+    }
+
+    let has_review_work = check_review_opportunities(repo_state, &node_id, &login, &mut advisory);
+    if !is_lead || context == DutyContext::Contribute {
+        check_contributor_idle_state(ctx, repo_state, &node_id, has_review_work, &mut advisory)?;
+    }
+
+    let clean = blocking.is_empty();
+    Ok(DutyReport {
+        blocking,
+        advisory,
+        clean,
+    })
+}
+
+fn collect_claim_lifecycle_duties(
+    repo_state: &RepositoryState,
+    node_id: &str,
+    context: DutyContext,
+    blocking: &mut Vec<DutyItem>,
+    advisory: &mut Vec<DutyItem>,
+) {
     for thesis in &repo_state.theses {
         if thesis.issue.state != "OPEN" {
             continue;
         }
 
-        let claimed_by_me = thesis.is_claimed_by(&node_id);
+        let claimed_by_me = thesis.is_claimed_by(node_id);
         if !claimed_by_me {
             continue;
         }
@@ -55,50 +130,73 @@ pub fn check(ctx: &AppContext, repo_state: &RepositoryState) -> Result<DutyRepor
             .collect();
 
         if my_attempts.is_empty() {
-            advisory.push(DutyItem {
-                category: "attempt".to_string(),
-                message: format!(
-                    "Thesis #{}: claimed with 0 attempts posted yet.",
-                    thesis.issue.number
-                ),
-                command: format!(
-                    "polyresearch attempt {} --metric ... --observation ... --baseline ... --summary \"...\" OR polyresearch release {} --reason no_improvement",
-                    thesis.issue.number, thesis.issue.number
-                ),
-            });
+            let item = match context {
+                DutyContext::Lead => DutyItem {
+                    category: "attempt".to_string(),
+                    message: format!(
+                        "Thesis #{}: claimed with 0 attempts posted yet.",
+                        thesis.issue.number
+                    ),
+                    command: format!(
+                        "polyresearch attempt {} --metric ... --observation ... --baseline ... --summary \"...\" OR polyresearch release {} --reason no_improvement",
+                        thesis.issue.number, thesis.issue.number
+                    ),
+                },
+                DutyContext::Contribute => DutyItem {
+                    category: "resume".to_string(),
+                    message: format!(
+                        "Thesis #{}: claimed by this node with 0 attempts posted yet.",
+                        thesis.issue.number
+                    ),
+                    command: format!("polyresearch resume {}", thesis.issue.number),
+                },
+            };
+            match context {
+                DutyContext::Lead => advisory.push(item),
+                DutyContext::Contribute => blocking.push(item),
+            }
         }
 
         let has_improved = my_attempts
             .iter()
             .any(|a| a.observation == Observation::Improved);
-        let has_open_pr = thesis.pull_requests.iter().any(|pr| pr.pr.state == "OPEN");
-        if has_improved && !has_open_pr {
-            blocking.push(DutyItem {
-                category: "submit".to_string(),
-                message: format!(
-                    "Thesis #{}: improved attempt recorded but no PR submitted.",
-                    thesis.issue.number
-                ),
-                command: format!("polyresearch submit {}", thesis.issue.number),
-            });
+        let has_open_or_merged_pr = thesis
+            .pull_requests
+            .iter()
+            .any(|pr| pr.pr.state == "OPEN" || pr.pr.state == "MERGED");
+        if has_improved && !has_open_or_merged_pr {
+            let claim_start = thesis
+                .active_claims
+                .iter()
+                .find(|c| c.node == node_id)
+                .map(|c| c.created_at);
+            let rejection_count =
+                crate::commands::decide::count_prior_rejections(thesis, claim_start);
+
+            if rejection_count >= MAX_SUBMIT_REJECTIONS {
+                blocking.push(DutyItem {
+                    category: "release".to_string(),
+                    message: format!(
+                        "Thesis #{}: {} consecutive PR rejections; release the claim.",
+                        thesis.issue.number, rejection_count
+                    ),
+                    command: format!(
+                        "polyresearch release {} --reason no_improvement",
+                        thesis.issue.number
+                    ),
+                });
+            } else {
+                blocking.push(DutyItem {
+                    category: "submit".to_string(),
+                    message: format!(
+                        "Thesis #{}: improved attempt recorded but no PR submitted.",
+                        thesis.issue.number
+                    ),
+                    command: format!("polyresearch submit {}", thesis.issue.number),
+                });
+            }
         }
     }
-
-    if is_lead {
-        check_lead_duties(ctx, repo_state, &mut blocking, &mut advisory)?;
-    }
-
-    let has_review_work = check_review_opportunities(repo_state, &node_id, &login, &mut advisory);
-    if !is_lead {
-        check_contributor_idle_state(ctx, repo_state, &node_id, has_review_work, &mut advisory)?;
-    }
-
-    let clean = blocking.is_empty();
-    Ok(DutyReport {
-        blocking,
-        advisory,
-        clean,
-    })
 }
 
 fn check_lead_duties(
@@ -201,7 +299,7 @@ fn check_lead_duties(
         advisory.push(DutyItem {
             category: "metric-floor".to_string(),
             message: format!(
-                "Best metric ({best:.1}ms) is below metric_tolerance ({tolerance:.1}ms). Further improvement within the current tolerance is impossible."
+                "Best metric ({best}) is within metric_tolerance ({tolerance}) of the limit. Further improvement within the current tolerance is impossible."
             ),
             command: "Consider adjusting metric_tolerance or concluding the program.".to_string(),
         });
@@ -210,7 +308,7 @@ fn check_lead_duties(
             advisory.push(DutyItem {
                 category: "stale-queue".to_string(),
                 message: format!(
-                    "Queue depth is {} but best metric ({best:.1}ms) is already below metric_tolerance ({tolerance:.1}ms). Existing theses may no longer contain meaningful work.",
+                    "Queue depth is {} but best metric ({best}) is already within metric_tolerance ({tolerance}) of the limit. Existing theses may no longer contain meaningful work.",
                     repo_state.queue_depth
                 ),
                 command: "polyresearch generate --title \"...\" --body \"...\"".to_string(),
@@ -279,7 +377,9 @@ fn check_contributor_idle_state(
     if repo_state.queue_depth == 0 {
         advisory.push(DutyItem {
             category: "idle".to_string(),
-            message: "Queue is empty. Wait for the lead to generate theses. Do not assume lead duties.".to_string(),
+            message:
+                "Queue is empty. Wait for the lead to generate theses. Do not assume lead duties."
+                    .to_string(),
             command: "sleep 60 && polyresearch duties".to_string(),
         });
         return Ok(());
@@ -324,7 +424,7 @@ fn check_contributor_idle_state(
         advisory.push(DutyItem {
             category: "no-claimable-work".to_string(),
             message: format!(
-                "Best metric ({best:.1}ms) is already below metric_tolerance ({tolerance:.1}ms). Remaining theses may not support another meaningful improvement. Wait for fresh theses from the lead."
+                "Best metric ({best}) is already within metric_tolerance ({tolerance}) of the limit. Remaining theses may not support another meaningful improvement. Wait for fresh theses from the lead."
             ),
             command: "sleep 60 && polyresearch duties".to_string(),
         });
@@ -341,10 +441,9 @@ fn check_contributor_idle_state(
         .filter(|thesis| {
             thesis.issue.state == "OPEN"
                 && matches!(thesis.phase, ThesisPhase::Approved)
-                && !thesis
-                    .releases
-                    .iter()
-                    .any(|release| release.node == node_id)
+                && !thesis.releases.iter().any(|release| {
+                    release.node == node_id && release.reason == ReleaseReason::NoImprovement
+                })
         })
         .count();
 
@@ -360,17 +459,20 @@ fn check_contributor_idle_state(
 }
 
 fn metric_floor_info(ctx: &AppContext, repo_state: &RepositoryState) -> Option<(f64, f64)> {
+    use crate::config::MetricDirection;
+
     let tolerance = ctx.config.metric_tolerance?;
     let best = repo_state.current_best_accepted_metric?;
+    let bound = ctx.config.resolved_metric_bound();
 
-    // Lower-is-better metrics have a generic floor at zero, so once the best score is
-    // below the required tolerance there is no room left for another meaningful win.
-    matches!(
-        ctx.config.metric_direction,
-        crate::config::MetricDirection::LowerIsBetter
-    )
-    .then_some((best, tolerance))
-    .filter(|(best, tolerance)| *best < *tolerance)
+    let headroom = match ctx.config.metric_direction {
+        MetricDirection::LowerIsBetter => best - bound,
+        MetricDirection::HigherIsBetter => bound - best,
+    };
+
+    // headroom < 0 means the metric already exceeded the bound (e.g. unbounded
+    // ops/sec with the default ceiling of 1.0) — the advisory does not apply.
+    (headroom >= 0.0 && headroom < tolerance).then_some((best, tolerance))
 }
 
 fn render_report(value: &DutyReport) -> String {
@@ -409,7 +511,7 @@ fn render_report(value: &DutyReport) -> String {
 
 pub async fn run(ctx: &AppContext) -> Result<()> {
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
-    let report = check(ctx, &repo_state)?;
+    let report = check(ctx, &repo_state, context_for(ctx))?;
 
     print_value(ctx, &report, render_report)
 }

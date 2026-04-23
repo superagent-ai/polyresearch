@@ -14,6 +14,13 @@ use crate::state::parse_thesis_number_from_branch;
 pub enum AuditSeverity {
     Invalid,
     Suspicious,
+    Info,
+}
+
+impl AuditSeverity {
+    pub fn is_blocking(&self) -> bool {
+        matches!(self, AuditSeverity::Invalid)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,11 +70,12 @@ pub struct ValidAttemptRecord {
     pub node: String,
     pub branch: String,
     pub metric: f64,
-    pub baseline_metric: f64,
+    pub baseline_metric: Option<f64>,
     pub observation: Observation,
     pub summary: String,
     pub author: String,
     pub created_at: DateTime<Utc>,
+    pub comment_id: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -134,6 +142,7 @@ pub struct IssueValidation {
     pub active_claims: Vec<ValidClaimRecord>,
     pub releases: Vec<ValidReleaseRecord>,
     pub attempts: Vec<ValidAttemptRecord>,
+    pub invalidated_attempt_branches: BTreeSet<String>,
     pub findings: Vec<AuditFinding>,
 }
 
@@ -218,10 +227,10 @@ pub fn validate_pull_request(
                         &comment,
                         "admin repair note from non-lead actor",
                     ));
-                } else if action == "acknowledge_invalid" {
-                    if let Some(related_comment_id) = related_comment_id {
-                        acknowledged_comment_ids.insert(*related_comment_id);
-                    }
+                } else if action == "acknowledge_invalid"
+                    && let Some(related_comment_id) = related_comment_id
+                {
+                    acknowledged_comment_ids.insert(*related_comment_id);
                 }
             }
             Some(ProtocolComment::PolicyPass {
@@ -475,10 +484,10 @@ pub fn validate_issue(
                         &comment,
                         "admin repair note from non-lead actor",
                     ));
-                } else if action == "acknowledge_invalid" {
-                    if let Some(related_comment_id) = related_comment_id {
-                        acknowledged_comment_ids.insert(*related_comment_id);
-                    }
+                } else if action == "acknowledge_invalid"
+                    && let Some(related_comment_id) = related_comment_id
+                {
+                    acknowledged_comment_ids.insert(*related_comment_id);
                 }
             }
             Some(ProtocolComment::Approval { thesis }) => {
@@ -680,12 +689,23 @@ pub fn validate_issue(
                         summary: summary.clone(),
                         author: comment.author.clone(),
                         created_at: comment.created_at,
+                        comment_id: comment.id,
                     });
                 }
             }
             _ => {}
         }
     }
+
+    let mut invalidated_attempt_branches = BTreeSet::new();
+    attempts.retain(|attempt| {
+        if acknowledged_comment_ids.contains(&attempt.comment_id) {
+            invalidated_attempt_branches.insert(attempt.branch.clone());
+            false
+        } else {
+            true
+        }
+    });
 
     findings.retain(|finding| {
         finding
@@ -707,6 +727,7 @@ pub fn validate_issue(
         active_claims,
         releases,
         attempts,
+        invalidated_attempt_branches,
         findings,
     }
 }
@@ -938,6 +959,62 @@ mod tests {
         );
     }
 
+    #[test]
+    fn severity_is_blocking_only_for_invalid() {
+        assert!(AuditSeverity::Invalid.is_blocking());
+        assert!(!AuditSeverity::Suspicious.is_blocking());
+        assert!(!AuditSeverity::Info.is_blocking());
+    }
+
+    #[test]
+    fn invalid_issue_like_produces_invalid_severity() {
+        let envelope = ProtocolEnvelope {
+            id: 1,
+            author: "alice".to_string(),
+            created_at: chrono::Utc::now(),
+            protocol: None,
+        };
+        let finding = invalid_issue_like(AuditScope::Issue { number: 1 }, &envelope, "test");
+        assert!(matches!(finding.severity, AuditSeverity::Invalid));
+        assert!(finding.severity.is_blocking());
+    }
+
+    #[test]
+    fn suspicious_issue_like_produces_suspicious_severity() {
+        let envelope = ProtocolEnvelope {
+            id: 1,
+            author: "alice".to_string(),
+            created_at: chrono::Utc::now(),
+            protocol: None,
+        };
+        let finding = suspicious_issue_like(AuditScope::Issue { number: 1 }, &envelope, "test");
+        assert!(matches!(finding.severity, AuditSeverity::Suspicious));
+        assert!(!finding.severity.is_blocking());
+    }
+
+    #[test]
+    fn duplicate_attempt_branch_is_suspicious_not_invalid() {
+        let fixture: IssueFixture = serde_json::from_str(include_str!(
+            "../tests/fixtures/duplicate_attempt_branch_issue.json"
+        ))
+        .unwrap();
+        let config = test_config(&fixture.lead_github_login, None);
+        let comments = envelopes(fixture.comments);
+        let validation = validate_issue(&fixture.issue, &comments, &config, None);
+
+        assert_eq!(validation.findings.len(), 1);
+        assert!(
+            validation.findings[0]
+                .message
+                .contains("duplicate attempt branch recorded more than once")
+        );
+        assert!(matches!(
+            validation.findings[0].severity,
+            AuditSeverity::Suspicious
+        ));
+        assert!(!validation.findings[0].severity.is_blocking());
+    }
+
     fn envelopes(comments: Vec<IssueComment>) -> Vec<ProtocolEnvelope> {
         comments
             .into_iter()
@@ -954,6 +1031,7 @@ mod tests {
             required_confirmations: 0,
             metric_tolerance: Some(0.01),
             metric_direction: MetricDirection::HigherIsBetter,
+            metric_bound: None,
             lead_github_login: Some(lead_github_login.to_string()),
             maintainer_github_login: maintainer_github_login.map(ToString::to_string),
             auto_approve: true,
@@ -962,6 +1040,7 @@ mod tests {
             min_queue_depth: 5,
             max_queue_depth: Some(10),
             cli_version: None,
+            default_branch: None,
         }
     }
 }

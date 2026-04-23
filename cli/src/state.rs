@@ -17,6 +17,7 @@ pub struct RepositoryState {
     pub active_nodes: Vec<String>,
     pub queue_depth: usize,
     pub current_best_accepted_metric: Option<f64>,
+    pub invalidated_attempt_branches: BTreeSet<String>,
     pub recent_events: Vec<ActivityEvent>,
     pub audit_findings: Vec<AuditFinding>,
 }
@@ -33,6 +34,7 @@ pub struct ThesisState {
     pub attempts: Vec<AttemptRecord>,
     pub pull_requests: Vec<PullRequestState>,
     pub best_attempt_metric: Option<f64>,
+    pub invalidated_attempt_branches: BTreeSet<String>,
     pub findings: Vec<AuditFinding>,
 }
 
@@ -69,11 +71,12 @@ pub struct AttemptRecord {
     pub node: String,
     pub branch: String,
     pub metric: f64,
-    pub baseline_metric: f64,
+    pub baseline_metric: Option<f64>,
     pub observation: Observation,
     pub summary: String,
     pub author: String,
     pub created_at: DateTime<Utc>,
+    pub comment_id: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -193,12 +196,18 @@ impl RepositoryState {
                 .then_with(|| left.message.cmp(&right.message))
         });
 
+        let invalidated_attempt_branches = theses
+            .iter()
+            .flat_map(|thesis| thesis.invalidated_attempt_branches.iter().cloned())
+            .collect::<BTreeSet<_>>();
+
         Ok(Self {
             theses,
             pull_request_count,
             active_nodes,
             queue_depth,
             current_best_accepted_metric,
+            invalidated_attempt_branches,
             recent_events,
             audit_findings,
         })
@@ -259,6 +268,7 @@ impl ThesisState {
                 summary: attempt.summary.clone(),
                 author: attempt.author.clone(),
                 created_at: attempt.created_at,
+                comment_id: attempt.comment_id,
             })
             .collect::<Vec<_>>();
         let releases = validation
@@ -311,6 +321,12 @@ impl ThesisState {
             ThesisPhase::Submitted
         };
 
+        let active_claims = if matches!(phase, ThesisPhase::Resolved { .. }) {
+            vec![]
+        } else {
+            active_claims
+        };
+
         let best_attempt_metric = attempts.iter().fold(None, |current, attempt| {
             Some(select_metric(
                 current,
@@ -330,6 +346,7 @@ impl ThesisState {
             attempts,
             pull_requests,
             best_attempt_metric,
+            invalidated_attempt_branches: validation.invalidated_attempt_branches,
             findings: validation.findings,
         })
     }
@@ -353,6 +370,19 @@ impl ThesisState {
             .iter()
             .find(|attempt| attempt.branch == accepted_branch)
             .map(|attempt| attempt.metric)
+    }
+
+    pub fn phase_label(&self) -> String {
+        match &self.phase {
+            ThesisPhase::Submitted => "submitted".to_string(),
+            ThesisPhase::Approved => "approved".to_string(),
+            ThesisPhase::Exhausted => "exhausted".to_string(),
+            ThesisPhase::Claimed => "claimed".to_string(),
+            ThesisPhase::CandidateSubmitted => "candidate_submitted".to_string(),
+            ThesisPhase::InReview => "in_review".to_string(),
+            ThesisPhase::Resolved { outcome } => outcome.to_string(),
+            ThesisPhase::Rejected => "rejected".to_string(),
+        }
     }
 
     pub fn is_claimed_by(&self, node: &str) -> bool {
@@ -561,6 +591,45 @@ mod tests {
     }
 
     #[test]
+    fn phase_label_returns_correct_strings() {
+        assert_eq!(
+            thesis_with_phase(ThesisPhase::Submitted).phase_label(),
+            "submitted"
+        );
+        assert_eq!(
+            thesis_with_phase(ThesisPhase::Approved).phase_label(),
+            "approved"
+        );
+        assert_eq!(
+            thesis_with_phase(ThesisPhase::Exhausted).phase_label(),
+            "exhausted"
+        );
+        assert_eq!(
+            thesis_with_phase(ThesisPhase::Claimed).phase_label(),
+            "claimed"
+        );
+        assert_eq!(
+            thesis_with_phase(ThesisPhase::CandidateSubmitted).phase_label(),
+            "candidate_submitted"
+        );
+        assert_eq!(
+            thesis_with_phase(ThesisPhase::InReview).phase_label(),
+            "in_review"
+        );
+        assert_eq!(
+            thesis_with_phase(ThesisPhase::Resolved {
+                outcome: Outcome::Accepted,
+            })
+            .phase_label(),
+            "accepted"
+        );
+        assert_eq!(
+            thesis_with_phase(ThesisPhase::Rejected).phase_label(),
+            "rejected"
+        );
+    }
+
+    #[test]
     fn marks_no_improvement_releases_as_exhausted() {
         let fixture = exhausted_fixture();
         let config = test_config(&fixture.lead_github_login);
@@ -628,6 +697,7 @@ mod tests {
             attempts: vec![],
             pull_requests: vec![],
             best_attempt_metric: None,
+            invalidated_attempt_branches: BTreeSet::new(),
             findings: vec![],
         };
 
@@ -655,6 +725,7 @@ mod tests {
             active_claims: vec![],
             releases: vec![],
             attempts: vec![],
+            invalidated_attempt_branches: BTreeSet::new(),
             pull_requests: vec![PullRequestState {
                 pr: PullRequest {
                     number: 2,
@@ -669,6 +740,7 @@ mod tests {
                     merged_at: None,
                     author: None,
                     url: None,
+                    mergeable: None,
                 },
                 thesis_number: Some(1),
                 policy_pass: true,
@@ -686,6 +758,155 @@ mod tests {
         assert_eq!(thesis.maintainer_summary(false), "PR rejected");
     }
 
+    #[test]
+    fn resolved_thesis_clears_active_claims() {
+        let fixture: IssueFixture = serde_json::from_str(include_str!(
+            "../tests/fixtures/claimed_no_attempts_issue.json"
+        ))
+        .unwrap();
+        let config = test_config(&fixture.lead_github_login);
+
+        let claimed = ThesisState::derive(
+            fixture.issue.clone(),
+            fixture.comments.clone(),
+            &[],
+            &config,
+        )
+        .unwrap();
+        assert!(matches!(claimed.phase, ThesisPhase::Claimed));
+        assert_eq!(claimed.active_claims.len(), 1);
+
+        let pr_with_decision = PullRequestState {
+            pr: PullRequest {
+                number: 50,
+                title: "Candidate for thesis #20".to_string(),
+                body: None,
+                state: "MERGED".to_string(),
+                head_ref_name: "thesis/20-claimed-attempt-1".to_string(),
+                head_ref_oid: Some("deadbeef".to_string()),
+                base_ref_name: Some("main".to_string()),
+                created_at: chrono::Utc::now(),
+                closed_at: None,
+                merged_at: Some(chrono::Utc::now()),
+                author: None,
+                url: None,
+                mergeable: None,
+            },
+            thesis_number: Some(20),
+            policy_pass: true,
+            maintainer_approved: false,
+            maintainer_rejected: false,
+            review_claims: vec![],
+            reviews: vec![],
+            decision: Some(DecisionRecord {
+                outcome: crate::comments::Outcome::Accepted,
+                candidate_sha: "deadbeef".to_string(),
+                confirmations: 0,
+                created_at: chrono::Utc::now(),
+            }),
+            findings: vec![],
+        };
+
+        let resolved = ThesisState::derive(
+            fixture.issue,
+            fixture.comments,
+            &[pr_with_decision],
+            &config,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            resolved.phase,
+            ThesisPhase::Resolved {
+                outcome: crate::comments::Outcome::Accepted
+            }
+        ));
+        assert!(
+            resolved.active_claims.is_empty(),
+            "active_claims should be empty on a resolved thesis, got: {:?}",
+            resolved.active_claims
+        );
+    }
+
+    #[test]
+    fn resolved_thesis_excluded_from_active_nodes() {
+        use crate::comments::ProtocolComment;
+
+        let fixture: IssueFixture = serde_json::from_str(include_str!(
+            "../tests/fixtures/claimed_no_attempts_issue.json"
+        ))
+        .unwrap();
+        let config = test_config(&fixture.lead_github_login);
+
+        let pr_with_decision = PullRequest {
+            number: 50,
+            title: "Candidate for thesis #20".to_string(),
+            body: None,
+            state: "MERGED".to_string(),
+            head_ref_name: "thesis/20-claimed-attempt-1".to_string(),
+            head_ref_oid: Some("deadbeef".to_string()),
+            base_ref_name: Some("main".to_string()),
+            created_at: chrono::Utc::now(),
+            closed_at: None,
+            merged_at: Some(chrono::Utc::now()),
+            author: None,
+            url: None,
+            mergeable: None,
+        };
+
+        let policy_pass = ProtocolComment::PolicyPass {
+            thesis: 20,
+            candidate_sha: "deadbeef".to_string(),
+        };
+        let decision_comment = ProtocolComment::Decision {
+            thesis: 20,
+            candidate_sha: "deadbeef".to_string(),
+            outcome: crate::comments::Outcome::Accepted,
+            confirmations: 0,
+        };
+        let now = chrono::Utc::now();
+        let pr_comments = vec![
+            IssueComment {
+                id: 9000,
+                body: policy_pass.render(),
+                user: crate::github::CommentUser {
+                    login: fixture.lead_github_login.clone(),
+                },
+                created_at: now - chrono::Duration::minutes(5),
+                updated_at: None,
+            },
+            IssueComment {
+                id: 9001,
+                body: decision_comment.render(),
+                user: crate::github::CommentUser {
+                    login: fixture.lead_github_login.clone(),
+                },
+                created_at: now,
+                updated_at: None,
+            },
+        ];
+
+        let mut issue_comments_map = std::collections::HashMap::new();
+        issue_comments_map.insert(fixture.issue.number, fixture.comments);
+        let mut pr_comments_map = std::collections::HashMap::new();
+        pr_comments_map.insert(50u64, pr_comments);
+
+        let state = RepositoryState::derive_from_fetched(
+            vec![fixture.issue],
+            vec![pr_with_decision],
+            &mut issue_comments_map,
+            &mut pr_comments_map,
+            &config,
+        )
+        .unwrap();
+
+        assert!(
+            state.active_nodes.is_empty(),
+            "active_nodes should not include nodes from resolved theses, got: {:?}",
+            state.active_nodes
+        );
+    }
+
     fn exhausted_fixture() -> IssueFixture {
         serde_json::from_str(include_str!(
             "../tests/fixtures/exhausted_thesis_issue.json"
@@ -693,11 +914,39 @@ mod tests {
         .unwrap()
     }
 
+    fn thesis_with_phase(phase: ThesisPhase) -> ThesisState {
+        ThesisState {
+            issue: Issue {
+                number: 999,
+                title: "Example thesis".to_string(),
+                body: None,
+                state: "OPEN".to_string(),
+                labels: vec![],
+                created_at: chrono::Utc::now(),
+                closed_at: None,
+                author: None,
+                url: None,
+            },
+            phase,
+            approved: false,
+            maintainer_approved: false,
+            maintainer_rejected: false,
+            active_claims: vec![],
+            releases: vec![],
+            attempts: vec![],
+            pull_requests: vec![],
+            best_attempt_metric: None,
+            invalidated_attempt_branches: BTreeSet::new(),
+            findings: vec![],
+        }
+    }
+
     fn test_config(lead_github_login: &str) -> ProtocolConfig {
         ProtocolConfig {
             required_confirmations: 0,
             metric_tolerance: Some(0.01),
             metric_direction: MetricDirection::HigherIsBetter,
+            metric_bound: None,
             lead_github_login: Some(lead_github_login.to_string()),
             maintainer_github_login: Some("maintainer".to_string()),
             auto_approve: true,
@@ -706,6 +955,7 @@ mod tests {
             min_queue_depth: 5,
             max_queue_depth: Some(10),
             cli_version: None,
+            default_branch: None,
         }
     }
 }

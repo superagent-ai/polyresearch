@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_API_BUDGET: u64 = 5_000;
 pub const DEFAULT_REQUEST_DELAY_MS: u64 = 100;
 pub const DEFAULT_CAPACITY: u8 = 75;
+pub const DEFAULT_AGENT_TIMEOUT_SECS: u64 = 600;
 pub const NODE_ID_ENV_VAR: &str = "POLYRESEARCH_NODE_ID";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,6 +20,26 @@ pub const NODE_ID_ENV_VAR: &str = "POLYRESEARCH_NODE_ID";
 pub enum MetricDirection {
     HigherIsBetter,
     LowerIsBetter,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentConfig {
+    pub command: String,
+    #[serde(default = "default_agent_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            command: "claude -p --dangerously-skip-permissions".to_string(),
+            timeout_secs: DEFAULT_AGENT_TIMEOUT_SECS,
+        }
+    }
+}
+
+fn default_agent_timeout_secs() -> u64 {
+    DEFAULT_AGENT_TIMEOUT_SECS
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -30,6 +51,8 @@ pub struct NodeConfig {
     pub api_budget: u64,
     #[serde(default = "default_request_delay_ms")]
     pub request_delay_ms: u64,
+    #[serde(default)]
+    pub agent: AgentConfig,
 }
 
 impl NodeConfig {
@@ -38,12 +61,14 @@ impl NodeConfig {
         capacity: u8,
         api_budget: u64,
         request_delay_ms: u64,
+        agent: Option<AgentConfig>,
     ) -> Self {
         Self {
             node_id: node_id.into(),
             capacity: normalize_capacity(capacity),
             api_budget: normalize_api_budget(api_budget),
             request_delay_ms: normalize_request_delay_ms(request_delay_ms),
+            agent: agent.unwrap_or_default(),
         }
     }
 
@@ -87,7 +112,13 @@ impl NodeConfig {
             .map(|config| config.request_delay_ms)
             .unwrap_or(DEFAULT_REQUEST_DELAY_MS);
 
-        Ok(Self::new(node_id, capacity, api_budget, request_delay_ms))
+        Ok(Self::new(
+            node_id,
+            capacity,
+            api_budget,
+            request_delay_ms,
+            file_config.as_ref().map(|c| c.agent.clone()),
+        ))
     }
 
     pub fn load_api_budget(repo_root: &Path) -> u64 {
@@ -117,6 +148,25 @@ impl NodeConfig {
         fs::write(&path, rendered)
             .wrap_err_with(|| format!("failed to write {}", path.display()))?;
         Ok(())
+    }
+
+    pub fn with_overrides(mut self, overrides: &crate::cli::NodeOverrides) -> Self {
+        if let Some(c) = overrides.capacity {
+            self.capacity = normalize_capacity(c);
+        }
+        if let Some(b) = overrides.api_budget {
+            self.api_budget = normalize_api_budget(b);
+        }
+        if let Some(d) = overrides.request_delay {
+            self.request_delay_ms = normalize_request_delay_ms(d);
+        }
+        if let Some(ref cmd) = overrides.agent_command {
+            self.agent.command = cmd.clone();
+        }
+        if let Some(t) = overrides.agent_timeout {
+            self.agent.timeout_secs = t;
+        }
+        self
     }
 
     pub fn effective_capacity(&self) -> u8 {
@@ -198,6 +248,7 @@ pub struct ProtocolConfig {
     pub required_confirmations: u64,
     pub metric_tolerance: Option<f64>,
     pub metric_direction: MetricDirection,
+    pub metric_bound: Option<f64>,
     pub lead_github_login: Option<String>,
     pub maintainer_github_login: Option<String>,
     pub auto_approve: bool,
@@ -206,6 +257,7 @@ pub struct ProtocolConfig {
     pub min_queue_depth: usize,
     pub max_queue_depth: Option<usize>,
     pub cli_version: Option<String>,
+    pub default_branch: Option<String>,
 }
 
 impl Default for ProtocolConfig {
@@ -214,6 +266,7 @@ impl Default for ProtocolConfig {
             required_confirmations: 0,
             metric_tolerance: None,
             metric_direction: MetricDirection::HigherIsBetter,
+            metric_bound: None,
             lead_github_login: None,
             maintainer_github_login: None,
             auto_approve: true,
@@ -222,6 +275,7 @@ impl Default for ProtocolConfig {
             min_queue_depth: 5,
             max_queue_depth: None,
             cli_version: None,
+            default_branch: None,
         }
     }
 }
@@ -275,6 +329,13 @@ impl ProtocolConfig {
                         other => return Err(eyre!("invalid metric_direction `{other}`")),
                     };
                 }
+                "metric_bound" => {
+                    config.metric_bound = Some(
+                        value
+                            .parse()
+                            .wrap_err_with(|| format!("invalid metric_bound value `{value}`"))?,
+                    );
+                }
                 "lead_github_login" => {
                     if value != "replace-me" && !value.is_empty() {
                         config.lead_github_login = Some(value.to_string());
@@ -302,11 +363,21 @@ impl ProtocolConfig {
                 "cli_version" => {
                     config.cli_version = Some(value.to_string());
                 }
+                "default_branch" => {
+                    config.default_branch = Some(value.to_string());
+                }
                 _ => {}
             }
         }
 
         Ok(config)
+    }
+
+    pub fn resolved_metric_bound(&self) -> f64 {
+        self.metric_bound.unwrap_or(match self.metric_direction {
+            MetricDirection::LowerIsBetter => 0.0,
+            MetricDirection::HigherIsBetter => 1.0,
+        })
     }
 
     pub fn tolerance(&self) -> Result<f64> {
@@ -337,6 +408,34 @@ impl ProtocolConfig {
             "this project requires polyresearch CLI v{required}, but you are running v{current}"
         ))
     }
+
+    pub fn resolve_default_branch(&self, repo_root: &Path) -> Result<String> {
+        if let Some(branch) = &self.default_branch {
+            return Ok(branch.clone());
+        }
+        Ok(detect_default_branch_from_git(repo_root))
+    }
+}
+
+/// Detect the repository's default branch from git remote metadata.
+/// Checks `refs/remotes/origin/HEAD` first, then falls back to `"main"`.
+pub fn detect_default_branch_from_git(repo_root: &Path) -> String {
+    let output = std::process::Command::new("git")
+        .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
+        .current_dir(repo_root)
+        .output()
+        .ok();
+    if let Some(output) = output
+        && output.status.success()
+    {
+        let raw = String::from_utf8_lossy(&output.stdout);
+        let branch = raw.trim();
+        let branch = branch.strip_prefix("origin/").unwrap_or(branch);
+        if !branch.is_empty() {
+            return branch.to_string();
+        }
+    }
+    "main".to_string()
 }
 
 #[derive(Debug, Clone)]
@@ -726,7 +825,13 @@ capacity = 50
 
     #[test]
     fn defaults_capacity_when_zero() {
-        let config = NodeConfig::new("node-7f83", 0, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS);
+        let config = NodeConfig::new(
+            "node-7f83",
+            0,
+            DEFAULT_API_BUDGET,
+            DEFAULT_REQUEST_DELAY_MS,
+            None,
+        );
         assert_eq!(config.capacity, DEFAULT_CAPACITY);
     }
 
@@ -737,19 +842,26 @@ capacity = 50
             200,
             DEFAULT_API_BUDGET,
             DEFAULT_REQUEST_DELAY_MS,
+            None,
         );
         assert_eq!(config.capacity, 100);
     }
 
     #[test]
     fn defaults_api_budget_when_missing() {
-        let config = NodeConfig::new("node-7f83", DEFAULT_CAPACITY, 0, DEFAULT_REQUEST_DELAY_MS);
+        let config = NodeConfig::new(
+            "node-7f83",
+            DEFAULT_CAPACITY,
+            0,
+            DEFAULT_REQUEST_DELAY_MS,
+            None,
+        );
         assert_eq!(config.effective_api_budget(), DEFAULT_API_BUDGET);
     }
 
     #[test]
     fn defaults_request_delay_when_zero() {
-        let config = NodeConfig::new("node-7f83", DEFAULT_CAPACITY, DEFAULT_API_BUDGET, 0);
+        let config = NodeConfig::new("node-7f83", DEFAULT_CAPACITY, DEFAULT_API_BUDGET, 0, None);
         assert_eq!(
             config.effective_request_delay_ms(),
             DEFAULT_REQUEST_DELAY_MS
@@ -975,6 +1087,177 @@ Do something.
     fn check_cli_version_skipped_when_unset() {
         let config = ProtocolConfig::default();
         assert!(config.check_cli_version("0.0.0").is_ok());
+    }
+
+    #[test]
+    fn with_overrides_applies_capacity() {
+        let config = NodeConfig::new(
+            "n",
+            DEFAULT_CAPACITY,
+            DEFAULT_API_BUDGET,
+            DEFAULT_REQUEST_DELAY_MS,
+            None,
+        );
+        let overrides = crate::cli::NodeOverrides {
+            capacity: Some(42),
+            ..Default::default()
+        };
+        let updated = config.with_overrides(&overrides);
+        assert_eq!(updated.capacity, 42);
+        assert_eq!(updated.api_budget, DEFAULT_API_BUDGET);
+        assert_eq!(updated.request_delay_ms, DEFAULT_REQUEST_DELAY_MS);
+        assert_eq!(updated.agent, AgentConfig::default());
+    }
+
+    #[test]
+    fn with_overrides_applies_api_budget() {
+        let config = NodeConfig::new(
+            "n",
+            DEFAULT_CAPACITY,
+            DEFAULT_API_BUDGET,
+            DEFAULT_REQUEST_DELAY_MS,
+            None,
+        );
+        let overrides = crate::cli::NodeOverrides {
+            api_budget: Some(10_000),
+            ..Default::default()
+        };
+        let updated = config.with_overrides(&overrides);
+        assert_eq!(updated.api_budget, 10_000);
+        assert_eq!(updated.capacity, DEFAULT_CAPACITY);
+    }
+
+    #[test]
+    fn with_overrides_applies_request_delay() {
+        let config = NodeConfig::new(
+            "n",
+            DEFAULT_CAPACITY,
+            DEFAULT_API_BUDGET,
+            DEFAULT_REQUEST_DELAY_MS,
+            None,
+        );
+        let overrides = crate::cli::NodeOverrides {
+            request_delay: Some(500),
+            ..Default::default()
+        };
+        let updated = config.with_overrides(&overrides);
+        assert_eq!(updated.request_delay_ms, 500);
+    }
+
+    #[test]
+    fn with_overrides_applies_agent_command() {
+        let config = NodeConfig::new(
+            "n",
+            DEFAULT_CAPACITY,
+            DEFAULT_API_BUDGET,
+            DEFAULT_REQUEST_DELAY_MS,
+            None,
+        );
+        let overrides = crate::cli::NodeOverrides {
+            agent_command: Some("codex --full-auto".to_string()),
+            ..Default::default()
+        };
+        let updated = config.with_overrides(&overrides);
+        assert_eq!(updated.agent.command, "codex --full-auto");
+    }
+
+    #[test]
+    fn with_overrides_applies_all_fields() {
+        let config = NodeConfig::new("n", 50, 3000, 200, None);
+        let overrides = crate::cli::NodeOverrides {
+            capacity: Some(80),
+            api_budget: Some(9000),
+            request_delay: Some(300),
+            agent_command: Some("my-agent run".to_string()),
+            agent_timeout: Some(120),
+        };
+        let updated = config.with_overrides(&overrides);
+        assert_eq!(updated.capacity, 80);
+        assert_eq!(updated.api_budget, 9000);
+        assert_eq!(updated.request_delay_ms, 300);
+        assert_eq!(updated.agent.command, "my-agent run");
+        assert_eq!(updated.agent.timeout_secs, 120);
+        assert_eq!(updated.node_id, "n");
+    }
+
+    #[test]
+    fn with_overrides_empty_leaves_unchanged() {
+        let config = NodeConfig::new(
+            "n",
+            50,
+            3000,
+            200,
+            Some(AgentConfig {
+                command: "original".to_string(),
+                ..Default::default()
+            }),
+        );
+        let overrides = crate::cli::NodeOverrides::default();
+        let updated = config.clone().with_overrides(&overrides);
+        assert_eq!(updated, config);
+    }
+
+    #[test]
+    fn with_overrides_normalizes_zero_capacity() {
+        let config = NodeConfig::new("n", 50, DEFAULT_API_BUDGET, DEFAULT_REQUEST_DELAY_MS, None);
+        let overrides = crate::cli::NodeOverrides {
+            capacity: Some(0),
+            ..Default::default()
+        };
+        let updated = config.with_overrides(&overrides);
+        assert_eq!(updated.capacity, DEFAULT_CAPACITY);
+    }
+
+    #[test]
+    fn agent_config_default_timeout() {
+        let agent = AgentConfig::default();
+        assert_eq!(agent.timeout_secs, DEFAULT_AGENT_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn with_overrides_applies_agent_timeout() {
+        let config = NodeConfig::new(
+            "n",
+            DEFAULT_CAPACITY,
+            DEFAULT_API_BUDGET,
+            DEFAULT_REQUEST_DELAY_MS,
+            None,
+        );
+        let overrides = crate::cli::NodeOverrides {
+            agent_timeout: Some(120),
+            ..Default::default()
+        };
+        let updated = config.with_overrides(&overrides);
+        assert_eq!(updated.agent.timeout_secs, 120);
+        assert_eq!(updated.agent.command, AgentConfig::default().command);
+    }
+
+    #[test]
+    fn agent_config_toml_roundtrip_with_timeout() {
+        let toml_str = r#"
+node_id = "test"
+capacity = 75
+
+[agent]
+command = "my-agent"
+timeout_secs = 300
+"#;
+        let config: NodeConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.agent.timeout_secs, 300);
+        assert_eq!(config.agent.command, "my-agent");
+    }
+
+    #[test]
+    fn agent_config_toml_default_timeout_when_omitted() {
+        let toml_str = r#"
+node_id = "test"
+capacity = 75
+
+[agent]
+command = "my-agent"
+"#;
+        let config: NodeConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.agent.timeout_secs, DEFAULT_AGENT_TIMEOUT_SECS);
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {

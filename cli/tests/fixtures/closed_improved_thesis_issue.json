@@ -1,0 +1,37 @@
+{
+  "leadGithubLogin": "lead",
+  "issue": {
+    "number": 33,
+    "title": "Closed improved thesis fixture",
+    "body": "Thesis with an improved attempt, merged PR, and closed issue",
+    "state": "CLOSED",
+    "labels": [{ "name": "thesis" }],
+    "createdAt": "2099-04-08T00:00:00Z",
+    "closedAt": "2099-04-08T01:00:00Z",
+    "author": { "login": "lead" },
+    "url": "https://example.test/issues/33"
+  },
+  "comments": [
+    {
+      "id": 1,
+      "body": "Polyresearch approval: thesis #33.\n\n<!-- polyresearch:approval\nthesis: 33\n-->",
+      "user": { "login": "lead" },
+      "created_at": "2099-04-08T00:01:00Z",
+      "updated_at": null
+    },
+    {
+      "id": 2,
+      "body": "Polyresearch claim: thesis #33 by node `test-node`.\n\n<!-- polyresearch:claim\nthesis: 33\nnode: test-node\n-->",
+      "user": { "login": "alice" },
+      "created_at": "2099-04-08T00:02:00Z",
+      "updated_at": null
+    },
+    {
+      "id": 3,
+      "body": "Polyresearch attempt: thesis #33, branch `thesis/33-improved-attempt-1`, metric `0.9500`, observation `improved`.\n\n<!-- polyresearch:attempt\nthesis: 33\nbranch: thesis/33-improved-attempt-1\nmetric: 0.9500\nbaseline_metric: 0.9000\nobservation: improved\nsummary: Better prompt\n-->",
+      "user": { "login": "alice" },
+      "created_at": "2099-04-08T00:03:00Z",
+      "updated_at": null
+    }
+  ]
+}

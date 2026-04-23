@@ -3,7 +3,9 @@ use serde::Serialize;
 
 use crate::cli::IssueArgs;
 use crate::commands::guards::require_claimed_thesis;
-use crate::commands::{AppContext, current_branch, print_value, push_current_branch, read_node_id};
+use crate::commands::{
+    AppContext, current_branch, print_value, push_current_branch, read_node_id, run_git,
+};
 use crate::comments::Observation;
 use crate::state::RepositoryState;
 
@@ -40,6 +42,17 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
         return Err(eyre!("branch `{branch}` already has an open PR"));
     }
 
+    let default_branch = ctx.config.resolve_default_branch(&ctx.repo_root)?;
+    let diff_output = run_git(
+        &ctx.repo_root,
+        &["diff", "--name-only", &default_branch, "HEAD"],
+    )?;
+    if diff_output.trim().is_empty() {
+        return Err(eyre!(
+            "branch `{branch}` has no file changes compared to `{default_branch}`; nothing to submit"
+        ));
+    }
+
     if !ctx.cli.dry_run {
         push_current_branch(&ctx.repo_root)?;
     }
@@ -47,18 +60,23 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
     let pr = if ctx.cli.dry_run {
         None
     } else {
-        Some(ctx.github.create_pull_request(
+        let pr = ctx.github.create_pull_request(
             &branch,
             &format!("Thesis #{}: {}", args.issue, thesis.issue.title),
-            &format!(
-                "References #{}\n\nSelf-reported metric: {:.4}\nBaseline: {:.4}\nSummary: {}",
-                args.issue,
-                improved_attempt.metric,
-                improved_attempt.baseline_metric,
-                improved_attempt.summary
-            ),
-            "main",
-        )?)
+            &match improved_attempt.baseline_metric {
+                Some(b) => format!(
+                    "References #{}\n\nSelf-reported metric: {:.4}\nBaseline: {:.4}\nSummary: {}",
+                    args.issue, improved_attempt.metric, b, improved_attempt.summary
+                ),
+                None => format!(
+                    "References #{}\n\nSelf-reported metric: {:.4}\nBaseline: N/A\nSummary: {}",
+                    args.issue, improved_attempt.metric, improved_attempt.summary
+                ),
+            },
+            &default_branch,
+        )?;
+        crate::cycle_guard::mark_done()?;
+        Some(pr)
     };
 
     let output = SubmitOutput {

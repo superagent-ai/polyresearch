@@ -19,6 +19,11 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub dry_run: bool,
 
+    /// Show full subprocess commands and working directories on failure.
+    /// For GitHub API tracing, use --github-debug instead.
+    #[arg(long, global = true, env = "POLYRESEARCH_VERBOSE")]
+    pub verbose: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -29,6 +34,8 @@ pub enum Commands {
     Pace,
     Status(StatusArgs),
     Claim(IssueArgs),
+    Resume(IssueArgs),
+    Commit(CommitArgs),
     BatchClaim(BatchClaimArgs),
     Attempt(AttemptArgs),
     Annotate(AnnotateArgs),
@@ -44,6 +51,37 @@ pub enum Commands {
     PolicyCheck(PrArgs),
     Decide(PrArgs),
     Prune,
+    Bootstrap(BootstrapArgs),
+    Lead(LeadArgs),
+    Contribute(ContributeArgs),
+}
+
+#[derive(Debug, Args, Clone, Default)]
+pub struct NodeOverrides {
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=100))]
+    pub capacity: Option<u8>,
+
+    #[arg(long)]
+    pub api_budget: Option<u64>,
+
+    #[arg(long)]
+    pub request_delay: Option<u64>,
+
+    #[arg(long)]
+    pub agent_command: Option<String>,
+
+    #[arg(long)]
+    pub agent_timeout: Option<u64>,
+}
+
+impl NodeOverrides {
+    pub fn has_any(&self) -> bool {
+        self.capacity.is_some()
+            || self.api_budget.is_some()
+            || self.request_delay.is_some()
+            || self.agent_command.is_some()
+            || self.agent_timeout.is_some()
+    }
 }
 
 #[derive(Debug, Args, Clone)]
@@ -51,8 +89,8 @@ pub struct InitArgs {
     #[arg(long)]
     pub node: Option<String>,
 
-    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=100))]
-    pub capacity: Option<u8>,
+    #[command(flatten)]
+    pub overrides: NodeOverrides,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -64,6 +102,14 @@ pub struct StatusArgs {
 #[derive(Debug, Args, Clone)]
 pub struct IssueArgs {
     pub issue: u64,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct CommitArgs {
+    pub issue: u64,
+
+    #[arg(long)]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -181,4 +227,55 @@ pub struct AdminReopenThesisArgs {
 
     #[arg(long, default_value = "Lead repair reopened the thesis.")]
     pub note: String,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct BootstrapArgs {
+    #[arg(help = "GitHub repo (owner/repo or full URL)")]
+    pub url: String,
+
+    #[arg(long)]
+    pub fork: Option<String>,
+
+    #[arg(long, conflicts_with = "fork")]
+    pub no_fork: bool,
+
+    #[arg(long)]
+    pub goal: Option<String>,
+
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+
+    #[command(flatten)]
+    pub overrides: NodeOverrides,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct LeadArgs {
+    #[arg(long)]
+    pub once: bool,
+
+    #[arg(long, default_value = "60")]
+    pub sleep_secs: u64,
+
+    #[command(flatten)]
+    pub overrides: NodeOverrides,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct ContributeArgs {
+    #[arg(help = "GitHub repo (owner/repo or full URL)")]
+    pub url: Option<String>,
+
+    #[arg(long)]
+    pub once: bool,
+
+    #[arg(long)]
+    pub max_parallel: Option<usize>,
+
+    #[arg(long, default_value = "60")]
+    pub sleep_secs: u64,
+
+    #[command(flatten)]
+    pub overrides: NodeOverrides,
 }

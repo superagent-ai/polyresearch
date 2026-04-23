@@ -3,28 +3,35 @@ pub mod annotate;
 pub mod attempt;
 pub mod audit;
 pub mod batch_claim;
+pub mod bootstrap;
 pub mod claim;
+pub mod commit;
+pub mod contribute;
 pub mod decide;
 pub mod duties;
 pub mod generate;
 pub mod guards;
 pub mod init;
+pub mod lead;
 pub mod pace;
 pub mod policy_check;
 pub mod prune;
 pub mod release;
+pub mod resume;
 pub mod review;
 pub mod review_claim;
 pub mod status;
 pub mod submit;
 pub mod sync;
 
+use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
 use color_eyre::eyre::{Context, Result, eyre};
+use rand::RngExt;
 use serde::Serialize;
 
 use crate::cli::{Cli, Commands};
@@ -63,6 +70,8 @@ pub async fn run(ctx: AppContext) -> Result<()> {
         Commands::Pace => pace::run(&ctx).await,
         Commands::Status(args) => status::run(&ctx, args).await,
         Commands::Claim(args) => claim::run(&ctx, args).await,
+        Commands::Resume(args) => resume::run(&ctx, args).await,
+        Commands::Commit(args) => commit::run(&ctx, args).await,
         Commands::BatchClaim(args) => batch_claim::run(&ctx, args).await,
         Commands::Attempt(args) => attempt::run(&ctx, args).await,
         Commands::Annotate(args) => annotate::run(&ctx, args).await,
@@ -78,6 +87,9 @@ pub async fn run(ctx: AppContext) -> Result<()> {
         Commands::PolicyCheck(args) => policy_check::run(&ctx, args).await,
         Commands::Decide(args) => decide::run(&ctx, args).await,
         Commands::Prune => prune::run(&ctx).await,
+        Commands::Bootstrap(args) => bootstrap::run(&ctx, args).await,
+        Commands::Lead(args) => lead::run(&ctx, args).await,
+        Commands::Contribute(args) => contribute::run(&ctx, args).await,
     }
 }
 
@@ -101,43 +113,80 @@ pub fn exit_with(code: i32, message: impl Into<String>) -> Result<()> {
     .into())
 }
 
-pub fn read_node_config(repo_root: &PathBuf) -> Result<NodeConfig> {
+pub fn read_node_config(repo_root: &Path) -> Result<NodeConfig> {
     NodeConfig::load(repo_root)
 }
 
-pub fn read_node_id(repo_root: &PathBuf) -> Result<String> {
+pub fn read_node_id(repo_root: &Path) -> Result<String> {
     Ok(read_node_config(repo_root)?.node_id)
 }
 
-pub fn write_node_id(repo_root: &PathBuf, node: &str) -> Result<()> {
-    write_node_config(repo_root, node, None)
+pub fn write_node_id(repo_root: &Path, node: &str) -> Result<()> {
+    write_node_config(repo_root, node, &crate::cli::NodeOverrides::default())
 }
 
 pub fn write_node_config(
-    repo_root: &PathBuf,
+    repo_root: &Path,
     node: &str,
-    capacity: Option<u8>,
+    overrides: &crate::cli::NodeOverrides,
 ) -> Result<()> {
-    let existing = NodeConfig::load(repo_root).ok();
-    let existing_budget = existing
-        .as_ref()
-        .map(|config| config.api_budget)
-        .unwrap_or_else(|| NodeConfig::load_api_budget(repo_root));
-    let existing_request_delay_ms = existing
-        .as_ref()
-        .map(|config| config.request_delay_ms)
-        .unwrap_or_else(|| NodeConfig::load_request_delay_ms(repo_root));
-    let existing_capacity = existing
-        .as_ref()
-        .map(|config| config.capacity)
-        .unwrap_or(crate::config::DEFAULT_CAPACITY);
-    NodeConfig::new(
-        node.to_string(),
-        capacity.unwrap_or(existing_capacity),
-        existing_budget,
-        existing_request_delay_ms,
-    )
-    .save(repo_root)
+    let mut config = NodeConfig::load(repo_root).unwrap_or_else(|_| {
+        NodeConfig::new(
+            node,
+            crate::config::DEFAULT_CAPACITY,
+            crate::config::DEFAULT_API_BUDGET,
+            crate::config::DEFAULT_REQUEST_DELAY_MS,
+            None,
+        )
+    });
+    config.node_id = node.to_string();
+    config.with_overrides(overrides).save(repo_root)
+}
+
+pub(crate) fn default_machine_id() -> String {
+    let hostname = resolve_hostname();
+    let suffix: u16 = rand::rng().random();
+    format!("{hostname}-{suffix:04x}")
+}
+
+pub(crate) fn resolve_hostname() -> String {
+    if let Ok(hostname) = env::var("HOSTNAME")
+        && !hostname.trim().is_empty()
+    {
+        return hostname.trim().to_string();
+    }
+
+    let output = Command::new("hostname").output();
+    match output {
+        Ok(output) if output.status.success() => String::from_utf8(output.stdout)
+            .map(|value| value.trim().to_string())
+            .unwrap_or_else(|_| "local".to_string()),
+        _ => "local".to_string(),
+    }
+}
+
+pub fn ensure_node_config(repo_root: &Path, login: &str) -> Result<()> {
+    let config_path = repo_root.join(".polyresearch-node.toml");
+    if config_path.exists() {
+        return Ok(());
+    }
+    eprintln!("No node config found, initializing...");
+    let machine_id = default_machine_id();
+    let node_id = format!("{login}/{machine_id}");
+    write_node_config(repo_root, &node_id, &crate::cli::NodeOverrides::default())?;
+    eprintln!("Initialized node as `{node_id}`");
+    Ok(())
+}
+
+pub fn sync_node_config_to_worktree(repo_root: &Path, worktree_path: &Path) -> Result<()> {
+    let src = repo_root.join(".polyresearch-node.toml");
+    if src.exists() {
+        let dst = worktree_path.join(".polyresearch-node.toml");
+        fs::copy(&src, &dst).wrap_err_with(|| {
+            format!("failed to sync node config to {}", worktree_path.display())
+        })?;
+    }
+    Ok(())
 }
 
 pub fn node_active_claims(repo_state: &RepositoryState, node_id: &str) -> usize {
@@ -190,7 +239,7 @@ pub struct ThesisWorkspace {
     pub worktree_path: PathBuf,
 }
 
-pub fn thesis_worktree_path(repo_root: &PathBuf, issue_number: u64, title: &str) -> PathBuf {
+pub fn thesis_worktree_path(repo_root: &Path, issue_number: u64, title: &str) -> PathBuf {
     let slug = slugify(title);
     repo_root
         .join(".worktrees")
@@ -201,6 +250,7 @@ pub fn create_thesis_worktree(
     repo_root: &PathBuf,
     issue_number: u64,
     title: &str,
+    default_branch: &str,
 ) -> Result<ThesisWorkspace> {
     let slug = slugify(title);
     let branch = format!("thesis/{issue_number}-{slug}");
@@ -228,7 +278,14 @@ pub fn create_thesis_worktree(
     let worktree_path_arg = worktree_path.to_string_lossy().into_owned();
     run_git(
         repo_root,
-        &["worktree", "add", "-b", &branch, &worktree_path_arg, "main"],
+        &[
+            "worktree",
+            "add",
+            "-b",
+            &branch,
+            &worktree_path_arg,
+            default_branch,
+        ],
     )?;
 
     Ok(ThesisWorkspace {
@@ -261,4 +318,56 @@ pub fn slugify(input: &str) -> String {
         }
     }
     output.trim_matches('-').to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_hostname;
+    use std::env;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    fn hostname_env_lock() -> &'static Mutex<()> {
+        static HOSTNAME_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        HOSTNAME_ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct HostnameEnvGuard {
+        _guard: MutexGuard<'static, ()>,
+        previous: Option<String>,
+    }
+
+    impl HostnameEnvGuard {
+        fn set(value: &str) -> Self {
+            let guard = hostname_env_lock()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let previous = env::var("HOSTNAME").ok();
+            unsafe {
+                env::set_var("HOSTNAME", value);
+            }
+            Self {
+                _guard: guard,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for HostnameEnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(previous) => unsafe {
+                    env::set_var("HOSTNAME", previous);
+                },
+                None => unsafe {
+                    env::remove_var("HOSTNAME");
+                },
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_hostname_trims_hostname_env_var() {
+        let _guard = HostnameEnvGuard::set("worker-host  \n");
+        assert_eq!(resolve_hostname(), "worker-host");
+    }
 }

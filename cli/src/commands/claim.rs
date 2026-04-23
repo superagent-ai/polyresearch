@@ -1,6 +1,7 @@
 use color_eyre::eyre::{Result, eyre};
 use serde::Serialize;
 
+use crate::agent;
 use crate::cli::IssueArgs;
 use crate::commands::duties;
 use crate::commands::guards::require_claimable_thesis;
@@ -9,6 +10,7 @@ use crate::commands::{
 };
 use crate::comments::ProtocolComment;
 use crate::state::{RepositoryState, ThesisState};
+use crate::worker;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ClaimOutput {
@@ -19,10 +21,11 @@ pub(crate) struct ClaimOutput {
 }
 
 pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
+    crate::cycle_guard::check_cycle_limit()?;
     let node = read_node_id(&ctx.repo_root)?;
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
 
-    let duty_report = duties::check(ctx, &repo_state)?;
+    let duty_report = duties::claim_gate(ctx, &repo_state)?;
     if !duty_report.blocking.is_empty() {
         let items: Vec<String> = duty_report
             .blocking
@@ -83,8 +86,20 @@ pub(crate) fn claim_selected_thesis(
                 .to_string();
         (branch, worktree_path)
     } else {
-        let workspace =
-            create_thesis_worktree(&ctx.repo_root, thesis.issue.number, &thesis.issue.title)?;
+        let default_branch = ctx.config.resolve_default_branch(&ctx.repo_root)?;
+        let workspace = create_thesis_worktree(
+            &ctx.repo_root,
+            thesis.issue.number,
+            &thesis.issue.title,
+            &default_branch,
+        )?;
+        let prior_attempts = worker::format_prior_attempts(thesis);
+        agent::write_thesis_context(
+            &workspace.worktree_path,
+            &thesis.issue.title,
+            thesis.issue.body.as_deref().unwrap_or(""),
+            &prior_attempts,
+        )?;
         (
             workspace.branch,
             workspace.worktree_path.display().to_string(),

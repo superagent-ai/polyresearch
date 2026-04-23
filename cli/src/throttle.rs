@@ -56,6 +56,7 @@ fn acquire_request_slot_with_config(throttle: &RequestThrottle) -> Result<()> {
 
     let mut file = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(&throttle.state_path)
@@ -86,11 +87,11 @@ fn acquire_request_slot_with_config(throttle: &RequestThrottle) -> Result<()> {
 }
 
 fn pace_locked_file(file: &mut File, request_delay: Duration) -> Result<()> {
-    if let Some(last_request_at) = read_last_request(file)? {
-        if let Some(wait) = remaining_delay(last_request_at, request_delay) {
-            github_debug::log_throttle_wait(wait);
-            thread::sleep(wait);
-        }
+    if let Some(last_request_at) = read_last_request(file)?
+        && let Some(wait) = remaining_delay(last_request_at, request_delay)
+    {
+        github_debug::log_throttle_wait(wait);
+        thread::sleep(wait);
     }
 
     write_last_request(file, SystemTime::now())

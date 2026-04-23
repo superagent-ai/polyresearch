@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -67,7 +68,7 @@ impl Ledger {
         repo_state
             .theses
             .iter()
-            .flat_map(|thesis| rows_for_thesis(thesis))
+            .flat_map(rows_for_thesis)
             .filter(|row| !self.contains_attempt(&row.attempt))
             .collect()
     }
@@ -94,10 +95,15 @@ impl Ledger {
         Ok(())
     }
 
-    pub fn best_accepted_metric(&self, config: &ProtocolConfig) -> Option<f64> {
+    pub fn best_accepted_metric_excluding(
+        &self,
+        config: &ProtocolConfig,
+        excluded_branches: &BTreeSet<String>,
+    ) -> Option<f64> {
         self.rows
             .iter()
             .filter(|row| row.status == "accepted")
+            .filter(|row| !excluded_branches.contains(&row.attempt))
             .filter_map(|row| row.metric.parse::<f64>().ok())
             .fold(None, |current, metric| {
                 Some(match current {
@@ -156,7 +162,10 @@ fn rows_for_thesis(thesis: &ThesisState) -> Vec<LedgerRow> {
             thesis: format!("#{}", thesis.issue.number),
             attempt: attempt.branch.clone(),
             metric,
-            baseline: format!("{:.4}", attempt.baseline_metric),
+            baseline: attempt
+                .baseline_metric
+                .map(|b| format!("{b:.4}"))
+                .unwrap_or_else(|| "N/A".to_string()),
             status,
             summary: attempt.summary.clone(),
         });
