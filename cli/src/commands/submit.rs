@@ -60,7 +60,7 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
     let pr = if ctx.cli.dry_run {
         None
     } else {
-        Some(ctx.github.create_pull_request(
+        let pr = ctx.github.create_pull_request(
             &branch,
             &format!("Thesis #{}: {}", args.issue, thesis.issue.title),
             &match improved_attempt.baseline_metric {
@@ -74,7 +74,9 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
                 ),
             },
             &default_branch,
-        )?)
+        )?;
+        crate::cycle_guard::mark_done()?;
+        Some(pr)
     };
 
     let output = SubmitOutput {

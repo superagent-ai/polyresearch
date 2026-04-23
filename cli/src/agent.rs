@@ -455,6 +455,7 @@ pub fn spawn_workflow_agent(
     agent_command: &str,
     work_dir: &Path,
     prompt: &str,
+    once_guard: Option<&Path>,
     verbose: bool,
 ) -> Result<()> {
     let parts = shell_words(agent_command);
@@ -468,6 +469,9 @@ pub fn spawn_workflow_agent(
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::inherit());
     cmd.stderr(Stdio::inherit());
+    if let Some(path) = once_guard {
+        cmd.env(crate::cycle_guard::GUARD_ENV_VAR, path);
+    }
 
     eprintln!("Spawning workflow agent in {}...", work_dir.display(),);
     let mut child = cmd.spawn().wrap_err("failed to spawn workflow agent")?;

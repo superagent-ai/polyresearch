@@ -18,6 +18,7 @@ struct BatchClaimOutput {
 }
 
 pub async fn run(ctx: &AppContext, args: &BatchClaimArgs) -> Result<()> {
+    crate::cycle_guard::check_cycle_limit()?;
     let node = read_node_id(&ctx.repo_root)?;
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
 
