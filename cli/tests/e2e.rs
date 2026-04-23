@@ -1817,7 +1817,9 @@ async fn duties_lead_duties_excluded_in_contribute_context() {
         created_at: now,
         closed_at: None,
         merged_at: None,
-        author: Some(Author { login: "alice".to_string() }),
+        author: Some(Author {
+            login: "alice".to_string(),
+        }),
         url: None,
         mergeable: None,
     };
@@ -1844,7 +1846,9 @@ async fn duties_lead_duties_excluded_in_contribute_context() {
             created_at: now,
             closed_at: None,
             merged_at: None,
-            author: Some(Author { login: "alice".to_string() }),
+            author: Some(Author {
+                login: "alice".to_string(),
+            }),
             url: None,
             mergeable: None,
         },
@@ -1894,7 +1898,9 @@ async fn duties_lead_duties_included_in_lead_context() {
         created_at: now,
         closed_at: None,
         merged_at: None,
-        author: Some(Author { login: "alice".to_string() }),
+        author: Some(Author {
+            login: "alice".to_string(),
+        }),
         url: None,
         mergeable: None,
     };
@@ -1921,7 +1927,9 @@ async fn duties_lead_duties_included_in_lead_context() {
             created_at: now,
             closed_at: None,
             merged_at: None,
-            author: Some(Author { login: "alice".to_string() }),
+            author: Some(Author {
+                login: "alice".to_string(),
+            }),
             url: None,
             mergeable: None,
         },
@@ -2056,7 +2064,9 @@ async fn duties_submit_skipped_when_pr_merged() {
             created_at: now,
             closed_at: Some(now),
             merged_at: Some(now),
-            author: Some(Author { login: "alice".to_string() }),
+            author: Some(Author {
+                login: "alice".to_string(),
+            }),
             url: None,
             mergeable: None,
         },
@@ -2473,7 +2483,9 @@ async fn duties_contribute_proceeds_despite_pending_lead_duties() {
         created_at: now,
         closed_at: None,
         merged_at: None,
-        author: Some(Author { login: "alice".to_string() }),
+        author: Some(Author {
+            login: "alice".to_string(),
+        }),
         url: None,
         mergeable: None,
     };
@@ -2501,7 +2513,9 @@ async fn duties_contribute_proceeds_despite_pending_lead_duties() {
             created_at: now,
             closed_at: None,
             merged_at: None,
-            author: Some(Author { login: "alice".to_string() }),
+            author: Some(Author {
+                login: "alice".to_string(),
+            }),
             url: None,
             mergeable: None,
         },
@@ -2524,7 +2538,8 @@ async fn duties_contribute_proceeds_despite_pending_lead_duties() {
         "lead context should see decide as blocking"
     );
 
-    let contribute_report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
+    let contribute_report =
+        commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
     assert!(
         contribute_report.blocking.is_empty(),
         "contribute context must not be blocked by lead duties; got: {:?}",
@@ -2872,7 +2887,6 @@ async fn bootstrap_commits_setup_files() {
 
     commands::bootstrap::write_templates(&repo.path, Some("Test goal"), "lead").unwrap();
     commands::bootstrap::normalize_program_md(&repo.path).unwrap();
-
     let check_ignore_output = Command::new("git")
         .args(["check-ignore", ".polyresearch-node.toml"])
         .current_dir(&repo.path)
@@ -2883,7 +2897,7 @@ async fn bootstrap_commits_setup_files() {
         ".polyresearch-node.toml should be gitignored"
     );
 
-    commands::bootstrap::commit_and_push_setup_files(&repo.path).unwrap();
+    commands::bootstrap::commit_and_push_setup_files(&repo.path, &[]).unwrap();
 
     // Verify git status is clean for setup files
     let status_output = Command::new("git")
@@ -3098,6 +3112,63 @@ async fn bootstrap_commits_setup_files_with_allowlist_gitignore() {
 }
 
 #[tokio::test]
+async fn bootstrap_commits_agent_created_benchmark_files() {
+    let repo = TestRepo::new("bootstrap-benchmark-files");
+    init_git_repo(&repo.path);
+
+    let bare = TestRepo::new("bootstrap-benchmark-files-bare");
+    let _ = fs::remove_dir_all(&bare.path);
+    Command::new("git")
+        .args([
+            "clone",
+            "--bare",
+            &repo.path.to_string_lossy(),
+            &bare.path.to_string_lossy(),
+        ])
+        .output()
+        .unwrap();
+    run_git(
+        &repo.path,
+        &["remote", "add", "origin", &bare.path.to_string_lossy()],
+    );
+
+    commands::bootstrap::write_templates(&repo.path, Some("Test goal"), "lead").unwrap();
+    commands::bootstrap::normalize_program_md(&repo.path).unwrap();
+
+    fs::create_dir_all(repo.path.join("bench")).unwrap();
+    fs::write(
+        repo.path.join("bench/eval.js"),
+        "console.log('benchmark helper');\n",
+    )
+    .unwrap();
+
+    let extra_paths = vec!["bench/eval.js".to_string()];
+    commands::bootstrap::commit_and_push_setup_files(&repo.path, &extra_paths).unwrap();
+
+    let show_output = Command::new("git")
+        .args(["show", "HEAD", "--name-only", "--format="])
+        .current_dir(&repo.path)
+        .output()
+        .unwrap();
+    let files = String::from_utf8(show_output.stdout).unwrap();
+    assert!(
+        files.contains("bench/eval.js"),
+        "bench/eval.js not in commit: {files}"
+    );
+
+    let status_output = Command::new("git")
+        .args(["status", "--porcelain", "--", "bench/eval.js"])
+        .current_dir(&repo.path)
+        .output()
+        .unwrap();
+    let status = String::from_utf8(status_output.stdout).unwrap();
+    assert!(
+        status.trim().is_empty(),
+        "benchmark helper should be clean after commit, got: {status}"
+    );
+}
+
+#[tokio::test]
 async fn bootstrap_commit_is_idempotent() {
     let repo = TestRepo::new("bootstrap-commit-idempotent");
     init_git_repo(&repo.path);
@@ -3120,10 +3191,10 @@ async fn bootstrap_commit_is_idempotent() {
 
     commands::bootstrap::write_templates(&repo.path, None, "lead").unwrap();
     commands::bootstrap::normalize_program_md(&repo.path).unwrap();
-    commands::bootstrap::commit_and_push_setup_files(&repo.path).unwrap();
+    commands::bootstrap::commit_and_push_setup_files(&repo.path, &[]).unwrap();
 
     // Second call should not error (nothing to commit)
-    commands::bootstrap::commit_and_push_setup_files(&repo.path).unwrap();
+    commands::bootstrap::commit_and_push_setup_files(&repo.path, &[]).unwrap();
 
     // Should still be only one setup commit
     let log_output = Command::new("git")
@@ -6578,11 +6649,11 @@ async fn decide_excludes_acknowledged_invalid_from_best_metric() {
     run_git(&repo.path, &["commit", "-m", "setup"]);
 
     let (issues, ic, prs, pc) = make_decidable_state_with_poisoned_prior(
-        1,     // thesis_number (current)
-        50,    // pr_number (current)
-        20421.0, // current_metric
-        15000.0, // baseline
-        17658.0, // prior_valid_metric
+        1,        // thesis_number (current)
+        50,       // pr_number (current)
+        20421.0,  // current_metric
+        15000.0,  // baseline
+        17658.0,  // prior_valid_metric
         218000.0, // poisoned_metric
         "lead",
     );
