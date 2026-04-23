@@ -28,6 +28,16 @@ pub struct DutyReport {
     pub clean: bool,
 }
 
+pub fn context_for(ctx: &AppContext) -> DutyContext {
+    match (
+        ctx.github.current_login().ok(),
+        ctx.config.lead_github_login.as_deref(),
+    ) {
+        (Some(login), Some(lead)) if login == lead => DutyContext::Lead,
+        _ => DutyContext::Contribute,
+    }
+}
+
 pub fn check(
     ctx: &AppContext,
     repo_state: &RepositoryState,
@@ -464,14 +474,7 @@ fn render_report(value: &DutyReport) -> String {
 
 pub async fn run(ctx: &AppContext) -> Result<()> {
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
-    let context = match (
-        ctx.github.current_login().ok(),
-        ctx.config.lead_github_login.as_deref(),
-    ) {
-        (Some(login), Some(lead)) if login == lead => DutyContext::Lead,
-        _ => DutyContext::Contribute,
-    };
-    let report = check(ctx, &repo_state, context)?;
+    let report = check(ctx, &repo_state, context_for(ctx))?;
 
     print_value(ctx, &report, render_report)
 }

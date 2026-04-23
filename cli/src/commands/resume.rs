@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use color_eyre::eyre::{Context, Result, eyre};
 
@@ -8,7 +8,8 @@ use crate::cli::IssueArgs;
 use crate::commands::claim::ClaimOutput;
 use crate::commands::guards::require_claimed_thesis;
 use crate::commands::{
-    AppContext, current_branch, print_value, read_node_id, run_git, slugify, thesis_worktree_path,
+    AppContext, current_branch, print_value, read_node_id, run_git, slugify,
+    sync_node_config_to_worktree, thesis_worktree_path,
 };
 use crate::state::{RepositoryState, ThesisState};
 use crate::worker;
@@ -50,7 +51,7 @@ pub(crate) fn resume_selected_thesis(
     if !ctx.cli.dry_run {
         let default_branch = ctx.config.resolve_default_branch(&ctx.repo_root)?;
         ensure_worktree(&ctx.repo_root, &worktree_path, &branch, &default_branch)?;
-        sync_node_config(&ctx.repo_root, &worktree_path)?;
+        sync_node_config_to_worktree(&ctx.repo_root, &worktree_path)?;
 
         let prior_attempts = worker::format_prior_attempts(thesis);
         agent::write_thesis_context(
@@ -100,16 +101,5 @@ fn ensure_worktree(
         )?;
     }
 
-    Ok(())
-}
-
-fn sync_node_config(repo_root: &Path, worktree_path: &Path) -> Result<()> {
-    let src = repo_root.join(".polyresearch-node.toml");
-    if src.exists() {
-        let dst = worktree_path.join(".polyresearch-node.toml");
-        fs::copy(&src, &dst).wrap_err_with(|| {
-            format!("failed to sync node config to {}", worktree_path.display())
-        })?;
-    }
     Ok(())
 }

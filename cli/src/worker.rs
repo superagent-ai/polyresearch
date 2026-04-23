@@ -369,17 +369,7 @@ impl ThesisWorker {
     }
 
     fn sync_node_config(&self) -> Result<()> {
-        let src = self.ctx.repo_root.join(".polyresearch-node.toml");
-        if src.exists() {
-            let dst = self.worktree_path.join(".polyresearch-node.toml");
-            fs::copy(&src, &dst).wrap_err_with(|| {
-                format!(
-                    "failed to sync node config to {}",
-                    self.worktree_path.display()
-                )
-            })?;
-        }
-        Ok(())
+        commands::sync_node_config_to_worktree(&self.ctx.repo_root, &self.worktree_path)
     }
 
     fn write_thesis_context(&self) -> Result<()> {

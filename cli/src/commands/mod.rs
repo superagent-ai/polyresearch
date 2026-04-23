@@ -166,6 +166,17 @@ pub fn ensure_node_config(repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn sync_node_config_to_worktree(repo_root: &Path, worktree_path: &Path) -> Result<()> {
+    let src = repo_root.join(".polyresearch-node.toml");
+    if src.exists() {
+        let dst = worktree_path.join(".polyresearch-node.toml");
+        fs::copy(&src, &dst).wrap_err_with(|| {
+            format!("failed to sync node config to {}", worktree_path.display())
+        })?;
+    }
+    Ok(())
+}
+
 pub fn node_active_claims(repo_state: &RepositoryState, node_id: &str) -> usize {
     repo_state
         .theses

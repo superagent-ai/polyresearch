@@ -2196,6 +2196,89 @@ async fn claim_rejects_new_claim_when_resume_duty_exists() {
     );
 }
 
+#[tokio::test]
+async fn lead_claim_allows_new_claim_when_resume_duty_is_advisory() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("lead-claim-gate");
+    let fixture_claimed = load_issue_fixture("claimed_no_attempts_issue.json");
+    let fixture_open = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![fixture_claimed.issue.clone(), fixture_open.issue.clone()],
+        HashMap::from([
+            (
+                fixture_claimed.issue.number,
+                fixture_claimed.comments.clone(),
+            ),
+            (fixture_open.issue.number, fixture_open.comments.clone()),
+        ]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture_claimed.lead_github_login,
+        true,
+        Commands::Claim(IssueArgs {
+            issue: fixture_open.issue.number,
+        }),
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    commands::claim::run(
+        &ctx,
+        &IssueArgs {
+            issue: fixture_open.issue.number,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        mock.posted_issue_comments.lock().unwrap().is_empty(),
+        "dry-run lead claim should not post any claim comments"
+    );
+}
+
+#[tokio::test]
+async fn lead_batch_claim_allows_new_claim_when_resume_duty_is_advisory() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("lead-batch-claim-gate");
+    let fixture_claimed = load_issue_fixture("claimed_no_attempts_issue.json");
+    let fixture_open = load_issue_fixture("acknowledged_invalid_issue.json");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![fixture_claimed.issue.clone(), fixture_open.issue.clone()],
+        HashMap::from([
+            (
+                fixture_claimed.issue.number,
+                fixture_claimed.comments.clone(),
+            ),
+            (fixture_open.issue.number, fixture_open.comments.clone()),
+        ]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture_claimed.lead_github_login,
+        true,
+        Commands::BatchClaim(BatchClaimArgs { count: Some(1) }),
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    commands::batch_claim::run(&ctx, &BatchClaimArgs { count: Some(1) })
+        .await
+        .unwrap();
+
+    assert!(
+        mock.posted_issue_comments.lock().unwrap().is_empty(),
+        "dry-run lead batch-claim should not post any claim comments"
+    );
+}
+
 fn make_ctx(
     repo_root: PathBuf,
     github: Arc<dyn GitHubApi>,
@@ -5153,9 +5236,9 @@ async fn lead_decide_ready_prs_decides_policy_passed_pr() {
             .lock()
             .unwrap()
             .iter()
-            .any(|(number, body)| *number == 50
-                && body.contains("polyresearch:decision")
-                && body.contains("accepted")),
+            .any(|(number, body)| {
+                *number == 50 && body.contains("polyresearch:decision") && body.contains("accepted")
+            }),
         "should post an accepted decision comment on the PR"
     );
 }

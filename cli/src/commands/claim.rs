@@ -24,7 +24,7 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
     let node = read_node_id(&ctx.repo_root)?;
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
 
-    let duty_report = duties::check(ctx, &repo_state, duties::DutyContext::Contribute)?;
+    let duty_report = duties::check(ctx, &repo_state, duties::context_for(ctx))?;
     if !duty_report.blocking.is_empty() {
         let items: Vec<String> = duty_report
             .blocking
