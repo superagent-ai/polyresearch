@@ -1527,6 +1527,102 @@ async fn scenario_lead_once_error_propagation() {
 }
 
 #[tokio::test]
+async fn scenario_lead_once_deficient_queue_returns_error() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("lead-once-deficient");
+    repo.init_git();
+
+    let agent_cmd = mock_agent_command("noop");
+    repo.write_full_setup("lead", "lead-node-def", &agent_cmd);
+    repo.commit_all("setup");
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Lead(LeadArgs {
+            once: true,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::lead::run(
+        &ctx,
+        &LeadArgs {
+            once: true,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "lead --once should fail when the queue stays below min_queue_depth"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("queue depth") && err_msg.contains("focused refill retry"),
+        "error should mention the deficient queue after retry: {err_msg}"
+    );
+}
+
+#[tokio::test]
+async fn scenario_lead_continuous_generation_retry() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("lead-queue-retry");
+    repo.init_git();
+
+    let agent_cmd = "bash -c 'sleep 1'".to_string();
+    repo.write_full_setup("lead", "lead-node-queue", &agent_cmd);
+    repo.commit_all("setup");
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    let github_refill = Arc::clone(&github);
+    let refill_thread = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        for number in 200..205 {
+            let (issue, comments) =
+                make_approved_thesis(number, &format!("Generated thesis {number}"), "lead");
+            github_refill.seed_issue(issue);
+            github_refill.seed_issue_comments(number, comments);
+        }
+    });
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Lead(LeadArgs {
+            once: false,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::lead::run(
+        &ctx,
+        &LeadArgs {
+            once: false,
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    refill_thread.join().unwrap();
+    assert!(
+        result.is_ok(),
+        "continuous lead mode should succeed after the focused queue refill retry: {result:?}"
+    );
+}
+
+#[tokio::test]
 async fn scenario_lead_continuous_recovery() {
     let _guard = EnvGuard::lock_clean();
     let repo = ScenarioRepo::new("lead-recover");
@@ -3305,6 +3401,12 @@ async fn scenario_lead_run_decides_policy_passed_pr_after_agent_exit() {
 
     let agent_cmd = mock_agent_command("no_improvement");
     repo.write_full_setup("lead", "lead-node-post", &agent_cmd);
+    let program = fs::read_to_string(repo.path.join("PROGRAM.md")).unwrap();
+    fs::write(
+        repo.path.join("PROGRAM.md"),
+        program.replace("min_queue_depth: 5", "min_queue_depth: 0"),
+    )
+    .unwrap();
     repo.commit_all("setup");
 
     let github = Arc::new(ScenarioGitHub::new("lead"));
