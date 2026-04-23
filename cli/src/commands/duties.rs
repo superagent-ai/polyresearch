@@ -28,7 +28,11 @@ pub struct DutyReport {
     pub clean: bool,
 }
 
-pub fn check(ctx: &AppContext, repo_state: &RepositoryState, context: DutyContext) -> Result<DutyReport> {
+pub fn check(
+    ctx: &AppContext,
+    repo_state: &RepositoryState,
+    context: DutyContext,
+) -> Result<DutyReport> {
     let node_id = read_node_id(&ctx.repo_root).unwrap_or_default();
     let login = ctx.github.current_login().unwrap_or_default();
     let is_lead = ctx
@@ -63,17 +67,31 @@ pub fn check(ctx: &AppContext, repo_state: &RepositoryState, context: DutyContex
             .collect();
 
         if my_attempts.is_empty() {
-            advisory.push(DutyItem {
-                category: "attempt".to_string(),
-                message: format!(
-                    "Thesis #{}: claimed with 0 attempts posted yet.",
-                    thesis.issue.number
-                ),
-                command: format!(
-                    "polyresearch attempt {} --metric ... --observation ... --baseline ... --summary \"...\" OR polyresearch release {} --reason no_improvement",
-                    thesis.issue.number, thesis.issue.number
-                ),
-            });
+            let item = match context {
+                DutyContext::Lead => DutyItem {
+                    category: "attempt".to_string(),
+                    message: format!(
+                        "Thesis #{}: claimed with 0 attempts posted yet.",
+                        thesis.issue.number
+                    ),
+                    command: format!(
+                        "polyresearch attempt {} --metric ... --observation ... --baseline ... --summary \"...\" OR polyresearch release {} --reason no_improvement",
+                        thesis.issue.number, thesis.issue.number
+                    ),
+                },
+                DutyContext::Contribute => DutyItem {
+                    category: "resume".to_string(),
+                    message: format!(
+                        "Thesis #{}: claimed by this node with 0 attempts posted yet.",
+                        thesis.issue.number
+                    ),
+                    command: format!("polyresearch resume {}", thesis.issue.number),
+                },
+            };
+            match context {
+                DutyContext::Lead => advisory.push(item),
+                DutyContext::Contribute => blocking.push(item),
+            }
         }
 
         let has_improved = my_attempts
@@ -446,7 +464,14 @@ fn render_report(value: &DutyReport) -> String {
 
 pub async fn run(ctx: &AppContext) -> Result<()> {
     let repo_state = RepositoryState::derive(&ctx.github, &ctx.config).await?;
-    let report = check(ctx, &repo_state, DutyContext::Lead)?;
+    let context = match (
+        ctx.github.current_login().ok(),
+        ctx.config.lead_github_login.as_deref(),
+    ) {
+        (Some(login), Some(lead)) if login == lead => DutyContext::Lead,
+        _ => DutyContext::Contribute,
+    };
+    let report = check(ctx, &repo_state, context)?;
 
     print_value(ctx, &report, render_report)
 }

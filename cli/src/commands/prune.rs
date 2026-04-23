@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::{Context, Result};
 use serde::Serialize;
@@ -36,23 +36,24 @@ pub async fn run(ctx: &AppContext) -> Result<()> {
                 continue;
             }
 
-            if let Some(issue_num) = parse_issue_from_dirname(&path) {
-                if terminal_issues.contains(&issue_num) {
-                    if registered.contains(&path) {
-                        let path_arg = path.to_string_lossy().into_owned();
-                        run_git(&ctx.repo_root, &["worktree", "remove", "--force", &path_arg])
-                            .wrap_err_with(|| {
-                                format!("failed to remove worktree {}", path.display())
-                            })?;
-                        registered.remove(&path);
-                    } else {
-                        fs::remove_dir_all(&path).wrap_err_with(|| {
-                            format!("failed to remove directory {}", path.display())
-                        })?;
-                    }
-                    removed_worktrees.push(path.display().to_string());
-                    continue;
+            if let Some(issue_num) = parse_issue_from_dirname(&path)
+                && terminal_issues.contains(&issue_num)
+            {
+                if registered.contains(&path) {
+                    let path_arg = path.to_string_lossy().into_owned();
+                    run_git(
+                        &ctx.repo_root,
+                        &["worktree", "remove", "--force", &path_arg],
+                    )
+                    .wrap_err_with(|| format!("failed to remove worktree {}", path.display()))?;
+                    registered.remove(&path);
+                } else {
+                    fs::remove_dir_all(&path).wrap_err_with(|| {
+                        format!("failed to remove directory {}", path.display())
+                    })?;
                 }
+                removed_worktrees.push(path.display().to_string());
+                continue;
             }
 
             if registered.contains(&path) {
@@ -121,7 +122,7 @@ fn registered_worktree_paths(repo_root: &PathBuf) -> Result<HashSet<PathBuf>> {
     Ok(paths)
 }
 
-fn parse_issue_from_dirname(path: &PathBuf) -> Option<u64> {
+fn parse_issue_from_dirname(path: &Path) -> Option<u64> {
     let name = path.file_name()?.to_str()?;
     let (number, _) = name.split_once('-')?;
     number.parse::<u64>().ok()
@@ -130,7 +131,9 @@ fn parse_issue_from_dirname(path: &PathBuf) -> Option<u64> {
 async fn terminal_thesis_issues(ctx: &AppContext) -> HashSet<u64> {
     let state = RepositoryState::derive(&ctx.github, &ctx.config).await;
     let Ok(state) = state else {
-        eprintln!("warning: could not fetch thesis state from GitHub; skipping resolved-worktree cleanup");
+        eprintln!(
+            "warning: could not fetch thesis state from GitHub; skipping resolved-worktree cleanup"
+        );
         return HashSet::new();
     };
 

@@ -10,6 +10,7 @@ All coordination goes through the `polyresearch` CLI. Key commands:
 - `polyresearch pace` — check hardware budget and API quota. Tells you how many parallel theses you can run.
 - `polyresearch status` — see queue depth, thesis states, claimable work.
 - `polyresearch claim <issue>` — claim a thesis. Prints the worktree path.
+- `polyresearch resume <issue>` — resume a thesis this node already claimed. Ensures the worktree and thesis context exist, then prints the worktree path.
 - `polyresearch attempt <issue> --metric <val> --baseline <val> --observation <obs> --summary "<text>"` — record an experiment result.
 - `polyresearch commit <issue> [--message "..."]` — commit only editable-surface changes. Always use this instead of raw `git commit`.
 - `polyresearch submit <issue>` — push and create a PR for an improved thesis. Run from the thesis worktree.
@@ -26,6 +27,7 @@ LOOP FOREVER:
 ### 1. Check duties
 
 Run `polyresearch duties`. If blocking duties exist, resolve each one:
+- **resume**: run `polyresearch resume <issue>`. It prints the thesis worktree path. `cd` into that worktree, then continue with step 4.
 - **submit**: go to the thesis worktree, run `polyresearch submit <issue>`.
 - If submit fails because a PR already exists for the branch, check if the PR was closed. If closed as stale (merge conflicts), try rebasing the branch onto the default branch and resubmit. If the PR was decided as non_improvement, release the thesis instead: `polyresearch release <issue> --reason no_improvement`.
 
@@ -61,7 +63,7 @@ If no work is available, sleep 60 seconds and restart the loop.
 ### 4. Run the experiment
 
 For each claimed thesis:
-1. The claim command prints the worktree path. `cd` into it.
+1. The claim or resume command prints the worktree path. `cd` into it.
 2. Read `.polyresearch/thesis.md` for the thesis context and prior attempts.
 3. Run the experiment: implement the idea, run the evaluation per PREPARE.md, iterate if needed.
 4. Write `.polyresearch/result.json` with the result.

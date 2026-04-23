@@ -7,7 +7,9 @@ use std::process::Command;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use polyresearch::cli::{BootstrapArgs, Cli, Commands, ContributeArgs, LeadArgs, NodeOverrides};
+use polyresearch::cli::{
+    BootstrapArgs, Cli, Commands, ContributeArgs, IssueArgs, LeadArgs, NodeOverrides,
+};
 use polyresearch::commands::{self, AppContext};
 use polyresearch::comments::ProtocolComment;
 use polyresearch::config::{DEFAULT_API_BUDGET, ProgramSpec, ProtocolConfig};
@@ -696,6 +698,151 @@ Ensure lead_github_login: upstream-owner appears in docs unchanged.
 // ---------------------------------------------------------------------------
 // Contribute scenarios
 // ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn scenario_resume_creates_missing_worktree_for_claimed_thesis() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("resume-missing");
+    repo.init_git();
+    repo.write_full_setup("lead", "test-node-resume", "echo noop");
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    let title = "Resume missing worktree";
+    let (issue, mut comments) = make_approved_thesis(80, title, "lead");
+    comments.push(IssueComment {
+        id: 8001,
+        body: ProtocolComment::Claim {
+            thesis: 80,
+            node: "test-node-resume".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: chrono::Utc::now(),
+        updated_at: None,
+    });
+
+    let github = Arc::new(ScenarioGitHub::new("contributor"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(80, comments);
+
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-resume");
+    }
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Resume(IssueArgs { issue: 80 }),
+    );
+
+    commands::resume::run(&ctx, &IssueArgs { issue: 80 })
+        .await
+        .unwrap();
+
+    let expected_branch = format!("thesis/80-{}", commands::slugify(title));
+    let worktree_path = commands::thesis_worktree_path(&repo.path, 80, title);
+
+    assert!(
+        worktree_path.exists(),
+        "resume should create the missing worktree"
+    );
+    assert_eq!(
+        commands::current_branch(&worktree_path).unwrap(),
+        expected_branch
+    );
+    assert!(
+        worktree_path.join(".polyresearch/thesis.md").exists(),
+        "resume should write thesis context into the worktree"
+    );
+    assert!(
+        worktree_path.join(".polyresearch-node.toml").exists(),
+        "resume should sync the node config into the worktree"
+    );
+    assert!(
+        github.posted_comments().is_empty(),
+        "resume should not post a duplicate claim comment"
+    );
+}
+
+#[tokio::test]
+async fn scenario_resume_reuses_existing_worktree_for_claimed_thesis() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("resume-reuse");
+    repo.init_git();
+    repo.write_full_setup("lead", "test-node-reuse", "echo noop");
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    let title = "Resume existing worktree";
+    let (issue, mut comments) = make_approved_thesis(81, title, "lead");
+    comments.push(IssueComment {
+        id: 8101,
+        body: ProtocolComment::Claim {
+            thesis: 81,
+            node: "test-node-reuse".to_string(),
+        }
+        .render(),
+        user: CommentUser {
+            login: "contributor".to_string(),
+        },
+        created_at: chrono::Utc::now(),
+        updated_at: None,
+    });
+
+    let github = Arc::new(ScenarioGitHub::new("contributor"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(81, comments);
+
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-reuse");
+    }
+
+    let workspace = commands::create_thesis_worktree(&repo.path, 81, title, "main").unwrap();
+    let poly_dir = workspace.worktree_path.join(".polyresearch");
+    fs::create_dir_all(&poly_dir).unwrap();
+    fs::write(poly_dir.join("thesis.md"), "stale thesis context\n").unwrap();
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Resume(IssueArgs { issue: 81 }),
+    );
+
+    commands::resume::run(&ctx, &IssueArgs { issue: 81 })
+        .await
+        .unwrap();
+
+    let thesis_content =
+        fs::read_to_string(workspace.worktree_path.join(".polyresearch/thesis.md")).unwrap();
+    assert!(
+        thesis_content.contains(&format!("# Thesis: {title}")),
+        "resume should refresh thesis context in an existing worktree"
+    );
+    assert_eq!(
+        commands::current_branch(&workspace.worktree_path).unwrap(),
+        workspace.branch
+    );
+    assert!(
+        workspace
+            .worktree_path
+            .join(".polyresearch-node.toml")
+            .exists(),
+        "resume should sync the node config into the existing worktree"
+    );
+    assert!(
+        github.posted_comments().is_empty(),
+        "resume should not post a duplicate claim comment"
+    );
+}
 
 #[tokio::test]
 async fn scenario_contribute_improved() {

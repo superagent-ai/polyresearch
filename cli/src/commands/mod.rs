@@ -17,6 +17,7 @@ pub mod pace;
 pub mod policy_check;
 pub mod prune;
 pub mod release;
+pub mod resume;
 pub mod review;
 pub mod review_claim;
 pub mod status;
@@ -67,6 +68,7 @@ pub async fn run(ctx: AppContext) -> Result<()> {
         Commands::Pace => pace::run(&ctx).await,
         Commands::Status(args) => status::run(&ctx, args).await,
         Commands::Claim(args) => claim::run(&ctx, args).await,
+        Commands::Resume(args) => resume::run(&ctx, args).await,
         Commands::Commit(args) => commit::run(&ctx, args).await,
         Commands::BatchClaim(args) => batch_claim::run(&ctx, args).await,
         Commands::Attempt(args) => attempt::run(&ctx, args).await,

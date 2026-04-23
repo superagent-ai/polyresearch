@@ -277,12 +277,12 @@ pub fn parse_prepare_key(worktree_path: &Path, key: &str) -> Option<String> {
     let contents = fs::read_to_string(path).ok()?;
     for line in contents.lines() {
         let trimmed = line.trim();
-        if let Some((k, v)) = trimmed.split_once(':') {
-            if k.trim() == key {
-                let val = v.trim();
-                if !val.is_empty() {
-                    return Some(val.to_string());
-                }
+        if let Some((k, v)) = trimmed.split_once(':')
+            && k.trim() == key
+        {
+            let val = v.trim();
+            if !val.is_empty() {
+                return Some(val.to_string());
             }
         }
     }
@@ -452,10 +452,7 @@ pub fn spawn_workflow_agent(
     cmd.stdout(Stdio::inherit());
     cmd.stderr(Stdio::inherit());
 
-    eprintln!(
-        "Spawning workflow agent in {}...",
-        work_dir.display(),
-    );
+    eprintln!("Spawning workflow agent in {}...", work_dir.display(),);
     let mut child = cmd.spawn().wrap_err("failed to spawn workflow agent")?;
 
     {
@@ -468,9 +465,7 @@ pub fn spawn_workflow_agent(
             .wrap_err("failed to write prompt to agent stdin")?;
     }
 
-    let status = child
-        .wait()
-        .wrap_err("failed to wait for workflow agent")?;
+    let status = child.wait().wrap_err("failed to wait for workflow agent")?;
 
     if !status.success() {
         let code = status
@@ -761,10 +756,7 @@ mod tests {
             parse_prepare_key(&dir, "prereq_command"),
             Some("npm run build".to_string())
         );
-        assert_eq!(
-            parse_prepare_key(&dir, "eval_cores"),
-            Some("2".to_string())
-        );
+        assert_eq!(parse_prepare_key(&dir, "eval_cores"), Some("2".to_string()));
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -773,11 +765,7 @@ mod tests {
     fn parse_prepare_key_returns_none_for_missing_key() {
         let dir = std::env::temp_dir().join(format!("prepare-missing-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            dir.join("PREPARE.md"),
-            "# Evaluation\n\neval_cores: 1\n",
-        )
-        .unwrap();
+        fs::write(dir.join("PREPARE.md"), "# Evaluation\n\neval_cores: 1\n").unwrap();
 
         assert_eq!(parse_prepare_key(&dir, "prereq_command"), None);
 
@@ -788,11 +776,7 @@ mod tests {
     fn parse_prepare_key_returns_none_for_empty_value() {
         let dir = std::env::temp_dir().join(format!("prepare-empty-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            dir.join("PREPARE.md"),
-            "# Evaluation\n\nprereq_command:\n",
-        )
-        .unwrap();
+        fs::write(dir.join("PREPARE.md"), "# Evaluation\n\nprereq_command:\n").unwrap();
 
         assert_eq!(parse_prepare_key(&dir, "prereq_command"), None);
 
@@ -842,6 +826,24 @@ mod tests {
         assert!(
             prompt.contains("50%"),
             "prompt must include the capacity percentage"
+        );
+    }
+
+    #[test]
+    fn contribute_prompt_mentions_resume_command() {
+        let prompt = contribute_workflow_prompt(false, 60, None, 75);
+        assert!(
+            prompt.contains("polyresearch resume <issue>"),
+            "prompt must teach the workflow agent how to resume stale claims"
+        );
+    }
+
+    #[test]
+    fn contribute_prompt_mentions_resume_duty_resolution() {
+        let prompt = contribute_workflow_prompt(false, 60, None, 75);
+        assert!(
+            prompt.contains("**resume**: run `polyresearch resume <issue>`"),
+            "prompt must explain how to resolve resume duties"
         );
     }
 
