@@ -372,6 +372,19 @@ impl ThesisState {
             .map(|attempt| attempt.metric)
     }
 
+    pub fn phase_label(&self) -> String {
+        match &self.phase {
+            ThesisPhase::Submitted => "submitted".to_string(),
+            ThesisPhase::Approved => "approved".to_string(),
+            ThesisPhase::Exhausted => "exhausted".to_string(),
+            ThesisPhase::Claimed => "claimed".to_string(),
+            ThesisPhase::CandidateSubmitted => "candidate_submitted".to_string(),
+            ThesisPhase::InReview => "in_review".to_string(),
+            ThesisPhase::Resolved { outcome } => outcome.to_string(),
+            ThesisPhase::Rejected => "rejected".to_string(),
+        }
+    }
+
     pub fn is_claimed_by(&self, node: &str) -> bool {
         self.active_claims.iter().any(|claim| claim.node == node)
     }
@@ -578,6 +591,45 @@ mod tests {
     }
 
     #[test]
+    fn phase_label_returns_correct_strings() {
+        assert_eq!(
+            thesis_with_phase(ThesisPhase::Submitted).phase_label(),
+            "submitted"
+        );
+        assert_eq!(
+            thesis_with_phase(ThesisPhase::Approved).phase_label(),
+            "approved"
+        );
+        assert_eq!(
+            thesis_with_phase(ThesisPhase::Exhausted).phase_label(),
+            "exhausted"
+        );
+        assert_eq!(
+            thesis_with_phase(ThesisPhase::Claimed).phase_label(),
+            "claimed"
+        );
+        assert_eq!(
+            thesis_with_phase(ThesisPhase::CandidateSubmitted).phase_label(),
+            "candidate_submitted"
+        );
+        assert_eq!(
+            thesis_with_phase(ThesisPhase::InReview).phase_label(),
+            "in_review"
+        );
+        assert_eq!(
+            thesis_with_phase(ThesisPhase::Resolved {
+                outcome: Outcome::Accepted,
+            })
+            .phase_label(),
+            "accepted"
+        );
+        assert_eq!(
+            thesis_with_phase(ThesisPhase::Rejected).phase_label(),
+            "rejected"
+        );
+    }
+
+    #[test]
     fn marks_no_improvement_releases_as_exhausted() {
         let fixture = exhausted_fixture();
         let config = test_config(&fixture.lead_github_login);
@@ -714,9 +766,13 @@ mod tests {
         .unwrap();
         let config = test_config(&fixture.lead_github_login);
 
-        let claimed =
-            ThesisState::derive(fixture.issue.clone(), fixture.comments.clone(), &[], &config)
-                .unwrap();
+        let claimed = ThesisState::derive(
+            fixture.issue.clone(),
+            fixture.comments.clone(),
+            &[],
+            &config,
+        )
+        .unwrap();
         assert!(matches!(claimed.phase, ThesisPhase::Claimed));
         assert_eq!(claimed.active_claims.len(), 1);
 
@@ -856,6 +912,33 @@ mod tests {
             "../tests/fixtures/exhausted_thesis_issue.json"
         ))
         .unwrap()
+    }
+
+    fn thesis_with_phase(phase: ThesisPhase) -> ThesisState {
+        ThesisState {
+            issue: Issue {
+                number: 999,
+                title: "Example thesis".to_string(),
+                body: None,
+                state: "OPEN".to_string(),
+                labels: vec![],
+                created_at: chrono::Utc::now(),
+                closed_at: None,
+                author: None,
+                url: None,
+            },
+            phase,
+            approved: false,
+            maintainer_approved: false,
+            maintainer_rejected: false,
+            active_claims: vec![],
+            releases: vec![],
+            attempts: vec![],
+            pull_requests: vec![],
+            best_attempt_metric: None,
+            invalidated_attempt_branches: BTreeSet::new(),
+            findings: vec![],
+        }
     }
 
     fn test_config(lead_github_login: &str) -> ProtocolConfig {

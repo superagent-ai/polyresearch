@@ -6,7 +6,7 @@ use crate::commands::duties;
 use crate::commands::guards::{ensure_current_ledger, ensure_lead};
 use crate::commands::{AppContext, print_value};
 use crate::comments::ProtocolComment;
-use crate::state::RepositoryState;
+use crate::state::{RepositoryState, ThesisState};
 
 #[derive(Debug, Serialize)]
 struct GenerateOutput {
@@ -46,6 +46,25 @@ pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
             "queue depth is already {} (max_queue_depth = {}), refusing to generate more theses",
             repo_state.queue_depth,
             max_queue_depth
+        ));
+    }
+
+    let duplicates = duplicate_titles(&repo_state, &args.title);
+    if !duplicates.is_empty() {
+        let items: Vec<String> = duplicates
+            .iter()
+            .map(|thesis| {
+                format!(
+                    "  #{} ({}): {}",
+                    thesis.issue.number,
+                    thesis.phase_label(),
+                    thesis.issue.title
+                )
+            })
+            .collect();
+        return Err(eyre!(
+            "proposed title duplicates existing thesis:\n{}\nUse a meaningfully different approach.",
+            items.join("\n")
         ));
     }
 
@@ -115,4 +134,48 @@ pub async fn run(ctx: &AppContext, args: &GenerateArgs) -> Result<()> {
         }
         message
     })
+}
+
+fn duplicate_titles<'a>(
+    repo_state: &'a RepositoryState,
+    proposed_title: &str,
+) -> Vec<&'a ThesisState> {
+    let normalized_proposed = normalize_title(proposed_title);
+    repo_state
+        .theses
+        .iter()
+        .filter(|thesis| normalize_title(&thesis.issue.title) == normalized_proposed)
+        .collect()
+}
+
+fn normalize_title(title: &str) -> String {
+    let stripped: String = title
+        .to_lowercase()
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || ch.is_whitespace())
+        .collect();
+    stripped.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_title;
+
+    #[test]
+    fn normalize_title_lowercases_and_strips() {
+        assert_eq!(
+            normalize_title("Regex Caching Optimization!"),
+            "regex caching optimization"
+        );
+    }
+
+    #[test]
+    fn normalize_title_collapses_whitespace() {
+        assert_eq!(normalize_title("  foo   bar  "), "foo bar");
+    }
+
+    #[test]
+    fn normalize_title_strips_punctuation() {
+        assert_eq!(normalize_title("use SIMD (AVX-512)"), "use simd avx512");
+    }
 }
