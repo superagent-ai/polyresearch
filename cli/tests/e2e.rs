@@ -2437,6 +2437,28 @@ async fn bootstrap_normalizes_program_md_adds_missing_sections() {
 }
 
 #[tokio::test]
+async fn bootstrap_normalize_file_endings_trims_whitespace() {
+    let repo = TestRepo::new("bootstrap-normalize-endings");
+    init_git_repo(&repo.path);
+
+    let program_path = repo.path.join("PROGRAM.md");
+    let prepare_path = repo.path.join("PREPARE.md");
+    fs::write(&program_path, "# Program   \n\n## Goal   \n\nDo stuff.   ").unwrap();
+    fs::write(&prepare_path, "# Setup   \n\nRun it.   ").unwrap();
+
+    commands::bootstrap::normalize_file_endings(&repo.path).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(&program_path).unwrap(),
+        "# Program\n\n## Goal\n\nDo stuff.\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&prepare_path).unwrap(),
+        "# Setup\n\nRun it.\n"
+    );
+}
+
+#[tokio::test]
 async fn bootstrap_commits_setup_files() {
     let repo = TestRepo::new("bootstrap-commit");
     init_git_repo(&repo.path);
@@ -2460,6 +2482,17 @@ async fn bootstrap_commits_setup_files() {
 
     commands::bootstrap::write_templates(&repo.path, Some("Test goal"), "lead").unwrap();
     commands::bootstrap::normalize_program_md(&repo.path).unwrap();
+
+    let check_ignore_output = Command::new("git")
+        .args(["check-ignore", ".polyresearch-node.toml"])
+        .current_dir(&repo.path)
+        .output()
+        .unwrap();
+    assert!(
+        check_ignore_output.status.success(),
+        ".polyresearch-node.toml should be gitignored"
+    );
+
     commands::bootstrap::commit_and_push_setup_files(&repo.path).unwrap();
 
     // Verify git status is clean for setup files
@@ -2472,6 +2505,7 @@ async fn bootstrap_commits_setup_files() {
             "PREPARE.md",
             "results.tsv",
             ".polyresearch",
+            ".gitignore",
         ])
         .current_dir(&repo.path)
         .output()
@@ -2504,6 +2538,93 @@ async fn bootstrap_commits_setup_files() {
     assert!(files.contains("PROGRAM.md"), "PROGRAM.md not in commit");
     assert!(files.contains("PREPARE.md"), "PREPARE.md not in commit");
     assert!(files.contains("results.tsv"), "results.tsv not in commit");
+    assert!(files.contains(".gitignore"), ".gitignore not in commit");
+    assert!(
+        !files.contains(".polyresearch-node.toml"),
+        ".polyresearch-node.toml should not be in commit"
+    );
+}
+
+#[tokio::test]
+async fn bootstrap_commit_cleans_agent_whitespace_diffs() {
+    let repo = TestRepo::new("bootstrap-whitespace-clean");
+    init_git_repo(&repo.path);
+
+    let bare = TestRepo::new("bootstrap-whitespace-clean-bare");
+    let _ = fs::remove_dir_all(&bare.path);
+    Command::new("git")
+        .args([
+            "clone",
+            "--bare",
+            &repo.path.to_string_lossy(),
+            &bare.path.to_string_lossy(),
+        ])
+        .output()
+        .unwrap();
+    run_git(
+        &repo.path,
+        &["remote", "add", "origin", &bare.path.to_string_lossy()],
+    );
+
+    commands::bootstrap::write_templates(&repo.path, Some("Test goal"), "lead").unwrap();
+    commands::bootstrap::normalize_program_md(&repo.path).unwrap();
+
+    let program_path = repo.path.join("PROGRAM.md");
+    let prepare_path = repo.path.join("PREPARE.md");
+
+    let staged_program = fs::read_to_string(&program_path)
+        .unwrap()
+        .replace("source code", "source code  ");
+    let staged_prepare = fs::read_to_string(&prepare_path)
+        .unwrap()
+        .replace("METRIC=<number>", "METRIC=<number>  ");
+    fs::write(&program_path, &staged_program).unwrap();
+    fs::write(&prepare_path, &staged_prepare).unwrap();
+    run_git(&repo.path, &["add", "PROGRAM.md", "PREPARE.md"]);
+
+    fs::write(&program_path, staged_program.trim_end()).unwrap();
+    fs::write(&prepare_path, format!("{}  \n", staged_prepare.trim_end())).unwrap();
+
+    commands::bootstrap::commit_and_push_setup_files(&repo.path).unwrap();
+
+    let status_output = Command::new("git")
+        .args([
+            "status",
+            "--porcelain",
+            "--",
+            "PROGRAM.md",
+            "PREPARE.md",
+            "results.tsv",
+            ".polyresearch",
+            ".gitignore",
+        ])
+        .current_dir(&repo.path)
+        .output()
+        .unwrap();
+    let status = String::from_utf8(status_output.stdout).unwrap();
+    assert!(
+        status.trim().is_empty(),
+        "setup files should be clean after whitespace cleanup, got: {status}"
+    );
+}
+
+#[tokio::test]
+async fn bootstrap_gitignores_node_config() {
+    let repo = TestRepo::new("bootstrap-gitignore-node");
+    init_git_repo(&repo.path);
+
+    commands::bootstrap::write_templates(&repo.path, Some("Test goal"), "lead").unwrap();
+    commands::bootstrap::write_templates(&repo.path, Some("Test goal"), "lead").unwrap();
+
+    let gitignore = fs::read_to_string(repo.path.join(".gitignore")).unwrap();
+    let matches = gitignore
+        .lines()
+        .filter(|line| line.trim() == ".polyresearch-node.toml")
+        .count();
+    assert_eq!(
+        matches, 1,
+        ".gitignore should contain one node config entry"
+    );
 }
 
 #[tokio::test]
