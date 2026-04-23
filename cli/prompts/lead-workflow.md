@@ -22,6 +22,8 @@ You MUST complete ALL steps (1 through 6) in every iteration. Do not exit after 
 
 Keeping the queue at or above `min_queue_depth` is the primary goal of every iteration. Steps 1-3 are housekeeping; step 4 (queue check and generation) is the critical deliverable.
 
+Priority rule: if context, budget, or time is getting tight while you are in steps 1-3, stop starting new housekeeping work and go straight to step 4. Do not let sync, policy-check, or decide consume the whole iteration before the queue check runs.
+
 LOOP FOREVER:
 
 ### 1. Sync the ledger
@@ -38,7 +40,7 @@ If there are no policy-check duties, proceed to step 3.
 
 ### 3. Decide ready PRs
 
-Look for decide duties. For each ready PR, run `polyresearch decide <pr>`. The CLI evaluates the PR's metric, compares it against the baseline and best accepted, and posts the decision.
+Run `polyresearch duties` again to refresh the duty list. Policy-checks from step 2 may have made new PRs eligible for decisions. Look for decide duties. For each ready PR, run `polyresearch decide <pr>`. The CLI evaluates the PR's metric, compares it against the baseline and best accepted, and posts the decision.
 
 If decide fails because of merge conflicts, the CLI will attempt a rebase. If that also fails, the PR will be closed as stale — this is expected. The contributor can rebase and resubmit.
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Mock agent for scenario tests.
 # Controlled by MOCK_AGENT_RESULT: improved, no_improvement, crashed, fail,
-#   fail_once, hang, no_improvement_with_changes
+#   fail_once, hang, noop, no_improvement_with_changes
 RESULT_DIR="$PWD/.polyresearch"
 mkdir -p "$RESULT_DIR"
 
@@ -42,6 +42,9 @@ RESULT
         if [ "$COUNT" -le 2 ]; then
             exit 1
         fi
+        exit 0
+        ;;
+    noop)
         exit 0
         ;;
     hang)

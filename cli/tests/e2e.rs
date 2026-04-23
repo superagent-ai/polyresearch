@@ -3,15 +3,17 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{
+    Arc, Mutex, MutexGuard, OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Result, eyre};
 use polyresearch::agent;
 use polyresearch::cli::{
     AdminArgs, AdminCommands, AdminReleaseClaimArgs, AdminReopenThesisArgs, AttemptArgs,
-    CommitArgs,
-    BatchClaimArgs, Cli, Commands, ContributeArgs, GenerateArgs, InitArgs, IssueArgs,
+    BatchClaimArgs, Cli, Commands, CommitArgs, ContributeArgs, GenerateArgs, InitArgs, IssueArgs,
     NodeOverrides, PrArgs, ReleaseArgs, StatusArgs,
 };
 use polyresearch::commands;
@@ -68,6 +70,7 @@ struct MockGitHubClient {
     created_issues: Mutex<Vec<Issue>>,
     assigned_issues: Mutex<Vec<(u64, Vec<String>)>>,
     next_issue_id: Mutex<u64>,
+    rate_limit_remaining: AtomicU64,
 }
 
 impl MockGitHubClient {
@@ -94,12 +97,18 @@ impl MockGitHubClient {
             created_issues: Mutex::new(Vec::new()),
             assigned_issues: Mutex::new(Vec::new()),
             next_issue_id: Mutex::new(max_issue + 100),
+            rate_limit_remaining: AtomicU64::new(4_000),
         }
     }
 
     fn with_pr_files(mut self, pr_number: u64, files: Vec<PullRequestFile>) -> Self {
         self.pr_files.insert(pr_number, files);
         self
+    }
+
+    fn set_rate_limit_remaining(&self, remaining: u64) {
+        self.rate_limit_remaining
+            .store(remaining, Ordering::Relaxed);
     }
 }
 
@@ -117,7 +126,9 @@ impl GitHubApi for MockGitHubClient {
     }
 
     fn get_rate_limit_status(&self) -> Result<RateLimitStatus> {
-        Ok(default_rate_limit_status(4_000))
+        Ok(default_rate_limit_status(
+            self.rate_limit_remaining.load(Ordering::Relaxed),
+        ))
     }
 
     fn repo_has_issues(&self) -> Result<bool> {
@@ -660,6 +671,62 @@ async fn pace_reports_exhausted_when_quota_below_derive_cost() {
     assert_eq!(output.rate_limit.commands_left, 0);
     assert!(output.rate_limit.is_low);
     assert!(output.rate_limit.remaining < output.rate_limit.derive_cost);
+}
+
+#[tokio::test]
+async fn pace_exits_with_rate_limit_code_when_remaining_below_derive_cost() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("pace-run-exhausted");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    mock.set_rate_limit_remaining(1);
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Pace);
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let err = commands::pace::run(&ctx).await.unwrap_err();
+    let process_exit = err
+        .downcast_ref::<commands::ProcessExit>()
+        .expect("pace should return a process exit when quota is exhausted");
+    assert_eq!(process_exit.code, 75);
+    assert!(process_exit.message.contains("RATE LIMITED"));
+}
+
+#[tokio::test]
+async fn pace_reports_secondary_headroom_context() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("pace-headroom");
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    mock.set_rate_limit_remaining(4_500);
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Pace);
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let node_config = NodeConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
+    let rate_limit = ctx.github.get_rate_limit_status().unwrap();
+    let output = commands::pace::build_output(
+        ctx.repo.slug(),
+        ctx.api_budget,
+        &node_config,
+        &repo_state,
+        &rate_limit,
+    );
+
+    assert_eq!(output.rate_limit.remaining, 4_500);
+    assert!(!output.rate_limit.is_low);
+    assert!(output.rate_limit.commands_left > 0);
 }
 
 #[tokio::test]
@@ -1260,6 +1327,101 @@ async fn lead_only_command_rejects_non_lead_login() {
 
     let error = commands::sync::run(&ctx).await.unwrap_err();
     assert!(error.to_string().contains("lead-only"));
+}
+
+#[tokio::test]
+async fn lead_once_deficient_queue_spawns_retry_and_fails() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("lead-once-deficient");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(
+        repo.path.join("results.tsv"),
+        "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n",
+    )
+    .unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let args = polyresearch::cli::LeadArgs {
+        once: true,
+        sleep_secs: 0,
+        overrides: NodeOverrides {
+            agent_command: Some("true".to_string()),
+            ..Default::default()
+        },
+    };
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead",
+        false,
+        Commands::Lead(args.clone()),
+    );
+
+    let error = commands::lead::run(&ctx, &args).await.unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("queue depth") && message.contains("focused refill retry"),
+        "lead --once should fail when the queue stays deficient after retry: {message}"
+    );
+}
+
+#[tokio::test]
+async fn lead_once_sufficient_queue_succeeds() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("lead-once-sufficient");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(
+        repo.path.join("results.tsv"),
+        "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n",
+    )
+    .unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let mut issues = Vec::new();
+    let mut issue_comments = HashMap::new();
+    for number in 1..=5 {
+        issues.push(make_open_issue(
+            number,
+            &format!("Approved thesis {number}"),
+        ));
+        issue_comments.insert(number, vec![make_approval_comment(number, "lead")]);
+    }
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        issues,
+        issue_comments,
+        vec![],
+        HashMap::new(),
+    ));
+    let args = polyresearch::cli::LeadArgs {
+        once: true,
+        sleep_secs: 0,
+        overrides: NodeOverrides {
+            agent_command: Some("true".to_string()),
+            ..Default::default()
+        },
+    };
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead",
+        false,
+        Commands::Lead(args.clone()),
+    );
+
+    commands::lead::run(&ctx, &args).await.unwrap();
 }
 
 #[tokio::test]
@@ -2028,6 +2190,18 @@ fn make_open_issue(number: u64, title: &str) -> Issue {
     }
 }
 
+fn make_approval_comment(thesis: u64, lead_login: &str) -> IssueComment {
+    IssueComment {
+        id: thesis * 100,
+        body: ProtocolComment::Approval { thesis }.render(),
+        user: CommentUser {
+            login: lead_login.to_string(),
+        },
+        created_at: chrono::Utc::now(),
+        updated_at: None,
+    }
+}
+
 fn make_approved_thesis(number: u64) -> ThesisState {
     ThesisState {
         issue: make_open_issue(number, &format!("Thesis {number}")),
@@ -2260,6 +2434,89 @@ async fn duties_lead_duties_included_in_lead_context() {
 }
 
 #[tokio::test]
+async fn duties_transition_from_policy_check_to_decide_after_policy_pass() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("duties-policy-to-decide");
+    let now = chrono::Utc::now();
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![],
+        HashMap::new(),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(repo.path.clone(), mock, "lead", false, Commands::Duties);
+
+    let mut thesis = make_approved_thesis(1);
+    thesis.pull_requests.push(PullRequestState {
+        pr: PullRequest {
+            number: 8,
+            title: "Candidate PR".to_string(),
+            body: None,
+            state: "OPEN".to_string(),
+            head_ref_name: "thesis/1-test-attempt-1".to_string(),
+            head_ref_oid: Some("abc123".to_string()),
+            base_ref_name: Some("main".to_string()),
+            created_at: now,
+            closed_at: None,
+            merged_at: None,
+            author: Some(Author {
+                login: "alice".to_string(),
+            }),
+            url: None,
+            mergeable: None,
+        },
+        thesis_number: Some(1),
+        policy_pass: false,
+        maintainer_approved: true,
+        maintainer_rejected: false,
+        review_claims: vec![],
+        reviews: vec![],
+        decision: None,
+        findings: vec![],
+    });
+    thesis.phase = ThesisPhase::CandidateSubmitted;
+
+    let report = commands::duties::check(
+        &ctx,
+        &make_repo_state(vec![thesis.clone()], 1, 1, None),
+        DutyContext::Lead,
+    )
+    .unwrap();
+    assert!(
+        report.blocking.iter().any(|d| d.category == "policy-check"),
+        "lead context should require policy-check before policy_pass: {:?}",
+        report.blocking
+    );
+    assert!(
+        !report.blocking.iter().any(|d| d.category == "decide"),
+        "lead context should not offer decide before policy_pass: {:?}",
+        report.blocking
+    );
+
+    thesis.pull_requests[0].policy_pass = true;
+    thesis.phase = ThesisPhase::InReview;
+
+    let report = commands::duties::check(
+        &ctx,
+        &make_repo_state(vec![thesis], 1, 1, None),
+        DutyContext::Lead,
+    )
+    .unwrap();
+    assert!(
+        report.blocking.iter().any(|d| d.category == "decide"),
+        "lead context should offer decide after policy_pass: {:?}",
+        report.blocking
+    );
+    assert!(
+        !report.blocking.iter().any(|d| d.category == "policy-check"),
+        "policy-check duty should disappear after policy_pass: {:?}",
+        report.blocking
+    );
+}
+
+#[tokio::test]
 async fn duties_submit_skipped_for_closed_thesis() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("duties-closed-submit");
@@ -2440,9 +2697,13 @@ async fn duties_submit_replaced_by_release_after_two_rejections() {
                 head_ref_oid: Some("sha".to_string()),
                 base_ref_name: Some("main".to_string()),
                 created_at: now - chrono::Duration::hours(1) + chrono::Duration::minutes(i as i64),
-                closed_at: Some(now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64)),
+                closed_at: Some(
+                    now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64),
+                ),
                 merged_at: None,
-                author: Some(Author { login: "alice".to_string() }),
+                author: Some(Author {
+                    login: "alice".to_string(),
+                }),
                 url: None,
                 mergeable: None,
             },
@@ -2456,7 +2717,8 @@ async fn duties_submit_replaced_by_release_after_two_rejections() {
                 outcome: Outcome::NonImprovement,
                 candidate_sha: "sha".to_string(),
                 confirmations: 0,
-                created_at: now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64),
+                created_at: now - chrono::Duration::minutes(30)
+                    + chrono::Duration::minutes(i as i64),
             }),
             findings: vec![],
         });
@@ -2523,7 +2785,9 @@ async fn duties_submit_present_after_single_rejection() {
             created_at: now - chrono::Duration::hours(1),
             closed_at: Some(now - chrono::Duration::minutes(30)),
             merged_at: None,
-            author: Some(Author { login: "alice".to_string() }),
+            author: Some(Author {
+                login: "alice".to_string(),
+            }),
             url: None,
             mergeable: None,
         },
@@ -2602,9 +2866,13 @@ async fn duties_submit_replaced_by_release_after_stale_decisions() {
                 head_ref_oid: Some("sha".to_string()),
                 base_ref_name: Some("main".to_string()),
                 created_at: now - chrono::Duration::hours(1) + chrono::Duration::minutes(i as i64),
-                closed_at: Some(now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64)),
+                closed_at: Some(
+                    now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64),
+                ),
                 merged_at: None,
-                author: Some(Author { login: "alice".to_string() }),
+                author: Some(Author {
+                    login: "alice".to_string(),
+                }),
                 url: None,
                 mergeable: None,
             },
@@ -2618,7 +2886,8 @@ async fn duties_submit_replaced_by_release_after_stale_decisions() {
                 outcome: Outcome::Stale,
                 candidate_sha: "sha".to_string(),
                 confirmations: 0,
-                created_at: now - chrono::Duration::minutes(30) + chrono::Duration::minutes(i as i64),
+                created_at: now - chrono::Duration::minutes(30)
+                    + chrono::Duration::minutes(i as i64),
             }),
             findings: vec![],
         });
@@ -2734,9 +3003,13 @@ async fn duties_submit_present_when_prior_rejections_predate_claim() {
                 head_ref_oid: Some("old-sha".to_string()),
                 base_ref_name: Some("main".to_string()),
                 created_at: now - chrono::Duration::hours(8) + chrono::Duration::minutes(i as i64),
-                closed_at: Some(now - chrono::Duration::hours(5) + chrono::Duration::minutes(i as i64)),
+                closed_at: Some(
+                    now - chrono::Duration::hours(5) + chrono::Duration::minutes(i as i64),
+                ),
                 merged_at: None,
-                author: Some(Author { login: "alice".to_string() }),
+                author: Some(Author {
+                    login: "alice".to_string(),
+                }),
                 url: None,
                 mergeable: None,
             },
@@ -3076,9 +3349,7 @@ Test goal.
 fn write_node_config(path: &PathBuf, node_id: &str) {
     fs::write(
         path.join(".polyresearch-node.toml"),
-        format!(
-            "node_id = \"{node_id}\"\ncapacity = 75\n\n[agent]\ncommand = \"true\"\n"
-        ),
+        format!("node_id = \"{node_id}\"\ncapacity = 75\n\n[agent]\ncommand = \"true\"\n"),
     )
     .unwrap();
 }
@@ -4761,6 +5032,61 @@ fn make_decidable_state(
         vec![pr],
         HashMap::from([(pr_number, pr_comments)]),
     )
+}
+
+#[tokio::test]
+async fn lead_decide_ready_prs_decides_policy_passed_pr() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("lead-decide-ready");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    fs::write(
+        repo.path.join("results.tsv"),
+        "thesis\tattempt\tmetric\tbaseline\tstatus\tsummary\n",
+    )
+    .unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+
+    let (issues, issue_comments, prs, pr_comments) =
+        make_decidable_state(10, 50, 95.0, 90.0, "lead");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        issues,
+        issue_comments,
+        prs,
+        pr_comments,
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        "lead",
+        false,
+        Commands::Duties,
+    );
+    let config = ProtocolConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(&ctx.github, &config).await.unwrap();
+
+    commands::lead::decide_ready_prs(&ctx, &config, &repo_state).unwrap();
+
+    assert!(
+        mock.merged_prs.lock().unwrap().contains(&50),
+        "policy-passed PR should be decided and merged"
+    );
+    assert!(
+        mock.closed_issues.lock().unwrap().contains(&10),
+        "accepted thesis should be closed"
+    );
+    assert!(
+        mock.posted_issue_comments
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(number, body)| *number == 50
+                && body.contains("polyresearch:decision")
+                && body.contains("accepted")),
+        "should post an accepted decision comment on the PR"
+    );
 }
 
 #[tokio::test]
@@ -7251,6 +7577,151 @@ fn admin_note_acknowledge_invalid_format_detected() {
         }
         other => panic!("expected AdminNote, got: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn repository_state_derive_excludes_resolved_claims_from_active_nodes() {
+    let resolved_fixture = load_issue_fixture("claimed_no_attempts_issue.json");
+    let now = chrono::Utc::now();
+    let active_issue = Issue {
+        number: 21,
+        title: "Still claimed thesis".to_string(),
+        body: Some("Thesis with an active claim.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label {
+            name: "thesis".to_string(),
+        }],
+        created_at: now - chrono::Duration::hours(2),
+        closed_at: None,
+        author: Some(Author {
+            login: resolved_fixture.lead_github_login.clone(),
+        }),
+        url: Some("https://example.test/issues/21".to_string()),
+    };
+    let active_issue_comments = vec![
+        IssueComment {
+            id: 2101,
+            body: ProtocolComment::Approval { thesis: 21 }.render(),
+            user: CommentUser {
+                login: resolved_fixture.lead_github_login.clone(),
+            },
+            created_at: now - chrono::Duration::minutes(90),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 2102,
+            body: ProtocolComment::Claim {
+                thesis: 21,
+                node: "worker-live".to_string(),
+            }
+            .render(),
+            user: CommentUser {
+                login: "bob".to_string(),
+            },
+            created_at: now - chrono::Duration::minutes(60),
+            updated_at: None,
+        },
+    ];
+    let resolved_pr = PullRequest {
+        number: 90,
+        title: "Candidate for thesis #20".to_string(),
+        body: None,
+        state: "MERGED".to_string(),
+        head_ref_name: "thesis/20-claimed-attempt-1".to_string(),
+        head_ref_oid: Some("deadbeef".to_string()),
+        base_ref_name: Some("main".to_string()),
+        created_at: now - chrono::Duration::minutes(30),
+        closed_at: None,
+        merged_at: Some(now),
+        author: Some(Author {
+            login: "alice".to_string(),
+        }),
+        url: Some("https://example.test/pulls/90".to_string()),
+        mergeable: None,
+    };
+    let resolved_pr_comments = vec![
+        IssueComment {
+            id: 9000,
+            body: ProtocolComment::PolicyPass {
+                thesis: resolved_fixture.issue.number,
+                candidate_sha: "deadbeef".to_string(),
+            }
+            .render(),
+            user: CommentUser {
+                login: resolved_fixture.lead_github_login.clone(),
+            },
+            created_at: now - chrono::Duration::minutes(20),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 9001,
+            body: ProtocolComment::Decision {
+                thesis: resolved_fixture.issue.number,
+                candidate_sha: "deadbeef".to_string(),
+                outcome: Outcome::Accepted,
+                confirmations: 0,
+            }
+            .render(),
+            user: CommentUser {
+                login: resolved_fixture.lead_github_login.clone(),
+            },
+            created_at: now - chrono::Duration::minutes(10),
+            updated_at: None,
+        },
+    ];
+
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![resolved_fixture.issue.clone(), active_issue.clone()],
+        HashMap::from([
+            (
+                resolved_fixture.issue.number,
+                resolved_fixture.comments.clone(),
+            ),
+            (active_issue.number, active_issue_comments),
+        ]),
+        vec![resolved_pr],
+        HashMap::from([(90, resolved_pr_comments)]),
+    ));
+    let config = ProtocolConfig {
+        required_confirmations: 0,
+        metric_tolerance: Some(0.01),
+        metric_direction: MetricDirection::HigherIsBetter,
+        metric_bound: None,
+        lead_github_login: Some(resolved_fixture.lead_github_login.clone()),
+        maintainer_github_login: Some("maintainer".to_string()),
+        auto_approve: true,
+        assignment_timeout: Duration::from_secs(24 * 60 * 60),
+        review_timeout: Duration::from_secs(12 * 60 * 60),
+        min_queue_depth: 5,
+        max_queue_depth: Some(10),
+        cli_version: None,
+        default_branch: None,
+    };
+
+    let state = RepositoryState::derive(&(mock as Arc<dyn GitHubApi>), &config)
+        .await
+        .unwrap();
+    let resolved = state.get_thesis(resolved_fixture.issue.number).unwrap();
+    let active = state.get_thesis(active_issue.number).unwrap();
+
+    assert!(matches!(
+        resolved.phase,
+        ThesisPhase::Resolved {
+            outcome: Outcome::Accepted
+        }
+    ));
+    assert!(
+        resolved.active_claims.is_empty(),
+        "resolved thesis should not keep stale claims, got: {:?}",
+        resolved.active_claims
+    );
+    assert!(matches!(active.phase, ThesisPhase::Claimed));
+    assert_eq!(
+        state.active_nodes,
+        vec!["worker-live".to_string()],
+        "only still-claimed theses should contribute to active_nodes"
+    );
 }
 
 fn load_issue_fixture(name: &str) -> IssueFixture {

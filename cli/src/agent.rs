@@ -429,6 +429,23 @@ pub fn lead_workflow_prompt(once: bool, sleep_secs: u64) -> String {
     prompt
 }
 
+pub fn lead_generation_retry_prompt(current_depth: usize, min_depth: usize) -> String {
+    format!(
+        "You are the polyresearch lead agent.\n\n\
+         The previous lead iteration exited before refilling the thesis queue. \
+         The queue depth is currently {current_depth}, and min_queue_depth is {min_depth}.\n\n\
+         Your only task in this run is to refill the queue.\n\n\
+         1. Run `polyresearch status` to confirm the current queue depth.\n\
+         2. Run `polyresearch audit` and resolve any critical findings that block thesis generation.\n\
+         3. Read `PROGRAM.md` for the research goal and strategy.\n\
+         4. Read `results.tsv` to avoid duplicating prior work.\n\
+         5. Generate only enough theses to bring the queue back to at least {min_depth} using `polyresearch generate --title \"<title>\" --body \"<body>\"`.\n\
+         6. Run `polyresearch status` again to confirm the queue is now at or above {min_depth}.\n\n\
+         Do not spend this run on sync, policy-check, decide, or other housekeeping. \
+         Refill the queue before exiting.\n"
+    )
+}
+
 pub fn thesis_generation_prompt(count: usize) -> String {
     let base = include_str!("../prompts/thesis-generation.md");
     format!("{base}\n\nGenerate exactly {count} thesis proposals.")
@@ -452,10 +469,7 @@ pub fn spawn_workflow_agent(
     cmd.stdout(Stdio::inherit());
     cmd.stderr(Stdio::inherit());
 
-    eprintln!(
-        "Spawning workflow agent in {}...",
-        work_dir.display(),
-    );
+    eprintln!("Spawning workflow agent in {}...", work_dir.display(),);
     let mut child = cmd.spawn().wrap_err("failed to spawn workflow agent")?;
 
     {
@@ -468,9 +482,7 @@ pub fn spawn_workflow_agent(
             .wrap_err("failed to write prompt to agent stdin")?;
     }
 
-    let status = child
-        .wait()
-        .wrap_err("failed to wait for workflow agent")?;
+    let status = child.wait().wrap_err("failed to wait for workflow agent")?;
 
     if !status.success() {
         let code = status
@@ -761,10 +773,7 @@ mod tests {
             parse_prepare_key(&dir, "prereq_command"),
             Some("npm run build".to_string())
         );
-        assert_eq!(
-            parse_prepare_key(&dir, "eval_cores"),
-            Some("2".to_string())
-        );
+        assert_eq!(parse_prepare_key(&dir, "eval_cores"), Some("2".to_string()));
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -773,11 +782,7 @@ mod tests {
     fn parse_prepare_key_returns_none_for_missing_key() {
         let dir = std::env::temp_dir().join(format!("prepare-missing-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            dir.join("PREPARE.md"),
-            "# Evaluation\n\neval_cores: 1\n",
-        )
-        .unwrap();
+        fs::write(dir.join("PREPARE.md"), "# Evaluation\n\neval_cores: 1\n").unwrap();
 
         assert_eq!(parse_prepare_key(&dir, "prereq_command"), None);
 
@@ -788,11 +793,7 @@ mod tests {
     fn parse_prepare_key_returns_none_for_empty_value() {
         let dir = std::env::temp_dir().join(format!("prepare-empty-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            dir.join("PREPARE.md"),
-            "# Evaluation\n\nprereq_command:\n",
-        )
-        .unwrap();
+        fs::write(dir.join("PREPARE.md"), "# Evaluation\n\nprereq_command:\n").unwrap();
 
         assert_eq!(parse_prepare_key(&dir, "prereq_command"), None);
 
@@ -881,6 +882,62 @@ mod tests {
         assert!(
             prompt.contains("primary goal"),
             "base prompt must frame queue depth as the primary goal"
+        );
+    }
+
+    #[test]
+    fn lead_prompt_reruns_duties_before_decide() {
+        let prompt = lead_workflow_prompt(false, 60);
+        let step3 = prompt
+            .split("### 3. Decide ready PRs")
+            .nth(1)
+            .and_then(|rest| {
+                rest.split("### 4. Check the queue and generate theses")
+                    .next()
+            })
+            .expect("prompt should contain steps 3 and 4");
+
+        assert!(
+            step3.contains("Run `polyresearch duties` again"),
+            "step 3 should refresh duties after policy checks: {step3}"
+        );
+    }
+
+    #[test]
+    fn lead_generation_retry_prompt_contains_depths() {
+        let prompt = lead_generation_retry_prompt(2, 5);
+        assert!(
+            prompt.contains("currently 2"),
+            "retry prompt must include the current queue depth"
+        );
+        assert!(
+            prompt.contains("min_queue_depth is 5"),
+            "retry prompt must include the minimum queue depth"
+        );
+        assert!(
+            prompt.contains("polyresearch generate"),
+            "retry prompt must mention thesis generation"
+        );
+        assert!(
+            prompt.contains("polyresearch status"),
+            "retry prompt must mention queue verification"
+        );
+    }
+
+    #[test]
+    fn lead_generation_retry_prompt_mentions_program() {
+        let prompt = lead_generation_retry_prompt(1, 5);
+        assert!(
+            prompt.contains("PROGRAM.md"),
+            "retry prompt must tell the agent to read PROGRAM.md"
+        );
+        assert!(
+            prompt.contains("results.tsv"),
+            "retry prompt must tell the agent to read results.tsv"
+        );
+        assert!(
+            prompt.contains("only task in this run is to refill the queue"),
+            "retry prompt must keep the agent focused on queue refill"
         );
     }
 }
