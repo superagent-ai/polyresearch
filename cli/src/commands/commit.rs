@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use color_eyre::eyre::{Result, eyre};
 use serde::Serialize;
 
@@ -41,8 +43,7 @@ pub async fn run(ctx: &AppContext, args: &CommitArgs) -> Result<()> {
     let message = format!("thesis/{}: {summary}", args.issue);
 
     if !ctx.cli.dry_run {
-        let program = ProgramSpec::load(&ctx.repo_root, &ctx.config)?;
-        stage_editable_surface(&ctx.repo_root, &program)?;
+        stage_editable_surface(&ctx.repo_root, &ctx.program)?;
         run_git(&ctx.repo_root, &["commit", "-m", &message])?;
     }
 
@@ -67,25 +68,85 @@ pub async fn run(ctx: &AppContext, args: &CommitArgs) -> Result<()> {
     })
 }
 
-fn stage_editable_surface(repo_root: &std::path::PathBuf, program: &ProgramSpec) -> Result<()> {
-    // Clear any prior staging so the command can rebuild the index from the editable surface.
+fn stage_editable_surface(repo_root: &PathBuf, program: &ProgramSpec) -> Result<()> {
     let _ = run_git(repo_root, &["reset", "HEAD", "--", "."]);
 
-    for glob in &program.can_modify {
-        let _ = run_git(repo_root, &["add", "--", glob]);
+    for file in working_tree_changes(repo_root)? {
+        if is_allowed(program, &file)? {
+            run_git(repo_root, &["add", "--all", "--", &file])?;
+        }
     }
 
-    for path in ALWAYS_PROTECTED {
-        let _ = run_git(repo_root, &["reset", "HEAD", "--", path]);
-    }
-    for glob in &program.cannot_modify {
-        let _ = run_git(repo_root, &["reset", "HEAD", "--", glob]);
+    let staged = staged_file_list(repo_root)?;
+    let violations: Vec<&str> = staged
+        .iter()
+        .filter(|f| !is_allowed(program, f).unwrap_or(false))
+        .map(|s| s.as_str())
+        .collect();
+    if !violations.is_empty() {
+        let _ = run_git(repo_root, &["reset", "HEAD", "--", "."]);
+        return Err(eyre!(
+            "staged files outside the editable surface: {}",
+            violations.join(", ")
+        ));
     }
 
-    let has_staged = run_git(repo_root, &["diff", "--cached", "--quiet"]).is_err();
-    if !has_staged {
+    if staged.is_empty() {
         return Err(eyre!("no changes to commit within the editable surface"));
     }
 
     Ok(())
+}
+
+fn is_allowed(program: &ProgramSpec, file_path: &str) -> Result<bool> {
+    for prefix in ALWAYS_PROTECTED {
+        if file_path.starts_with(prefix) || file_path == prefix.trim_end_matches('/') {
+            return Ok(false);
+        }
+    }
+    if program.is_protected(file_path) {
+        return Ok(false);
+    }
+    program.is_editable(file_path)
+}
+
+fn working_tree_changes(repo_root: &PathBuf) -> Result<Vec<String>> {
+    let tracked = run_git(repo_root, &["diff", "--name-only"])?;
+    let untracked = run_git(repo_root, &["ls-files", "--others", "--exclude-standard"])?;
+    let staged = run_git(repo_root, &["diff", "--cached", "--name-only"])?;
+    Ok(parse_lines(&tracked)
+        .chain(parse_lines(&untracked))
+        .chain(parse_lines(&staged))
+        .collect::<std::collections::BTreeSet<String>>()
+        .into_iter()
+        .collect())
+}
+
+fn staged_file_list(repo_root: &PathBuf) -> Result<Vec<String>> {
+    let output = run_git(repo_root, &["diff", "--cached", "--name-only"])?;
+    Ok(parse_lines(&output).collect())
+}
+
+fn parse_lines(output: &str) -> impl Iterator<Item = String> + '_ {
+    output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+}
+
+/// Check whether all changed files on the current branch vs a reference are
+/// within the editable surface. Returns the list of violating paths, empty if clean.
+pub fn check_editable_surface(
+    repo_root: &PathBuf,
+    program: &ProgramSpec,
+    diff_ref: &str,
+) -> Result<Vec<String>> {
+    let output = run_git(repo_root, &["diff", "--name-only", diff_ref, "HEAD"])?;
+    let mut violations = Vec::new();
+    for file in parse_lines(&output) {
+        if !is_allowed(program, &file)? {
+            violations.push(file);
+        }
+    }
+    Ok(violations)
 }

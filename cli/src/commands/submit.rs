@@ -68,6 +68,18 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
         ));
     }
 
+    let violations =
+        super::commit::check_editable_surface(&ctx.repo_root, &ctx.program, &default_branch)?;
+    if !violations.is_empty() {
+        return Err(eyre!(
+            "branch `{branch}` has {} file(s) outside the editable surface: {}. \
+             Use `polyresearch commit {}` to re-commit only editable changes.",
+            violations.len(),
+            violations.join(", "),
+            args.issue,
+        ));
+    }
+
     if !ctx.cli.dry_run {
         push_current_branch(&ctx.repo_root)?;
     }

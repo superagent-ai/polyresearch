@@ -3408,7 +3408,10 @@ async fn scenario_preflight_broken_agent_aborts_contribute() {
     )
     .await;
 
-    assert!(result.is_err(), "contribute should fail on broken agent command");
+    assert!(
+        result.is_err(),
+        "contribute should fail on broken agent command"
+    );
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("pre-flight"),
@@ -3482,7 +3485,11 @@ async fn scenario_preflight_dirty_tree_aborts_contribute() {
     repo.commit_all("setup");
 
     // Modify a tracked file to simulate experiment leakage.
-    fs::write(repo.path.join("src/main.js"), "// leaked experiment change\n").unwrap();
+    fs::write(
+        repo.path.join("src/main.js"),
+        "// leaked experiment change\n",
+    )
+    .unwrap();
 
     let (issue, comments) = make_approved_thesis(201, "Dirty tree thesis", "lead");
     let github = Arc::new(ScenarioGitHub::new("contributor"));
@@ -3519,7 +3526,10 @@ async fn scenario_preflight_dirty_tree_aborts_contribute() {
     )
     .await;
 
-    assert!(result.is_err(), "contribute should fail with dirty working tree");
+    assert!(
+        result.is_err(),
+        "contribute should fail with dirty working tree"
+    );
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("uncommitted"),
@@ -3857,20 +3867,14 @@ async fn scenario_crash_cooldown_filters_claimable_theses() {
     github.seed_issue_comments(71, comments2);
 
     let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
-    let repo_state = RepositoryState::derive(
-        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
-        &config,
-    )
-    .await
-    .unwrap();
+    let repo_state = RepositoryState::derive(&(Arc::clone(&github) as Arc<dyn GitHubApi>), &config)
+        .await
+        .unwrap();
 
     // With a 60s base cooldown, thesis #70 (2 crashes, last 10s ago, cooldown = 120s)
     // should be excluded.
-    let claimable = polyresearch::commands::contribute::claimable_theses(
-        &repo_state,
-        "test-node",
-        60,
-    );
+    let claimable =
+        polyresearch::commands::contribute::claimable_theses(&repo_state, "test-node", 60);
     let claimable_numbers: Vec<u64> = claimable.iter().map(|t| t.issue.number).collect();
     assert!(
         !claimable_numbers.contains(&70),
@@ -3882,13 +3886,12 @@ async fn scenario_crash_cooldown_filters_claimable_theses() {
     );
 
     // With base_cooldown_secs = 0, cooldown is disabled; both should be claimable.
-    let claimable_no_cooldown = polyresearch::commands::contribute::claimable_theses(
-        &repo_state,
-        "test-node",
-        0,
-    );
-    let numbers_no_cooldown: Vec<u64> =
-        claimable_no_cooldown.iter().map(|t| t.issue.number).collect();
+    let claimable_no_cooldown =
+        polyresearch::commands::contribute::claimable_theses(&repo_state, "test-node", 0);
+    let numbers_no_cooldown: Vec<u64> = claimable_no_cooldown
+        .iter()
+        .map(|t| t.issue.number)
+        .collect();
     assert!(
         numbers_no_cooldown.contains(&70),
         "thesis #70 should be claimable with zero cooldown, got: {numbers_no_cooldown:?}"
@@ -3944,30 +3947,21 @@ async fn scenario_crash_cooldown_per_node() {
     github.seed_issue_comments(75, comments);
 
     let config = polyresearch::config::ProtocolConfig::load(&repo.path).unwrap();
-    let repo_state = RepositoryState::derive(
-        &(Arc::clone(&github) as Arc<dyn GitHubApi>),
-        &config,
-    )
-    .await
-    .unwrap();
+    let repo_state = RepositoryState::derive(&(Arc::clone(&github) as Arc<dyn GitHubApi>), &config)
+        .await
+        .unwrap();
 
     // node-a should be blocked by cooldown.
-    let claimable_a = polyresearch::commands::contribute::claimable_theses(
-        &repo_state,
-        "node-a",
-        60,
-    );
+    let claimable_a =
+        polyresearch::commands::contribute::claimable_theses(&repo_state, "node-a", 60);
     assert!(
         !claimable_a.iter().any(|t| t.issue.number == 75),
         "node-a should be blocked by crash cooldown on thesis #75"
     );
 
     // node-b should NOT be blocked -- the crash is local to node-a.
-    let claimable_b = polyresearch::commands::contribute::claimable_theses(
-        &repo_state,
-        "node-b",
-        60,
-    );
+    let claimable_b =
+        polyresearch::commands::contribute::claimable_theses(&repo_state, "node-b", 60);
     assert!(
         claimable_b.iter().any(|t| t.issue.number == 75),
         "node-b should be able to claim thesis #75 (crash was node-a's)"

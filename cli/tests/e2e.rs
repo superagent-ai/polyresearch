@@ -10,7 +10,8 @@ use color_eyre::eyre::{Result, eyre};
 use polyresearch::agent;
 use polyresearch::cli::{
     AdminArgs, AdminCommands, AdminReleaseClaimArgs, AdminReopenThesisArgs, AttemptArgs,
-    BatchClaimArgs, Cli, Commands, CommitArgs, ContributeArgs, GenerateArgs, InitArgs, IssueArgs,
+    CommitArgs,
+    BatchClaimArgs, Cli, Commands, ContributeArgs, GenerateArgs, InitArgs, IssueArgs,
     NodeOverrides, PrArgs, ReleaseArgs, StatusArgs,
 };
 use polyresearch::commands;
@@ -976,13 +977,17 @@ async fn commit_command_commits_only_editable_surface_changes() {
         issue: 99,
         message: Some("editable surface test".to_string()),
     };
-    let ctx = make_ctx(
+    let mut ctx = make_ctx(
         repo.path.clone(),
         mock,
         "lead",
         false,
         Commands::Commit(args.clone()),
     );
+    ctx.program = ProgramSpec {
+        can_modify: vec!["src/".to_string()],
+        cannot_modify: vec!["PREPARE.md".to_string()],
+    };
 
     commands::commit::run(&ctx, &args).await.unwrap();
 
@@ -2024,9 +2029,7 @@ async fn duties_lead_duties_excluded_in_contribute_context() {
         created_at: now,
         closed_at: None,
         merged_at: None,
-        author: Some(Author {
-            login: "alice".to_string(),
-        }),
+        author: Some(Author { login: "alice".to_string() }),
         url: None,
         mergeable: None,
     };
@@ -2053,9 +2056,7 @@ async fn duties_lead_duties_excluded_in_contribute_context() {
             created_at: now,
             closed_at: None,
             merged_at: None,
-            author: Some(Author {
-                login: "alice".to_string(),
-            }),
+            author: Some(Author { login: "alice".to_string() }),
             url: None,
             mergeable: None,
         },
@@ -2105,9 +2106,7 @@ async fn duties_lead_duties_included_in_lead_context() {
         created_at: now,
         closed_at: None,
         merged_at: None,
-        author: Some(Author {
-            login: "alice".to_string(),
-        }),
+        author: Some(Author { login: "alice".to_string() }),
         url: None,
         mergeable: None,
     };
@@ -2134,9 +2133,7 @@ async fn duties_lead_duties_included_in_lead_context() {
             created_at: now,
             closed_at: None,
             merged_at: None,
-            author: Some(Author {
-                login: "alice".to_string(),
-            }),
+            author: Some(Author { login: "alice".to_string() }),
             url: None,
             mergeable: None,
         },
@@ -2271,9 +2268,7 @@ async fn duties_submit_skipped_when_pr_merged() {
             created_at: now,
             closed_at: Some(now),
             merged_at: Some(now),
-            author: Some(Author {
-                login: "alice".to_string(),
-            }),
+            author: Some(Author { login: "alice".to_string() }),
             url: None,
             mergeable: None,
         },
@@ -2690,9 +2685,7 @@ async fn duties_contribute_proceeds_despite_pending_lead_duties() {
         created_at: now,
         closed_at: None,
         merged_at: None,
-        author: Some(Author {
-            login: "alice".to_string(),
-        }),
+        author: Some(Author { login: "alice".to_string() }),
         url: None,
         mergeable: None,
     };
@@ -2720,9 +2713,7 @@ async fn duties_contribute_proceeds_despite_pending_lead_duties() {
             created_at: now,
             closed_at: None,
             merged_at: None,
-            author: Some(Author {
-                login: "alice".to_string(),
-            }),
+            author: Some(Author { login: "alice".to_string() }),
             url: None,
             mergeable: None,
         },
@@ -2745,8 +2736,7 @@ async fn duties_contribute_proceeds_despite_pending_lead_duties() {
         "lead context should see decide as blocking"
     );
 
-    let contribute_report =
-        commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
+    let contribute_report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
     assert!(
         contribute_report.blocking.is_empty(),
         "contribute context must not be blocked by lead duties; got: {:?}",
@@ -2978,7 +2968,9 @@ Test goal.
 fn write_node_config(path: &PathBuf, node_id: &str) {
     fs::write(
         path.join(".polyresearch-node.toml"),
-        format!("node_id = \"{node_id}\"\ncapacity = 75\n\n[agent]\ncommand = \"true\"\n"),
+        format!(
+            "node_id = \"{node_id}\"\ncapacity = 75\n\n[agent]\ncommand = \"true\"\n"
+        ),
     )
     .unwrap();
 }
@@ -6798,11 +6790,11 @@ async fn decide_excludes_acknowledged_invalid_from_best_metric() {
     run_git(&repo.path, &["commit", "-m", "setup"]);
 
     let (issues, ic, prs, pc) = make_decidable_state_with_poisoned_prior(
-        1,        // thesis_number (current)
-        50,       // pr_number (current)
-        20421.0,  // current_metric
-        15000.0,  // baseline
-        17658.0,  // prior_valid_metric
+        1,     // thesis_number (current)
+        50,    // pr_number (current)
+        20421.0, // current_metric
+        15000.0, // baseline
+        17658.0, // prior_valid_metric
         218000.0, // poisoned_metric
         "lead",
     );
