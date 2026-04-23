@@ -3153,23 +3153,12 @@ async fn scenario_decide_idempotent_no_duplicate_comment() {
 #[tokio::test]
 async fn scenario_sync_accepts_master_default_branch() {
     let _guard = EnvGuard::lock_clean();
-<<<<<<< HEAD
-    let mut repo = ScenarioRepo::new("sync-master");
-    repo.init_git_on_branch("master");
-    repo.write_program_md_with_branch("lead", Some("master"));
-    repo.write_prepare_md();
-    repo.write_results_tsv();
-    repo.write_node_config("test-node", "echo noop");
-    repo.commit_all("setup");
-    repo.add_bare_remote("master");
-=======
     let parent = ScenarioRepo::new("sync-master");
     let (clone_path, _bare_path) = setup_remote_clone(&parent, "sync-master-work", "master");
     write_sync_repo_files(&clone_path, "lead", "master", "test-node");
     run_git(&clone_path, &["add", "-A"]);
     run_git(&clone_path, &["commit", "-m", "setup"]);
     run_git(&clone_path, &["push", "origin", "master"]);
->>>>>>> 803c8fe (Retry lead sync pushes when origin advances so results.tsv is retried and reaches the remote instead of getting stranded locally.)
 
     let github = Arc::new(ScenarioGitHub::new("lead"));
 
