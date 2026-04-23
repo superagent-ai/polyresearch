@@ -38,6 +38,27 @@ pub fn context_for(ctx: &AppContext) -> DutyContext {
     }
 }
 
+pub fn claim_gate(ctx: &AppContext, repo_state: &RepositoryState) -> Result<DutyReport> {
+    let node_id = read_node_id(&ctx.repo_root).unwrap_or_default();
+    let mut blocking = Vec::new();
+    let mut advisory = Vec::new();
+
+    collect_claim_lifecycle_duties(
+        repo_state,
+        &node_id,
+        context_for(ctx),
+        &mut blocking,
+        &mut advisory,
+    );
+
+    let clean = blocking.is_empty();
+    Ok(DutyReport {
+        blocking,
+        advisory,
+        clean,
+    })
+}
+
 pub fn check(
     ctx: &AppContext,
     repo_state: &RepositoryState,
@@ -55,12 +76,44 @@ pub fn check(
     let mut blocking = Vec::new();
     let mut advisory = Vec::new();
 
+    collect_claim_lifecycle_duties(
+        repo_state,
+        &node_id,
+        context,
+        &mut blocking,
+        &mut advisory,
+    );
+
+    if is_lead && context == DutyContext::Lead {
+        check_lead_duties(ctx, repo_state, &mut blocking, &mut advisory)?;
+    }
+
+    let has_review_work = check_review_opportunities(repo_state, &node_id, &login, &mut advisory);
+    if !is_lead || context == DutyContext::Contribute {
+        check_contributor_idle_state(ctx, repo_state, &node_id, has_review_work, &mut advisory)?;
+    }
+
+    let clean = blocking.is_empty();
+    Ok(DutyReport {
+        blocking,
+        advisory,
+        clean,
+    })
+}
+
+fn collect_claim_lifecycle_duties(
+    repo_state: &RepositoryState,
+    node_id: &str,
+    context: DutyContext,
+    blocking: &mut Vec<DutyItem>,
+    advisory: &mut Vec<DutyItem>,
+) {
     for thesis in &repo_state.theses {
         if thesis.issue.state != "OPEN" {
             continue;
         }
 
-        let claimed_by_me = thesis.is_claimed_by(&node_id);
+        let claimed_by_me = thesis.is_claimed_by(node_id);
         if !claimed_by_me {
             continue;
         }
@@ -144,22 +197,6 @@ pub fn check(
             }
         }
     }
-
-    if is_lead && context == DutyContext::Lead {
-        check_lead_duties(ctx, repo_state, &mut blocking, &mut advisory)?;
-    }
-
-    let has_review_work = check_review_opportunities(repo_state, &node_id, &login, &mut advisory);
-    if !is_lead || context == DutyContext::Contribute {
-        check_contributor_idle_state(ctx, repo_state, &node_id, has_review_work, &mut advisory)?;
-    }
-
-    let clean = blocking.is_empty();
-    Ok(DutyReport {
-        blocking,
-        advisory,
-        clean,
-    })
 }
 
 fn check_lead_duties(
