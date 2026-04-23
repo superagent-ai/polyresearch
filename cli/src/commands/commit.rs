@@ -78,11 +78,7 @@ fn stage_editable_surface(repo_root: &PathBuf, program: &ProgramSpec) -> Result<
     }
 
     let staged = staged_file_list(repo_root)?;
-    let violations: Vec<&str> = staged
-        .iter()
-        .filter(|f| !is_allowed(program, f).unwrap_or(false))
-        .map(|s| s.as_str())
-        .collect();
+    let violations: Vec<&str> = staged.iter().filter(|f| !is_allowed(program, f).unwrap_or(false)).map(|s| s.as_str()).collect();
     if !violations.is_empty() {
         let _ = run_git(repo_root, &["reset", "HEAD", "--", "."]);
         return Err(eyre!(
@@ -128,25 +124,5 @@ fn staged_file_list(repo_root: &PathBuf) -> Result<Vec<String>> {
 }
 
 fn parse_lines(output: &str) -> impl Iterator<Item = String> + '_ {
-    output
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| l.to_string())
-}
-
-/// Check whether all changed files on the current branch vs a reference are
-/// within the editable surface. Returns the list of violating paths, empty if clean.
-pub fn check_editable_surface(
-    repo_root: &PathBuf,
-    program: &ProgramSpec,
-    diff_ref: &str,
-) -> Result<Vec<String>> {
-    let output = run_git(repo_root, &["diff", "--name-only", diff_ref, "HEAD"])?;
-    let mut violations = Vec::new();
-    for file in parse_lines(&output) {
-        if !is_allowed(program, &file)? {
-            violations.push(file);
-        }
-    }
-    Ok(violations)
+    output.lines().filter(|l| !l.is_empty()).map(|l| l.to_string())
 }

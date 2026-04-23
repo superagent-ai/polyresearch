@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use color_eyre::eyre::{Result, eyre};
 use serde::Serialize;
 
@@ -9,7 +7,6 @@ use crate::commands::{
     AppContext, current_branch, print_value, push_current_branch, read_node_id, run_git,
 };
 use crate::comments::Observation;
-use crate::config::ProgramSpec;
 use crate::state::RepositoryState;
 
 #[derive(Debug, Serialize)]
@@ -46,43 +43,20 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
     }
 
     let default_branch = ctx.config.resolve_default_branch(&ctx.repo_root)?;
-
-    let violations = check_editable_surface(&ctx.repo_root, &ctx.program, &default_branch)?;
-    if !violations.is_empty() {
-        if ctx.cli.dry_run {
-            eprintln!(
-                "Would strip {} file(s) outside the editable surface: {}",
-                violations.len(),
-                violations.join(", ")
-            );
-        } else {
-            strip_violating_files(&ctx.repo_root, &violations, &default_branch)?;
-        }
-    }
-
-    let diff_ref = diff_ref(&ctx.repo_root, &default_branch);
-    let diff_output = run_git(&ctx.repo_root, &["diff", "--name-only", &diff_ref])?;
+    let diff_output = run_git(
+        &ctx.repo_root,
+        &["diff", "--name-only", &default_branch, "HEAD"],
+    )?;
     if diff_output.trim().is_empty() {
         return Err(eyre!(
             "branch `{branch}` has no file changes compared to `{default_branch}`; nothing to submit"
         ));
     }
 
-    let violations =
-        super::commit::check_editable_surface(&ctx.repo_root, &ctx.program, &default_branch)?;
-    if !violations.is_empty() {
-        return Err(eyre!(
-            "branch `{branch}` has {} file(s) outside the editable surface: {}. \
-             Use `polyresearch commit {}` to re-commit only editable changes.",
-            violations.len(),
-            violations.join(", "),
-            args.issue,
-        ));
-    }
-
     if !ctx.cli.dry_run {
         push_current_branch(&ctx.repo_root)?;
     }
+
     let pr = if ctx.cli.dry_run {
         None
     } else {
@@ -123,79 +97,4 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
             )
         }
     })
-}
-
-fn submission_base_ref(repo_root: &PathBuf, default_branch: &str) -> String {
-    let remote_ref = format!("origin/{default_branch}");
-    if run_git(repo_root, &["rev-parse", "--verify", &remote_ref]).is_ok() {
-        remote_ref
-    } else {
-        default_branch.to_string()
-    }
-}
-
-fn diff_ref(repo_root: &PathBuf, default_branch: &str) -> String {
-    format!("{}...HEAD", submission_base_ref(repo_root, default_branch))
-}
-
-pub fn check_editable_surface(
-    repo_root: &PathBuf,
-    program: &ProgramSpec,
-    default_branch: &str,
-) -> Result<Vec<String>> {
-    let diff_ref = diff_ref(repo_root, default_branch);
-    let diff_output = run_git(repo_root, &["diff", "--name-only", &diff_ref])?;
-
-    if diff_output.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let violations: Vec<String> = diff_output
-        .lines()
-        .filter(|file| {
-            let editable = program.is_editable(file).unwrap_or(false);
-            let protected = program.is_protected(file);
-            !editable || protected
-        })
-        .map(|file| file.to_string())
-        .collect();
-
-    Ok(violations)
-}
-
-pub fn strip_violating_files(
-    repo_root: &PathBuf,
-    violations: &[String],
-    default_branch: &str,
-) -> Result<()> {
-    let base_ref = submission_base_ref(repo_root, default_branch);
-    for file in violations {
-        let exists_on_base =
-            run_git(repo_root, &["cat-file", "-e", &format!("{base_ref}:{file}")]).is_ok();
-
-        if exists_on_base {
-            run_git(repo_root, &["checkout", &base_ref, "--", file])?;
-        } else {
-            run_git(repo_root, &["rm", "-f", file])?;
-        }
-    }
-
-    let has_staged = run_git(repo_root, &["diff", "--cached", "--quiet"]).is_err();
-    if has_staged {
-        run_git(
-            repo_root,
-            &[
-                "commit",
-                "-m",
-                "polyresearch: strip files outside editable surface",
-            ],
-        )?;
-    }
-
-    eprintln!(
-        "Stripped {} file(s) outside the editable surface: {}",
-        violations.len(),
-        violations.join(", ")
-    );
-    Ok(())
 }
