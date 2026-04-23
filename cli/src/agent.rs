@@ -449,8 +449,8 @@ pub fn spawn_workflow_agent(
     cmd.args(&parts[1..]);
     cmd.current_dir(work_dir);
     cmd.stdin(Stdio::piped());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
 
     eprintln!(
         "Spawning workflow agent in {}...",
@@ -458,30 +458,31 @@ pub fn spawn_workflow_agent(
     );
     let mut child = cmd.spawn().wrap_err("failed to spawn workflow agent")?;
 
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| eyre!("failed to open stdin pipe for workflow agent"))?
-        .write_all(prompt.as_bytes())
-        .wrap_err("failed to write prompt to agent stdin")?;
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| eyre!("failed to open stdin pipe for workflow agent"))?;
+        stdin
+            .write_all(prompt.as_bytes())
+            .wrap_err("failed to write prompt to agent stdin")?;
+    }
 
-    let output = child
-        .wait_with_output()
+    let status = child
+        .wait()
         .wrap_err("failed to wait for workflow agent")?;
 
-    if !output.status.success() {
-        log_subprocess_failure(
-            "Workflow agent",
-            &output,
-            verbose,
-            Some(agent_command),
-            Some(work_dir),
-        );
-        let code = output
-            .status
+    if !status.success() {
+        let code = status
             .code()
             .map(|c| c.to_string())
             .unwrap_or_else(|| "signal".into());
+        if verbose {
+            eprintln!("[verbose] Command: {agent_command}");
+            eprintln!("[verbose] Working directory: {}", work_dir.display());
+            eprintln!("[verbose] Exit code: {code}");
+        }
+        eprintln!("Workflow agent exited with status {code}");
         return Err(eyre!("workflow agent exited with status {code}"));
     }
 
