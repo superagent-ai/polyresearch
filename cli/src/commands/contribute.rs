@@ -84,11 +84,14 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
         let p = prompt.clone();
         let guard = once_guard.clone();
 
-        let result = tokio::task::spawn_blocking(move || {
+        let result = match tokio::task::spawn_blocking(move || {
             agent::spawn_workflow_agent(&cmd, &root, &p, guard.as_deref(), verbose)
         })
         .await
-        .map_err(|e| eyre!("contributor workflow agent task failed: {e}"))?;
+        {
+            Ok(result) => result,
+            Err(error) => break Err(eyre!("contributor workflow agent task failed: {error}")),
+        };
 
         match result {
             Ok(()) => break Ok(()),
