@@ -1,5 +1,8 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{
+    Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 
 use color_eyre::eyre::{Result, eyre};
 use polyresearch::github::{
@@ -28,6 +31,7 @@ struct ScenarioState {
 #[allow(dead_code)]
 pub struct ScenarioGitHub {
     state: Mutex<ScenarioState>,
+    rate_limit_remaining: AtomicU64,
 }
 
 impl ScenarioGitHub {
@@ -50,7 +54,13 @@ impl ScenarioGitHub {
                 deleted_refs: Vec::new(),
                 merge_attempt_counts: HashMap::new(),
             }),
+            rate_limit_remaining: AtomicU64::new(4_000),
         }
+    }
+
+    pub fn set_rate_limit_remaining(&self, remaining: u64) {
+        self.rate_limit_remaining
+            .store(remaining, Ordering::Relaxed);
     }
 
     pub fn seed_issue(&self, issue: Issue) {
@@ -188,13 +198,14 @@ impl GitHubApi for ScenarioGitHub {
     }
 
     fn get_rate_limit_status(&self) -> Result<RateLimitStatus> {
+        let remaining = self.rate_limit_remaining.load(Ordering::Relaxed);
         Ok(RateLimitStatus {
             resources: RateLimitResources {
                 core: RateLimitBucket {
                     limit: 5000,
-                    remaining: 4000,
+                    remaining,
                     reset: 0,
-                    used: 1000,
+                    used: 5000_u64.saturating_sub(remaining),
                 },
             },
         })

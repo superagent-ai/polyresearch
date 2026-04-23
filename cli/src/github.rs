@@ -18,8 +18,8 @@ use crate::throttle;
 
 const COMMENT_FETCH_CONCURRENCY_LIMIT: usize = 2;
 const TRANSIENT_RETRY_DELAYS_SECS: [u64; 3] = [5, 10, 20];
-const SECONDARY_RETRY_DELAYS_SECS: [u64; 3] = [90, 180, 300];
-const MAX_RETRY_DELAY: Duration = Duration::from_secs(300);
+const SECONDARY_RETRY_DELAYS_SECS: [u64; 4] = [30, 60, 90, 120];
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(180);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoRef {
@@ -877,22 +877,37 @@ fn run_command_with_retries(command: &mut Command, idempotent: bool) -> Result<S
         }
 
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let Some(retry) = classify_retry(&stderr, idempotent) else {
+        let Some(classified_retry) = classify_retry(&stderr, idempotent) else {
             return Err(error_with_hint(&stderr));
         };
+        let rate_limit_status = match classified_retry {
+            RetryReason::RateLimited(_) => current_rate_limit_status(),
+            RetryReason::Transient => None,
+        };
+        let retry = refine_rate_limit_kind(classified_retry, rate_limit_status.as_ref());
+
+        if retry != classified_retry
+            && let Some((remaining, limit)) = core_rate_limit_snapshot(rate_limit_status.as_ref())
+        {
+            eprintln!(
+                "GitHub CLI command looked like a primary rate limit, but GitHub core quota still has {remaining}/{limit} remaining. Treating it as a secondary rate limit."
+            );
+        }
 
         let retry_after = match retry {
             RetryReason::Transient => jittered_delay(Duration::from_secs(
                 TRANSIENT_RETRY_DELAYS_SECS
                     [attempt.min(TRANSIENT_RETRY_DELAYS_SECS.len().saturating_sub(1))],
             )),
-            RetryReason::RateLimited(kind) => resolve_rate_limit_delay(kind, attempt, &stderr)
-                .unwrap_or_else(|| {
-                    jittered_delay(Duration::from_secs(
-                        SECONDARY_RETRY_DELAYS_SECS
-                            [attempt.min(SECONDARY_RETRY_DELAYS_SECS.len().saturating_sub(1))],
-                    ))
-                }),
+            RetryReason::RateLimited(kind) => {
+                resolve_rate_limit_delay(kind, attempt, &stderr, rate_limit_status.as_ref())
+                    .unwrap_or_else(|| {
+                        jittered_delay(Duration::from_secs(
+                            SECONDARY_RETRY_DELAYS_SECS
+                                [attempt.min(SECONDARY_RETRY_DELAYS_SECS.len().saturating_sub(1))],
+                        ))
+                    })
+            }
         };
 
         let max_retries = match retry {
@@ -913,11 +928,20 @@ fn run_command_with_retries(command: &mut Command, idempotent: bool) -> Result<S
             };
         }
 
-        eprintln!(
-            "GitHub CLI command hit a {} condition. Retrying in {}s...",
-            retry,
-            retry_after.as_secs()
-        );
+        match core_rate_limit_snapshot(rate_limit_status.as_ref()) {
+            Some((remaining, limit)) => eprintln!(
+                "GitHub CLI command hit a {} condition (core {}/{}). Retrying in {}s...",
+                retry,
+                remaining,
+                limit,
+                retry_after.as_secs()
+            ),
+            None => eprintln!(
+                "GitHub CLI command hit a {} condition. Retrying in {}s...",
+                retry,
+                retry_after.as_secs()
+            ),
+        }
         thread::sleep(retry_after);
     }
 
@@ -1003,6 +1027,29 @@ fn classify_retry(stderr: &str, idempotent: bool) -> Option<RetryReason> {
     None
 }
 
+fn refine_rate_limit_kind(reason: RetryReason, status: Option<&RateLimitStatus>) -> RetryReason {
+    match reason {
+        RetryReason::RateLimited(RateLimitKind::Primary)
+            if status.map(core_has_ample_headroom).unwrap_or(false) =>
+        {
+            RetryReason::RateLimited(RateLimitKind::Secondary)
+        }
+        _ => reason,
+    }
+}
+
+fn core_has_ample_headroom(status: &RateLimitStatus) -> bool {
+    let core = &status.resources.core;
+    core.limit > 0 && core.remaining.saturating_mul(10) > core.limit
+}
+
+fn core_rate_limit_snapshot(status: Option<&RateLimitStatus>) -> Option<(u64, u64)> {
+    status.map(|status| {
+        let core = &status.resources.core;
+        (core.remaining, core.limit)
+    })
+}
+
 fn classify_error_hint(stderr: &str) -> Option<&'static str> {
     let lowered = stderr.to_ascii_lowercase();
 
@@ -1043,21 +1090,31 @@ fn error_with_hint(stderr: &str) -> color_eyre::Report {
     }
 }
 
-fn resolve_rate_limit_delay(kind: RateLimitKind, attempt: usize, stderr: &str) -> Option<Duration> {
+fn resolve_rate_limit_delay(
+    kind: RateLimitKind,
+    attempt: usize,
+    stderr: &str,
+    status: Option<&RateLimitStatus>,
+) -> Option<Duration> {
     match kind {
-        RateLimitKind::Primary => current_rate_limit_status().and_then(|status| {
-            status.resources.core.reset_at().map(|reset_at| {
-                let wait = (reset_at - Utc::now())
-                    .to_std()
-                    .unwrap_or(Duration::from_secs(5));
-                let wait = if wait.is_zero() {
-                    Duration::from_secs(5)
-                } else {
-                    wait
-                };
-                capped_delay(server_jittered_delay(wait + Duration::from_secs(1)))
-            })
-        }),
+        RateLimitKind::Primary => {
+            status
+                .cloned()
+                .or_else(current_rate_limit_status)
+                .and_then(|status| {
+                    status.resources.core.reset_at().map(|reset_at| {
+                        let wait = (reset_at - Utc::now())
+                            .to_std()
+                            .unwrap_or(Duration::from_secs(5));
+                        let wait = if wait.is_zero() {
+                            Duration::from_secs(5)
+                        } else {
+                            wait
+                        };
+                        capped_delay(server_jittered_delay(wait + Duration::from_secs(1)))
+                    })
+                })
+        }
         RateLimitKind::Secondary => parse_retry_after(stderr)
             .map(|d| capped_delay(server_jittered_delay(d)))
             .or_else(|| {
@@ -1151,6 +1208,53 @@ mod tests {
     }
 
     #[test]
+    fn refine_downgrades_primary_when_core_has_headroom() {
+        let status = rate_limit_status(5_000, 4_500);
+        assert_eq!(
+            refine_rate_limit_kind(
+                RetryReason::RateLimited(RateLimitKind::Primary),
+                Some(&status)
+            ),
+            RetryReason::RateLimited(RateLimitKind::Secondary)
+        );
+    }
+
+    #[test]
+    fn refine_keeps_primary_when_core_is_exhausted() {
+        let status = rate_limit_status(5_000, 50);
+        assert_eq!(
+            refine_rate_limit_kind(
+                RetryReason::RateLimited(RateLimitKind::Primary),
+                Some(&status)
+            ),
+            RetryReason::RateLimited(RateLimitKind::Primary)
+        );
+    }
+
+    #[test]
+    fn refine_keeps_primary_when_status_unavailable() {
+        assert_eq!(
+            refine_rate_limit_kind(RetryReason::RateLimited(RateLimitKind::Primary), None),
+            RetryReason::RateLimited(RateLimitKind::Primary)
+        );
+    }
+
+    #[test]
+    fn refine_passes_through_non_primary_reasons() {
+        assert_eq!(
+            refine_rate_limit_kind(RetryReason::Transient, None),
+            RetryReason::Transient
+        );
+        assert_eq!(
+            refine_rate_limit_kind(
+                RetryReason::RateLimited(RateLimitKind::Secondary),
+                Some(&rate_limit_status(5_000, 4_500))
+            ),
+            RetryReason::RateLimited(RateLimitKind::Secondary)
+        );
+    }
+
+    #[test]
     fn jittered_delay_stays_within_plus_minus_50_percent() {
         let base = Duration::from_secs(90);
         let low = base / 2;
@@ -1185,7 +1289,7 @@ mod tests {
     #[test]
     fn secondary_rate_limit_uses_short_backoff() {
         let stderr = "secondary rate limit hit";
-        let delay = resolve_rate_limit_delay(RateLimitKind::Secondary, 0, stderr).unwrap();
+        let delay = resolve_rate_limit_delay(RateLimitKind::Secondary, 0, stderr, None).unwrap();
         let base = Duration::from_secs(SECONDARY_RETRY_DELAYS_SECS[0]);
         assert!(
             delay >= base / 2 && delay <= base + base / 2,
@@ -1193,13 +1297,25 @@ mod tests {
         );
         let last_attempt = SECONDARY_RETRY_DELAYS_SECS.len() - 1;
         for _ in 0..100 {
-            let d =
-                resolve_rate_limit_delay(RateLimitKind::Secondary, last_attempt, stderr).unwrap();
+            let d = resolve_rate_limit_delay(RateLimitKind::Secondary, last_attempt, stderr, None)
+                .unwrap();
             assert!(
                 d <= MAX_RETRY_DELAY,
                 "secondary fallback delay {d:?} exceeded MAX_RETRY_DELAY at max attempt"
             );
         }
+    }
+
+    #[test]
+    fn secondary_retry_delays_total_within_budget() {
+        let total_delay = SECONDARY_RETRY_DELAYS_SECS.iter().sum::<u64>();
+        assert_eq!(total_delay, 300);
+        assert!(total_delay <= 300);
+    }
+
+    #[test]
+    fn updated_max_retry_delay_matches_constant() {
+        assert_eq!(MAX_RETRY_DELAY, Duration::from_secs(180));
     }
 
     #[test]
@@ -1277,6 +1393,19 @@ mod tests {
             Some(Duration::from_secs(120))
         );
         assert_eq!(parse_retry_after("no header here"), None);
+    }
+
+    fn rate_limit_status(limit: u64, remaining: u64) -> RateLimitStatus {
+        RateLimitStatus {
+            resources: RateLimitResources {
+                core: RateLimitBucket {
+                    limit,
+                    remaining,
+                    used: limit.saturating_sub(remaining),
+                    reset: (Utc::now() + chrono::Duration::minutes(5)).timestamp() as u64,
+                },
+            },
+        }
     }
 
     #[test]

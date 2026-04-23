@@ -12,7 +12,7 @@ use polyresearch::cli::{
 };
 use polyresearch::commands::{self, AppContext};
 use polyresearch::comments::ProtocolComment;
-use polyresearch::config::{DEFAULT_API_BUDGET, ProgramSpec, ProtocolConfig};
+use polyresearch::config::{DEFAULT_API_BUDGET, NodeConfig, ProgramSpec, ProtocolConfig};
 use polyresearch::github::{
     Author, CommentUser, GitHubApi, Issue, IssueComment, Label, PullRequest, RepoRef,
 };
@@ -436,6 +436,55 @@ impl Drop for EnvGuard {
             env::remove_var(polyresearch::config::NODE_ID_ENV_VAR);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Pace scenarios
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn scenario_pace_reports_low_rate_limit() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("pace-low");
+    repo.init_git();
+    repo.write_full_setup("lead", "test-node", "echo noop");
+
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    let (issue_one, comments_one) = make_approved_thesis(1, "First thesis", "lead");
+    let issue_one_number = issue_one.number;
+    github.seed_issue(issue_one);
+    github.seed_issue_comments(issue_one_number, comments_one);
+
+    let (issue_two, comments_two) = make_approved_thesis(2, "Second thesis", "lead");
+    let issue_two_number = issue_two.number;
+    github.seed_issue(issue_two);
+    github.seed_issue_comments(issue_two_number, comments_two);
+    github.set_rate_limit_remaining(3);
+
+    let ctx = make_scenario_ctx(repo.path.clone(), github, "lead", false, Commands::Pace);
+    let node_config = NodeConfig::load(&repo.path).unwrap();
+    let repo_state = RepositoryState::derive(&ctx.github, &ctx.config)
+        .await
+        .unwrap();
+    let rate_limit = ctx.github.get_rate_limit_status().unwrap();
+    let output = commands::pace::build_output(
+        ctx.repo.slug(),
+        ctx.api_budget,
+        &node_config,
+        &repo_state,
+        &rate_limit,
+    );
+
+    assert_eq!(output.rate_limit.remaining, 3);
+    assert_eq!(output.rate_limit.derive_cost, 4);
+    assert_eq!(output.rate_limit.commands_left, 0);
+    assert!(output.rate_limit.is_low);
+
+    let err = commands::pace::run(&ctx).await.unwrap_err();
+    let process_exit = err
+        .downcast_ref::<commands::ProcessExit>()
+        .expect("pace should return a process exit when the scenario quota is exhausted");
+    assert_eq!(process_exit.code, 75);
 }
 
 // ---------------------------------------------------------------------------
