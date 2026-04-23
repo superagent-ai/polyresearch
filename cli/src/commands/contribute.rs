@@ -72,32 +72,45 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
     let verbose = local_ctx.cli.verbose;
     let once = args.once;
     let sleep_secs = args.sleep_secs;
+    let once_guard = if once {
+        Some(crate::cycle_guard::create(&repo_root)?)
+    } else {
+        None
+    };
 
-    loop {
+    let result = loop {
         let cmd = agent_command.clone();
         let root = repo_root.clone();
         let p = prompt.clone();
+        let guard = once_guard.clone();
 
-        let result = tokio::task::spawn_blocking(move || {
-            agent::spawn_workflow_agent(&cmd, &root, &p, verbose)
+        let result = match tokio::task::spawn_blocking(move || {
+            agent::spawn_workflow_agent(&cmd, &root, &p, guard.as_deref(), verbose)
         })
         .await
-        .map_err(|e| eyre!("contributor workflow agent task failed: {e}"))?;
+        {
+            Ok(result) => result,
+            Err(error) => break Err(eyre!("contributor workflow agent task failed: {error}")),
+        };
 
         match result {
-            Ok(()) => break,
+            Ok(()) => break Ok(()),
             Err(err) => {
                 eprintln!("Contributor agent failed: {err}");
                 if once {
-                    return Err(err);
+                    break Err(err);
                 }
                 eprintln!("Restarting in {sleep_secs}s...");
                 tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
             }
         }
+    };
+
+    if let Some(path) = once_guard.as_deref() {
+        crate::cycle_guard::remove(path);
     }
 
-    Ok(())
+    result
 }
 
 fn clone_repo(url: &str, repo_root: &Path) -> Result<()> {
@@ -133,7 +146,10 @@ pub fn is_crash_cooldown(
 
     for r in &thesis.releases {
         if r.node == node_id
-            && matches!(r.reason, ReleaseReason::InfraFailure | ReleaseReason::Timeout)
+            && matches!(
+                r.reason,
+                ReleaseReason::InfraFailure | ReleaseReason::Timeout
+            )
         {
             count += 1;
             last_crash = Some(match last_crash {
@@ -311,10 +327,7 @@ mod tests {
         let now = Utc::now();
         let mut releases = Vec::new();
         for i in 0..20 {
-            releases.push(infra_release(
-                "node-a",
-                now - chrono::Duration::seconds(i),
-            ));
+            releases.push(infra_release("node-a", now - chrono::Duration::seconds(i)));
         }
         let thesis = make_thesis_with_releases(releases);
 

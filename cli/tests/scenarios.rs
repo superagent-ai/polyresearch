@@ -460,18 +460,21 @@ struct EnvGuard {
 impl EnvGuard {
     fn lock_clean() -> Self {
         let guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        unsafe {
-            env::remove_var(polyresearch::config::NODE_ID_ENV_VAR);
-        }
+        clear_test_env();
         Self { _guard: guard }
     }
 }
 
 impl Drop for EnvGuard {
     fn drop(&mut self) {
-        unsafe {
-            env::remove_var(polyresearch::config::NODE_ID_ENV_VAR);
-        }
+        clear_test_env();
+    }
+}
+
+fn clear_test_env() {
+    unsafe {
+        env::remove_var(polyresearch::config::NODE_ID_ENV_VAR);
+        env::remove_var(polyresearch::cycle_guard::GUARD_ENV_VAR);
     }
 }
 
@@ -3298,6 +3301,138 @@ async fn scenario_contribute_agent_failure_recovers() {
     assert!(
         result.is_ok(),
         "continuous mode should recover after transient agent failure: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn scenario_contribute_once_propagates_guard_to_agent() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("contrib-once-guard");
+    repo.init_git();
+
+    let agent_cmd = mock_agent_command("check_guard");
+    repo.write_full_setup("lead", "test-node-guard", &agent_cmd);
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    let (issue, comments) = make_approved_thesis(94, "Guard propagation test", "lead");
+    let github = Arc::new(ScenarioGitHub::new("contributor"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(94, comments);
+
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-guard");
+    }
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        true,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(
+        &ctx,
+        &ContributeArgs {
+            url: None,
+            once: true,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "once mode should pass the guard path into the workflow agent: {result:?}"
+    );
+
+    let check_result = repo.path.join(".polyresearch/.guard-check-result");
+    let guard_path = fs::read_to_string(&check_result).unwrap();
+    let guard_path = guard_path.trim();
+    assert!(
+        Path::new(guard_path).is_absolute(),
+        "workflow agent should receive an absolute once guard path, got: {guard_path}"
+    );
+    assert!(
+        guard_path.ends_with(".once-guard"),
+        "workflow agent should receive the once guard file path, got: {guard_path}"
+    );
+    assert!(
+        !repo.path.join(".polyresearch/.once-guard").exists(),
+        "once guard file should be cleaned up after contribute exits"
+    );
+}
+
+#[tokio::test]
+async fn scenario_contribute_without_once_has_no_guard() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("contrib-no-guard");
+    repo.init_git();
+
+    let agent_cmd = mock_agent_command("check_no_guard");
+    repo.write_full_setup("lead", "test-node-no-guard", &agent_cmd);
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "// original\n").unwrap();
+    repo.commit_all("setup");
+
+    let (issue, comments) = make_approved_thesis(95, "No guard propagation test", "lead");
+    let github = Arc::new(ScenarioGitHub::new("contributor"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(95, comments);
+
+    unsafe {
+        env::set_var(polyresearch::config::NODE_ID_ENV_VAR, "test-node-no-guard");
+    }
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        true,
+        Commands::Contribute(ContributeArgs {
+            url: None,
+            once: false,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        }),
+    );
+
+    let result = commands::contribute::run(
+        &ctx,
+        &ContributeArgs {
+            url: None,
+            once: false,
+            max_parallel: Some(1),
+            sleep_secs: 0,
+            overrides: NodeOverrides::default(),
+        },
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "continuous mode should not inject a once guard: {result:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.path.join(".polyresearch/.guard-check-result"))
+            .unwrap()
+            .trim(),
+        "unset"
+    );
+    assert!(
+        !repo.path.join(".polyresearch/.once-guard").exists(),
+        "continuous mode should not leave a once guard file behind"
     );
 }
 

@@ -173,9 +173,11 @@ async fn run_workflow_agent_once(
     let root = repo_root.to_path_buf();
     let prompt = prompt.to_string();
 
-    tokio::task::spawn_blocking(move || agent::spawn_workflow_agent(&cmd, &root, &prompt, verbose))
-        .await
-        .map_err(|e| eyre!("{task_name} agent task failed: {e}"))?
+    tokio::task::spawn_blocking(move || {
+        agent::spawn_workflow_agent(&cmd, &root, &prompt, None, verbose)
+    })
+    .await
+    .map_err(|e| eyre!("{task_name} agent task failed: {e}"))?
 }
 
 pub fn decide_ready_prs(

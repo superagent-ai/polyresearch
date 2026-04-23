@@ -1,7 +1,7 @@
 #!/bin/bash
 # Mock agent for scenario tests.
 # Controlled by MOCK_AGENT_RESULT: improved, no_improvement, crashed, fail,
-#   fail_once, hang, noop, no_improvement_with_changes
+#   fail_once, hang, noop, no_improvement_with_changes, check_guard, check_no_guard
 RESULT_DIR="$PWD/.polyresearch"
 mkdir -p "$RESULT_DIR"
 
@@ -42,6 +42,26 @@ RESULT
         if [ "$COUNT" -le 2 ]; then
             exit 1
         fi
+        exit 0
+        ;;
+    check_guard)
+        if [ -z "$POLYRESEARCH_ONCE_GUARD" ]; then
+            echo "unset" > "$RESULT_DIR/.guard-check-result"
+            exit 1
+        fi
+        if [ ! -f "$POLYRESEARCH_ONCE_GUARD" ]; then
+            echo "missing" > "$RESULT_DIR/.guard-check-result"
+            exit 1
+        fi
+        echo "$POLYRESEARCH_ONCE_GUARD" > "$RESULT_DIR/.guard-check-result"
+        exit 0
+        ;;
+    check_no_guard)
+        if [ -n "$POLYRESEARCH_ONCE_GUARD" ]; then
+            echo "unexpectedly_set" > "$RESULT_DIR/.guard-check-result"
+            exit 1
+        fi
+        echo "unset" > "$RESULT_DIR/.guard-check-result"
         exit 0
         ;;
     noop)

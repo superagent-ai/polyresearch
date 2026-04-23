@@ -3,6 +3,7 @@ pub mod cli;
 pub mod commands;
 pub mod comments;
 pub mod config;
+pub mod cycle_guard;
 pub mod github;
 pub mod github_debug;
 pub mod hardware;

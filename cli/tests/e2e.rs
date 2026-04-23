@@ -68,9 +68,12 @@ struct MockGitHubClient {
     merged_prs: Mutex<Vec<u64>>,
     closed_prs: Mutex<Vec<u64>>,
     created_issues: Mutex<Vec<Issue>>,
+    created_pull_requests: Mutex<Vec<PullRequest>>,
     assigned_issues: Mutex<Vec<(u64, Vec<String>)>>,
     next_issue_id: Mutex<u64>,
     rate_limit_remaining: AtomicU64,
+    next_pr_id: Mutex<u64>,
+    allow_create_pull_request: bool,
 }
 
 impl MockGitHubClient {
@@ -82,6 +85,11 @@ impl MockGitHubClient {
         pr_comments: HashMap<u64, Vec<IssueComment>>,
     ) -> Self {
         let max_issue = issues.iter().map(|i| i.number).max().unwrap_or(0);
+        let max_pr = pull_requests
+            .iter()
+            .map(|pr| pr.number)
+            .max()
+            .unwrap_or(199);
         Self {
             current_login: current_login.into(),
             issues,
@@ -95,9 +103,12 @@ impl MockGitHubClient {
             merged_prs: Mutex::new(Vec::new()),
             closed_prs: Mutex::new(Vec::new()),
             created_issues: Mutex::new(Vec::new()),
+            created_pull_requests: Mutex::new(Vec::new()),
             assigned_issues: Mutex::new(Vec::new()),
             next_issue_id: Mutex::new(max_issue + 100),
             rate_limit_remaining: AtomicU64::new(4_000),
+            next_pr_id: Mutex::new(max_pr + 1),
+            allow_create_pull_request: false,
         }
     }
 
@@ -109,6 +120,11 @@ impl MockGitHubClient {
     fn set_rate_limit_remaining(&self, remaining: u64) {
         self.rate_limit_remaining
             .store(remaining, Ordering::Relaxed);
+    }
+
+    fn with_create_pull_request(mut self) -> Self {
+        self.allow_create_pull_request = true;
+        self
     }
 }
 
@@ -252,12 +268,16 @@ impl GitHubApi for MockGitHubClient {
     }
 
     fn list_pull_requests(&self, _state: PullRequestListState) -> Result<Vec<PullRequest>> {
-        Ok(self.pull_requests.clone())
+        let mut pull_requests = self.pull_requests.clone();
+        pull_requests.extend(self.created_pull_requests.lock().unwrap().clone());
+        Ok(pull_requests)
     }
 
     fn get_pull_request(&self, pr_number: u64) -> Result<PullRequest> {
+        let created = self.created_pull_requests.lock().unwrap();
         self.pull_requests
             .iter()
+            .chain(created.iter())
             .find(|pr| pr.number == pr_number)
             .cloned()
             .ok_or_else(|| eyre!("mock PR #{} not found", pr_number))
@@ -297,12 +317,37 @@ impl GitHubApi for MockGitHubClient {
 
     fn create_pull_request(
         &self,
-        _branch: &str,
-        _title: &str,
-        _body: &str,
-        _base: &str,
+        branch: &str,
+        title: &str,
+        body: &str,
+        base: &str,
     ) -> Result<PullRequest> {
-        Err(eyre!("unexpected create_pull_request call in test"))
+        if !self.allow_create_pull_request {
+            return Err(eyre!("unexpected create_pull_request call in test"));
+        }
+
+        let mut next_pr_id = self.next_pr_id.lock().unwrap();
+        let number = *next_pr_id;
+        *next_pr_id += 1;
+        let pr = PullRequest {
+            number,
+            title: title.to_string(),
+            body: Some(body.to_string()),
+            state: "OPEN".to_string(),
+            head_ref_name: branch.to_string(),
+            head_ref_oid: Some("abc123".to_string()),
+            base_ref_name: Some(base.to_string()),
+            created_at: chrono::Utc::now(),
+            closed_at: None,
+            merged_at: None,
+            author: Some(Author {
+                login: self.current_login.clone(),
+            }),
+            url: Some(format!("https://github.com/test/repo/pull/{number}")),
+            mergeable: None,
+        };
+        self.created_pull_requests.lock().unwrap().push(pr.clone());
+        Ok(pr)
     }
 
     fn close_pull_request(&self, pr_number: u64) -> Result<serde_json::Value> {
@@ -352,6 +397,15 @@ fn init_git_repo(path: &PathBuf) {
     run_git(path, &["branch", "-M", "main"]);
 }
 
+fn add_bare_remote(path: &PathBuf, branch: &str) -> PathBuf {
+    let bare = path.join("origin.git");
+    let bare_arg = bare.to_string_lossy().into_owned();
+    run_git(path, &["init", "--bare", &bare_arg]);
+    run_git(path, &["remote", "add", "origin", &bare_arg]);
+    run_git(path, &["push", "-u", "origin", branch]);
+    bare
+}
+
 fn run_git(path: &PathBuf, args: &[&str]) {
     let output = Command::new("git")
         .args(args)
@@ -366,6 +420,40 @@ fn run_git(path: &PathBuf, args: &[&str]) {
     );
 }
 
+fn clone_issue_fixture_with_new_number(
+    source: &IssueFixture,
+    number: u64,
+    title: &str,
+) -> IssueFixture {
+    let old_number = source.issue.number;
+    let mut issue = source.issue.clone();
+    issue.number = number;
+    issue.title = title.to_string();
+    issue.url = Some(format!("https://example.test/issues/{number}"));
+
+    let mut comments = source.comments.clone();
+    for comment in &mut comments {
+        comment.body = comment
+            .body
+            .replace(&format!("#{old_number}"), &format!("#{number}"))
+            .replace(
+                &format!("thesis: {old_number}"),
+                &format!("thesis: {number}"),
+            )
+            .replace(&format!("issue #{old_number}"), &format!("issue #{number}"))
+            .replace(
+                &format!("target: issue #{old_number}"),
+                &format!("target: issue #{number}"),
+            );
+    }
+
+    IssueFixture {
+        lead_github_login: source.lead_github_login.clone(),
+        issue,
+        comments,
+    }
+}
+
 fn env_lock() -> &'static Mutex<()> {
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     ENV_LOCK.get_or_init(|| Mutex::new(()))
@@ -378,14 +466,14 @@ struct NodeIdEnvGuard {
 impl NodeIdEnvGuard {
     fn lock_clean() -> Self {
         let guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
-        clear_node_id_env();
+        clear_test_env();
         Self { _guard: guard }
     }
 }
 
 impl Drop for NodeIdEnvGuard {
     fn drop(&mut self) {
-        clear_node_id_env();
+        clear_test_env();
     }
 }
 
@@ -435,6 +523,23 @@ fn assert_login_prefixed_node_id(node_id: &str, login: &str) {
         suffix.chars().all(|c| c.is_ascii_hexdigit()),
         "node suffix should be hex, got `{suffix}`"
     );
+}
+
+fn set_once_guard_env(path: &std::path::Path) {
+    unsafe {
+        env::set_var(polyresearch::cycle_guard::GUARD_ENV_VAR, path);
+    }
+}
+
+fn clear_once_guard_env() {
+    unsafe {
+        env::remove_var(polyresearch::cycle_guard::GUARD_ENV_VAR);
+    }
+}
+
+fn clear_test_env() {
+    clear_node_id_env();
+    clear_once_guard_env();
 }
 
 #[tokio::test]
@@ -1274,6 +1379,99 @@ async fn submit_rejects_branch_without_diff_from_default_branch() {
 }
 
 #[tokio::test]
+async fn cycle_guard_submit_marks_done() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("submit-marks-guard-done");
+    init_git_repo(&repo.path);
+    let _remote = add_bare_remote(&repo.path, "main");
+    run_git(
+        &repo.path,
+        &["checkout", "-b", "thesis/21-improved-attempt-1"],
+    );
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "console.log('improved');\n").unwrap();
+    run_git(&repo.path, &["add", "src/main.js"]);
+    run_git(&repo.path, &["commit", "-m", "Improved attempt"]);
+
+    let submit_fixture = load_issue_fixture("improved_no_submit_issue.json");
+    let follow_up_fixture = clone_issue_fixture_with_new_number(
+        &load_issue_fixture("acknowledged_invalid_issue.json"),
+        submit_fixture.issue.number + 1,
+        "Follow-up thesis",
+    );
+    let mock = Arc::new(
+        MockGitHubClient::new(
+            "alice",
+            vec![
+                submit_fixture.issue.clone(),
+                follow_up_fixture.issue.clone(),
+            ],
+            HashMap::from([
+                (submit_fixture.issue.number, submit_fixture.comments.clone()),
+                (
+                    follow_up_fixture.issue.number,
+                    follow_up_fixture.comments.clone(),
+                ),
+            ]),
+            vec![],
+            HashMap::new(),
+        )
+        .with_create_pull_request(),
+    );
+    let submit_ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &submit_fixture.lead_github_login,
+        false,
+        Commands::Submit(IssueArgs {
+            issue: submit_fixture.issue.number,
+        }),
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let guard_path = polyresearch::cycle_guard::create(&repo.path).unwrap();
+    set_once_guard_env(&guard_path);
+
+    commands::submit::run(
+        &submit_ctx,
+        &IssueArgs {
+            issue: submit_fixture.issue.number,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(fs::read_to_string(&guard_path).unwrap(), "done");
+    assert_eq!(
+        mock.created_pull_requests.lock().unwrap().len(),
+        1,
+        "submit should create exactly one PR in the mock client"
+    );
+
+    let claim_ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &submit_fixture.lead_github_login,
+        false,
+        Commands::Claim(IssueArgs {
+            issue: follow_up_fixture.issue.number,
+        }),
+    );
+    let error = commands::claim::run(
+        &claim_ctx,
+        &IssueArgs {
+            issue: follow_up_fixture.issue.number,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("cycle limit"),
+        "submit should mark the once guard done, got: {error}"
+    );
+}
+
+#[tokio::test]
 async fn generate_is_blocked_by_dirty_audit() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("generate-dirty");
@@ -1642,6 +1840,244 @@ async fn batch_claim_reports_partial_success_when_later_claim_fails() {
         mock.posted_issue_comments.lock().unwrap().len(),
         1,
         "first claim should have been posted before the second claim failed"
+    );
+}
+
+#[tokio::test]
+async fn cycle_guard_blocks_second_claim_after_release() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("guard-claim-block");
+    init_git_repo(&repo.path);
+    let fixture_one = load_issue_fixture("acknowledged_invalid_issue.json");
+    let fixture_two = clone_issue_fixture_with_new_number(
+        &fixture_one,
+        fixture_one.issue.number + 1,
+        "Second guarded thesis",
+    );
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture_one.issue.clone(), fixture_two.issue.clone()],
+        HashMap::from([
+            (fixture_one.issue.number, fixture_one.comments.clone()),
+            (fixture_two.issue.number, fixture_two.comments.clone()),
+        ]),
+        vec![],
+        HashMap::new(),
+    ));
+    let claim_ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture_one.lead_github_login,
+        false,
+        Commands::Claim(IssueArgs {
+            issue: fixture_one.issue.number,
+        }),
+    );
+    let release_ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture_one.lead_github_login,
+        false,
+        Commands::Release(ReleaseArgs {
+            issue: fixture_one.issue.number,
+            reason: ReleaseReason::NoImprovement,
+        }),
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let guard_path = polyresearch::cycle_guard::create(&repo.path).unwrap();
+    set_once_guard_env(&guard_path);
+
+    commands::claim::run(
+        &claim_ctx,
+        &IssueArgs {
+            issue: fixture_one.issue.number,
+        },
+    )
+    .await
+    .unwrap();
+    commands::release::run(
+        &release_ctx,
+        &ReleaseArgs {
+            issue: fixture_one.issue.number,
+            reason: ReleaseReason::NoImprovement,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(fs::read_to_string(&guard_path).unwrap(), "done");
+
+    let error = commands::claim::run(
+        &claim_ctx,
+        &IssueArgs {
+            issue: fixture_two.issue.number,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("cycle limit"),
+        "second claim should be blocked by the once guard, got: {error}"
+    );
+    assert_eq!(
+        mock.posted_issue_comments.lock().unwrap().len(),
+        2,
+        "claim and release should post comments before the second claim is blocked"
+    );
+}
+
+#[tokio::test]
+async fn cycle_guard_blocks_batch_claim_after_release() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("guard-batch-claim-block");
+    init_git_repo(&repo.path);
+    let fixture_one = load_issue_fixture("acknowledged_invalid_issue.json");
+    let fixture_two = clone_issue_fixture_with_new_number(
+        &fixture_one,
+        fixture_one.issue.number + 1,
+        "Second guarded batch thesis",
+    );
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture_one.issue.clone(), fixture_two.issue.clone()],
+        HashMap::from([
+            (fixture_one.issue.number, fixture_one.comments.clone()),
+            (fixture_two.issue.number, fixture_two.comments.clone()),
+        ]),
+        vec![],
+        HashMap::new(),
+    ));
+    let claim_ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture_one.lead_github_login,
+        false,
+        Commands::Claim(IssueArgs {
+            issue: fixture_one.issue.number,
+        }),
+    );
+    let release_ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture_one.lead_github_login,
+        false,
+        Commands::Release(ReleaseArgs {
+            issue: fixture_one.issue.number,
+            reason: ReleaseReason::NoImprovement,
+        }),
+    );
+    let batch_ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture_one.lead_github_login,
+        false,
+        Commands::BatchClaim(BatchClaimArgs { count: Some(1) }),
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    let guard_path = polyresearch::cycle_guard::create(&repo.path).unwrap();
+    set_once_guard_env(&guard_path);
+
+    commands::claim::run(
+        &claim_ctx,
+        &IssueArgs {
+            issue: fixture_one.issue.number,
+        },
+    )
+    .await
+    .unwrap();
+    commands::release::run(
+        &release_ctx,
+        &ReleaseArgs {
+            issue: fixture_one.issue.number,
+            reason: ReleaseReason::NoImprovement,
+        },
+    )
+    .await
+    .unwrap();
+
+    let error = commands::batch_claim::run(&batch_ctx, &BatchClaimArgs { count: Some(1) })
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("cycle limit"),
+        "batch-claim should be blocked after the cycle completes, got: {error}"
+    );
+}
+
+#[tokio::test]
+async fn cycle_guard_inactive_when_env_unset() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("guard-unset");
+    init_git_repo(&repo.path);
+    let fixture_one = load_issue_fixture("acknowledged_invalid_issue.json");
+    let fixture_two = clone_issue_fixture_with_new_number(
+        &fixture_one,
+        fixture_one.issue.number + 1,
+        "Second unguarded thesis",
+    );
+    let mock = Arc::new(MockGitHubClient::new(
+        "alice",
+        vec![fixture_one.issue.clone(), fixture_two.issue.clone()],
+        HashMap::from([
+            (fixture_one.issue.number, fixture_one.comments.clone()),
+            (fixture_two.issue.number, fixture_two.comments.clone()),
+        ]),
+        vec![],
+        HashMap::new(),
+    ));
+    let claim_ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture_one.lead_github_login,
+        false,
+        Commands::Claim(IssueArgs {
+            issue: fixture_one.issue.number,
+        }),
+    );
+    let release_ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        &fixture_one.lead_github_login,
+        false,
+        Commands::Release(ReleaseArgs {
+            issue: fixture_one.issue.number,
+            reason: ReleaseReason::NoImprovement,
+        }),
+    );
+    commands::write_node_id(&repo.path, "test-node").unwrap();
+
+    commands::claim::run(
+        &claim_ctx,
+        &IssueArgs {
+            issue: fixture_one.issue.number,
+        },
+    )
+    .await
+    .unwrap();
+    commands::release::run(
+        &release_ctx,
+        &ReleaseArgs {
+            issue: fixture_one.issue.number,
+            reason: ReleaseReason::NoImprovement,
+        },
+    )
+    .await
+    .unwrap();
+    commands::claim::run(
+        &claim_ctx,
+        &IssueArgs {
+            issue: fixture_two.issue.number,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        mock.posted_issue_comments.lock().unwrap().len(),
+        3,
+        "without the once guard env var, claim-release-claim should all succeed"
     );
 }
 
