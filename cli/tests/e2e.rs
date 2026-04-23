@@ -2507,6 +2507,86 @@ async fn bootstrap_commits_setup_files() {
 }
 
 #[tokio::test]
+async fn bootstrap_commits_setup_files_with_allowlist_gitignore() {
+    let repo = TestRepo::new("bootstrap-commit-allowlist-gitignore");
+    init_git_repo(&repo.path);
+
+    // Create a bare remote so push succeeds
+    let bare = TestRepo::new("bootstrap-commit-allowlist-gitignore-bare");
+    let _ = fs::remove_dir_all(&bare.path);
+    Command::new("git")
+        .args([
+            "clone",
+            "--bare",
+            &repo.path.to_string_lossy(),
+            &bare.path.to_string_lossy(),
+        ])
+        .output()
+        .unwrap();
+    run_git(
+        &repo.path,
+        &["remote", "add", "origin", &bare.path.to_string_lossy()],
+    );
+
+    fs::write(repo.path.join(".gitignore"), "/*\n!/.gitignore\n").unwrap();
+
+    commands::bootstrap::write_templates(&repo.path, Some("Test goal"), "lead").unwrap();
+    commands::bootstrap::normalize_program_md(&repo.path).unwrap();
+
+    let ignored_output = Command::new("git")
+        .args([
+            "check-ignore",
+            "PROGRAM.md",
+            "PREPARE.md",
+            "results.tsv",
+            ".polyresearch",
+        ])
+        .current_dir(&repo.path)
+        .output()
+        .unwrap();
+    let ignored = String::from_utf8(ignored_output.stdout).unwrap();
+    assert!(
+        ignored.contains("PROGRAM.md")
+            && ignored.contains("PREPARE.md")
+            && ignored.contains("results.tsv")
+            && ignored.contains(".polyresearch"),
+        "expected setup files to be ignored by allowlist .gitignore, got: {ignored}"
+    );
+
+    commands::bootstrap::commit_and_push_setup_files(&repo.path).unwrap();
+
+    // Verify git status is clean for setup files even though .gitignore hides them.
+    let status_output = Command::new("git")
+        .args([
+            "status",
+            "--porcelain",
+            "--",
+            "PROGRAM.md",
+            "PREPARE.md",
+            "results.tsv",
+            ".polyresearch",
+        ])
+        .current_dir(&repo.path)
+        .output()
+        .unwrap();
+    let status = String::from_utf8(status_output.stdout).unwrap();
+    assert!(
+        status.trim().is_empty(),
+        "setup files should be clean after commit, got: {status}"
+    );
+
+    let show_output = Command::new("git")
+        .args(["show", "HEAD", "--name-only", "--format="])
+        .current_dir(&repo.path)
+        .output()
+        .unwrap();
+    let files = String::from_utf8(show_output.stdout).unwrap();
+    assert!(files.contains("PROGRAM.md"), "PROGRAM.md not in commit");
+    assert!(files.contains("PREPARE.md"), "PREPARE.md not in commit");
+    assert!(files.contains("results.tsv"), "results.tsv not in commit");
+}
+
+#[tokio::test]
 async fn bootstrap_commit_is_idempotent() {
     let repo = TestRepo::new("bootstrap-commit-idempotent");
     init_git_repo(&repo.path);
