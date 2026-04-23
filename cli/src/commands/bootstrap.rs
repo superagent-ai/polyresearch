@@ -46,6 +46,7 @@ pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
     // Post-agent cleanup: re-normalize in case the agent mangled required sections,
     // then commit+push the agent's changes (PROGRAM.md/PREPARE.md with project details).
     normalize_program_md(&repo_root)?;
+    normalize_file_endings(&repo_root)?;
     let untracked_after_agent = untracked_files(&repo_root);
     let mut agent_created_files: Vec<String> = untracked_after_agent
         .difference(&untracked_before_agent)
@@ -279,6 +280,8 @@ pub fn write_templates(repo_root: &Path, goal: Option<&str>, login: &str) -> Res
             .wrap_err_with(|| format!("failed to create {}", polyresearch_dir.display()))?;
     }
 
+    ensure_gitignore_entry(repo_root, ".polyresearch-node.toml")?;
+
     Ok(())
 }
 
@@ -406,7 +409,8 @@ fn untracked_files(repo_root: &Path) -> HashSet<String> {
 pub fn commit_and_push_setup_files(repo_root: &Path, extra_paths: &[String]) -> Result<()> {
     let repo = repo_root.to_path_buf();
 
-    let mut setup_paths: Vec<String> = ["PROGRAM.md", "PREPARE.md", "results.tsv", ".polyresearch"]
+    let mut setup_paths: Vec<String> =
+        ["PROGRAM.md", "PREPARE.md", "results.tsv", ".polyresearch", ".gitignore"]
         .into_iter()
         .filter(|f| repo_root.join(f).exists())
         .map(str::to_string)
@@ -425,6 +429,10 @@ pub fn commit_and_push_setup_files(repo_root: &Path, extra_paths: &[String]) -> 
     }
 
     let setup_path_refs: Vec<&str> = setup_paths.iter().map(String::as_str).collect();
+
+    let mut reset_args: Vec<&str> = vec!["reset", "--"];
+    reset_args.extend(setup_path_refs.iter().copied());
+    let _ = commands::run_git(&repo, &reset_args);
 
     let mut add_args: Vec<&str> = vec!["add", "-f", "--"];
     add_args.extend(setup_path_refs.iter().copied());
@@ -453,6 +461,12 @@ pub fn commit_and_push_setup_files(repo_root: &Path, extra_paths: &[String]) -> 
     }
     commands::run_git(&repo, &commit_args)?;
 
+    let mut checkout_args: Vec<&str> = vec!["checkout", "HEAD", "--"];
+    for f in &staged_files {
+        checkout_args.push(f.as_str());
+    }
+    let _ = commands::run_git(&repo, &checkout_args);
+
     match commands::run_git(&repo, &["push", "origin", "HEAD"]) {
         Ok(_) => eprintln!("Committed and pushed setup files."),
         Err(err) => {
@@ -464,6 +478,34 @@ pub fn commit_and_push_setup_files(repo_root: &Path, extra_paths: &[String]) -> 
 
 fn detect_default_branch(repo_root: &Path) -> String {
     crate::config::detect_default_branch_from_git(repo_root)
+}
+
+fn ensure_gitignore_entry(repo_root: &Path, entry: &str) -> Result<()> {
+    use std::io::Write;
+
+    let path = repo_root.join(".gitignore");
+    let existing = if path.exists() {
+        fs::read_to_string(&path).wrap_err_with(|| format!("failed to read {}", path.display()))?
+    } else {
+        String::new()
+    };
+
+    if existing.lines().any(|line| line.trim() == entry) {
+        return Ok(());
+    }
+
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .wrap_err_with(|| format!("failed to open {}", path.display()))?;
+
+    if !existing.is_empty() && !existing.ends_with('\n') {
+        writeln!(file).wrap_err_with(|| format!("failed to write {}", path.display()))?;
+    }
+
+    writeln!(file, "{entry}").wrap_err_with(|| format!("failed to write {}", path.display()))?;
+    Ok(())
 }
 
 pub fn normalize_program_md(repo_root: &Path) -> Result<()> {
@@ -492,6 +534,38 @@ pub fn normalize_program_md(repo_root: &Path) -> Result<()> {
     if modified != contents {
         fs::write(&path, &modified)
             .wrap_err_with(|| format!("failed to write {}", path.display()))?;
+    }
+
+    Ok(())
+}
+
+pub fn normalize_file_endings(repo_root: &Path) -> Result<()> {
+    for name in ["PROGRAM.md", "PREPARE.md"] {
+        let path = repo_root.join(name);
+        if !path.exists() {
+            continue;
+        }
+
+        let contents =
+            fs::read_to_string(&path).wrap_err_with(|| format!("failed to read {}", path.display()))?;
+
+        let normalized = if contents.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "{}\n",
+                contents
+                    .lines()
+                    .map(str::trim_end)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        };
+
+        if normalized != contents {
+            fs::write(&path, &normalized)
+                .wrap_err_with(|| format!("failed to write {}", path.display()))?;
+        }
     }
 
     Ok(())
