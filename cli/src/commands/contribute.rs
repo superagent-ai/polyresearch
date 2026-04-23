@@ -52,7 +52,8 @@ pub async fn run(ctx: &AppContext, args: &ContributeArgs) -> Result<()> {
         }
     };
 
-    ensure_node_config(&ctx.repo_root)?;
+    let login = local_ctx.github.current_login()?;
+    ensure_node_config(&ctx.repo_root, &login)?;
     let node_config = NodeConfig::load(&ctx.repo_root)?.with_overrides(&args.overrides);
     let node_id = node_config.node_id.clone();
     let agent_command = node_config.agent.command.clone();
@@ -117,8 +118,8 @@ fn clone_repo(url: &str, repo_root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn ensure_node_config(repo_root: &Path) -> Result<()> {
-    commands::ensure_node_config(repo_root)
+fn ensure_node_config(repo_root: &Path, login: &str) -> Result<()> {
+    commands::ensure_node_config(repo_root, login)
 }
 
 pub fn is_crash_cooldown(

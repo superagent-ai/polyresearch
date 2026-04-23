@@ -23,12 +23,14 @@ pub mod status;
 pub mod submit;
 pub mod sync;
 
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
 use color_eyre::eyre::{Context, Result, eyre};
+use rand::RngExt;
 use serde::Serialize;
 
 use crate::cli::{Cli, Commands};
@@ -139,26 +141,36 @@ pub fn write_node_config(
     config.with_overrides(overrides).save(repo_root)
 }
 
-pub fn ensure_node_config(repo_root: &Path) -> Result<()> {
+pub(crate) fn default_machine_id() -> String {
+    let hostname = resolve_hostname();
+    let suffix: u16 = rand::rng().random();
+    format!("{hostname}-{suffix:04x}")
+}
+
+pub(crate) fn resolve_hostname() -> String {
+    if let Ok(hostname) = env::var("HOSTNAME")
+        && !hostname.trim().is_empty()
+    {
+        return hostname.trim().to_string();
+    }
+
+    let output = Command::new("hostname").output();
+    match output {
+        Ok(output) if output.status.success() => String::from_utf8(output.stdout)
+            .map(|value| value.trim().to_string())
+            .unwrap_or_else(|_| "local".to_string()),
+        _ => "local".to_string(),
+    }
+}
+
+pub fn ensure_node_config(repo_root: &Path, login: &str) -> Result<()> {
     let config_path = repo_root.join(".polyresearch-node.toml");
     if config_path.exists() {
         return Ok(());
     }
     eprintln!("No node config found, initializing...");
-    let hostname = Command::new("hostname")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-    let suffix: String = {
-        use rand::RngExt;
-        let mut rng = rand::rng();
-        (0..4)
-            .map(|_| format!("{:x}", rng.random_range(0u8..16)))
-            .collect()
-    };
-    let node_id = format!("{hostname}-{suffix}");
+    let machine_id = default_machine_id();
+    let node_id = format!("{login}/{machine_id}");
     write_node_config(repo_root, &node_id, &crate::cli::NodeOverrides::default())?;
     eprintln!("Initialized node as `{node_id}`");
     Ok(())
@@ -293,4 +305,56 @@ pub fn slugify(input: &str) -> String {
         }
     }
     output.trim_matches('-').to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_hostname;
+    use std::env;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    fn hostname_env_lock() -> &'static Mutex<()> {
+        static HOSTNAME_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        HOSTNAME_ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct HostnameEnvGuard {
+        _guard: MutexGuard<'static, ()>,
+        previous: Option<String>,
+    }
+
+    impl HostnameEnvGuard {
+        fn set(value: &str) -> Self {
+            let guard = hostname_env_lock()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let previous = env::var("HOSTNAME").ok();
+            unsafe {
+                env::set_var("HOSTNAME", value);
+            }
+            Self {
+                _guard: guard,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for HostnameEnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(previous) => unsafe {
+                    env::set_var("HOSTNAME", previous);
+                },
+                None => unsafe {
+                    env::remove_var("HOSTNAME");
+                },
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_hostname_trims_hostname_env_var() {
+        let _guard = HostnameEnvGuard::set("worker-host  \n");
+        assert_eq!(resolve_hostname(), "worker-host");
+    }
 }
