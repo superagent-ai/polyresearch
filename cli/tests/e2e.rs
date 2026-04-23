@@ -10,7 +10,7 @@ use color_eyre::eyre::{Result, eyre};
 use polyresearch::agent;
 use polyresearch::cli::{
     AdminArgs, AdminCommands, AdminReleaseClaimArgs, AdminReopenThesisArgs, AttemptArgs,
-    BatchClaimArgs, Cli, Commands, ContributeArgs, GenerateArgs, InitArgs, IssueArgs,
+    BatchClaimArgs, Cli, Commands, CommitArgs, ContributeArgs, GenerateArgs, InitArgs, IssueArgs,
     NodeOverrides, PrArgs, ReleaseArgs, StatusArgs,
 };
 use polyresearch::commands;
@@ -899,6 +899,213 @@ async fn attempt_rejects_node_without_canonical_claim() {
     .await
     .unwrap_err();
     assert!(error.to_string().contains("not currently claimed"));
+}
+
+#[tokio::test]
+async fn commit_command_commits_only_editable_surface_changes() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("commit-editable");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    write_node_config(&repo.path, "test-node");
+    fs::write(repo.path.join("PREPARE.md"), "benchmark setup\n").unwrap();
+    fs::create_dir_all(repo.path.join("src")).unwrap();
+    fs::write(repo.path.join("src/main.js"), "export const value = 1;\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+    run_git(&repo.path, &["commit", "-m", "setup"]);
+    run_git(&repo.path, &["checkout", "-b", "thesis/99-commit-editable"]);
+
+    fs::write(repo.path.join("src/main.js"), "export const value = 2;\n").unwrap();
+    fs::create_dir_all(repo.path.join(".polyresearch")).unwrap();
+    fs::write(
+        repo.path.join(".polyresearch/result.json"),
+        "{\"metric\": 1.0}\n",
+    )
+    .unwrap();
+    fs::write(repo.path.join(".polyresearch/thesis.md"), "# Thesis\n").unwrap();
+    run_git(&repo.path, &["add", "-A"]);
+
+    let now = chrono::Utc::now();
+    let issue = Issue {
+        number: 99,
+        title: "Commit editable surface".to_string(),
+        body: Some("Test.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label {
+            name: "thesis".to_string(),
+        }],
+        created_at: now - chrono::Duration::hours(2),
+        closed_at: None,
+        author: Some(Author {
+            login: "lead".to_string(),
+        }),
+        url: None,
+    };
+    let comments = vec![
+        IssueComment {
+            id: 9901,
+            body: ProtocolComment::Approval { thesis: 99 }.render(),
+            user: CommentUser {
+                login: "lead".to_string(),
+            },
+            created_at: now - chrono::Duration::hours(1),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 9902,
+            body: ProtocolComment::Claim {
+                thesis: 99,
+                node: "test-node".to_string(),
+            }
+            .render(),
+            user: CommentUser {
+                login: "lead".to_string(),
+            },
+            created_at: now - chrono::Duration::minutes(30),
+            updated_at: None,
+        },
+    ];
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(99, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    let args = CommitArgs {
+        issue: 99,
+        message: Some("editable surface test".to_string()),
+    };
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead",
+        false,
+        Commands::Commit(args.clone()),
+    );
+
+    commands::commit::run(&ctx, &args).await.unwrap();
+
+    let subject = commands::run_git(&repo.path, &["log", "-1", "--pretty=%s"]).unwrap();
+    assert_eq!(subject, "thesis/99: editable surface test");
+
+    let committed_files =
+        commands::run_git(&repo.path, &["show", "--pretty=", "--name-only", "HEAD"]).unwrap();
+    assert!(
+        committed_files.lines().any(|line| line == "src/main.js"),
+        "editable source file should be committed"
+    );
+    assert!(
+        !committed_files.contains(".polyresearch/result.json"),
+        "result.json should stay out of the commit"
+    );
+    assert!(
+        !committed_files.contains(".polyresearch/thesis.md"),
+        "thesis context should stay out of the commit"
+    );
+
+    let status = commands::run_git(&repo.path, &["status", "--short"]).unwrap();
+    assert!(
+        status.contains("?? .polyresearch/"),
+        "protected files should remain in the working tree after commit"
+    );
+    assert!(
+        !status.contains("src/main.js"),
+        "editable file should be clean after the commit"
+    );
+}
+
+#[tokio::test]
+async fn submit_rejects_branch_without_diff_from_default_branch() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("submit-empty-diff");
+    init_git_repo(&repo.path);
+    write_program_md(&repo.path);
+    write_node_config(&repo.path, "test-node");
+    run_git(&repo.path, &["checkout", "-b", "thesis/60-empty-submit"]);
+
+    let now = chrono::Utc::now();
+    let issue = Issue {
+        number: 60,
+        title: "Empty submit".to_string(),
+        body: Some("Test.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label {
+            name: "thesis".to_string(),
+        }],
+        created_at: now - chrono::Duration::hours(2),
+        closed_at: None,
+        author: Some(Author {
+            login: "lead".to_string(),
+        }),
+        url: None,
+    };
+    let comments = vec![
+        IssueComment {
+            id: 6001,
+            body: ProtocolComment::Approval { thesis: 60 }.render(),
+            user: CommentUser {
+                login: "lead".to_string(),
+            },
+            created_at: now - chrono::Duration::hours(1),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 6002,
+            body: ProtocolComment::Claim {
+                thesis: 60,
+                node: "test-node".to_string(),
+            }
+            .render(),
+            user: CommentUser {
+                login: "lead".to_string(),
+            },
+            created_at: now - chrono::Duration::minutes(40),
+            updated_at: None,
+        },
+        IssueComment {
+            id: 6003,
+            body: ProtocolComment::Attempt {
+                thesis: 60,
+                branch: "thesis/60-empty-submit".to_string(),
+                metric: 0.95,
+                baseline_metric: Some(0.90),
+                observation: Observation::Improved,
+                summary: "improved".to_string(),
+                annotations: None,
+            }
+            .render(),
+            user: CommentUser {
+                login: "lead".to_string(),
+            },
+            created_at: now - chrono::Duration::minutes(20),
+            updated_at: None,
+        },
+    ];
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(60, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock,
+        "lead",
+        false,
+        Commands::Submit(IssueArgs { issue: 60 }),
+    );
+
+    let error = commands::submit::run(&ctx, &IssueArgs { issue: 60 })
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("has no file changes compared to `main`; nothing to submit"),
+        "submit should stop empty branches before pushing, got: {error}"
+    );
 }
 
 #[tokio::test]
@@ -1817,7 +2024,9 @@ async fn duties_lead_duties_excluded_in_contribute_context() {
         created_at: now,
         closed_at: None,
         merged_at: None,
-        author: Some(Author { login: "alice".to_string() }),
+        author: Some(Author {
+            login: "alice".to_string(),
+        }),
         url: None,
         mergeable: None,
     };
@@ -1844,7 +2053,9 @@ async fn duties_lead_duties_excluded_in_contribute_context() {
             created_at: now,
             closed_at: None,
             merged_at: None,
-            author: Some(Author { login: "alice".to_string() }),
+            author: Some(Author {
+                login: "alice".to_string(),
+            }),
             url: None,
             mergeable: None,
         },
@@ -1894,7 +2105,9 @@ async fn duties_lead_duties_included_in_lead_context() {
         created_at: now,
         closed_at: None,
         merged_at: None,
-        author: Some(Author { login: "alice".to_string() }),
+        author: Some(Author {
+            login: "alice".to_string(),
+        }),
         url: None,
         mergeable: None,
     };
@@ -1921,7 +2134,9 @@ async fn duties_lead_duties_included_in_lead_context() {
             created_at: now,
             closed_at: None,
             merged_at: None,
-            author: Some(Author { login: "alice".to_string() }),
+            author: Some(Author {
+                login: "alice".to_string(),
+            }),
             url: None,
             mergeable: None,
         },
@@ -2056,7 +2271,9 @@ async fn duties_submit_skipped_when_pr_merged() {
             created_at: now,
             closed_at: Some(now),
             merged_at: Some(now),
-            author: Some(Author { login: "alice".to_string() }),
+            author: Some(Author {
+                login: "alice".to_string(),
+            }),
             url: None,
             mergeable: None,
         },
@@ -2473,7 +2690,9 @@ async fn duties_contribute_proceeds_despite_pending_lead_duties() {
         created_at: now,
         closed_at: None,
         merged_at: None,
-        author: Some(Author { login: "alice".to_string() }),
+        author: Some(Author {
+            login: "alice".to_string(),
+        }),
         url: None,
         mergeable: None,
     };
@@ -2501,7 +2720,9 @@ async fn duties_contribute_proceeds_despite_pending_lead_duties() {
             created_at: now,
             closed_at: None,
             merged_at: None,
-            author: Some(Author { login: "alice".to_string() }),
+            author: Some(Author {
+                login: "alice".to_string(),
+            }),
             url: None,
             mergeable: None,
         },
@@ -2524,7 +2745,8 @@ async fn duties_contribute_proceeds_despite_pending_lead_duties() {
         "lead context should see decide as blocking"
     );
 
-    let contribute_report = commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
+    let contribute_report =
+        commands::duties::check(&ctx, &repo_state, DutyContext::Contribute).unwrap();
     assert!(
         contribute_report.blocking.is_empty(),
         "contribute context must not be blocked by lead duties; got: {:?}",
@@ -2756,9 +2978,7 @@ Test goal.
 fn write_node_config(path: &PathBuf, node_id: &str) {
     fs::write(
         path.join(".polyresearch-node.toml"),
-        format!(
-            "node_id = \"{node_id}\"\ncapacity = 75\n\n[agent]\ncommand = \"true\"\n"
-        ),
+        format!("node_id = \"{node_id}\"\ncapacity = 75\n\n[agent]\ncommand = \"true\"\n"),
     )
     .unwrap();
 }
@@ -6578,11 +6798,11 @@ async fn decide_excludes_acknowledged_invalid_from_best_metric() {
     run_git(&repo.path, &["commit", "-m", "setup"]);
 
     let (issues, ic, prs, pc) = make_decidable_state_with_poisoned_prior(
-        1,     // thesis_number (current)
-        50,    // pr_number (current)
-        20421.0, // current_metric
-        15000.0, // baseline
-        17658.0, // prior_valid_metric
+        1,        // thesis_number (current)
+        50,       // pr_number (current)
+        20421.0,  // current_metric
+        15000.0,  // baseline
+        17658.0,  // prior_valid_metric
         218000.0, // poisoned_metric
         "lead",
     );

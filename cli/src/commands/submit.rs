@@ -60,6 +60,14 @@ pub async fn run(ctx: &AppContext, args: &IssueArgs) -> Result<()> {
         }
     }
 
+    let diff_ref = format!("origin/{default_branch}...HEAD");
+    let diff_output = run_git(&ctx.repo_root, &["diff", "--name-only", &diff_ref])?;
+    if diff_output.trim().is_empty() {
+        return Err(eyre!(
+            "branch `{branch}` has no file changes compared to `{default_branch}`; nothing to submit"
+        ));
+    }
+
     if !ctx.cli.dry_run {
         push_current_branch(&ctx.repo_root)?;
     }

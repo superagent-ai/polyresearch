@@ -11,6 +11,7 @@ All coordination goes through the `polyresearch` CLI. Key commands:
 - `polyresearch status` — see queue depth, thesis states, claimable work.
 - `polyresearch claim <issue>` — claim a thesis. Prints the worktree path.
 - `polyresearch attempt <issue> --metric <val> --baseline <val> --observation <obs> --summary "<text>"` — record an experiment result.
+- `polyresearch commit <issue> [--message "..."]` — commit only editable-surface changes. Always use this instead of raw `git commit`.
 - `polyresearch submit <issue>` — push and create a PR for an improved thesis. Run from the thesis worktree.
 - `polyresearch release <issue> --reason <no_improvement|timeout|infra_failure>` — release a claim.
 - `polyresearch batch-claim --count N` — claim multiple theses at once.
@@ -71,7 +72,7 @@ Always run experiments sequentially (one at a time), even if you claimed multipl
 
 After the experiment, read `.polyresearch/result.json`:
 
-- **If improved**: run `polyresearch attempt <issue> --metric <val> --baseline <val> --observation improved --summary "<text>"`, then commit your changes within the editable surface and run `polyresearch submit <issue>` from the worktree.
+- **If improved**: run `polyresearch attempt <issue> --metric <val> --baseline <val> --observation improved --summary "<text>"`, then run `polyresearch commit <issue>` and `polyresearch submit <issue>` from the worktree.
 - **If no_improvement**: run `polyresearch attempt <issue> --metric <val> --baseline <val> --observation no_improvement --summary "<text>"`, then `polyresearch release <issue> --reason no_improvement`.
 - **If crashed**: run `polyresearch attempt <issue> --metric <val> --baseline <val> --observation crashed --summary "<text>"`, then `polyresearch release <issue> --reason infra_failure`.
 
@@ -96,4 +97,5 @@ Sleep 60 seconds, then go back to step 1.
 
 - Never run `polyresearch sync`, `polyresearch decide`, `polyresearch policy-check`, or `polyresearch generate`. Those are lead-only commands.
 - Never modify files in the project root checkout. Work only in .worktrees/ thesis worktrees.
+- Do not use raw `git add .` or `git commit` for code changes. `polyresearch commit` automatically stages only files within the editable surface.
 - Always record your attempt via `polyresearch attempt` before submitting or releasing. The protocol requires it.

@@ -682,7 +682,7 @@ async fn scenario_contribute_agent_failure() {
 
     assert!(
         result.is_err(),
-        "contribute --once should propagate agent failure"
+        "contribute --once should propagate agent failure: {result:?}"
     );
     let err_msg = result.unwrap_err().to_string();
     assert!(
@@ -696,6 +696,7 @@ async fn scenario_contribute_agent_failure() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "hybrid workflow delegates lead orchestration to the agent; Rust-side loop removed in PR #118"]
 async fn scenario_lead_accept_pr() {
     let _guard = EnvGuard::lock_clean();
     let repo = ScenarioRepo::new("lead-accept");
@@ -824,6 +825,7 @@ async fn scenario_lead_accept_pr() {
 }
 
 #[tokio::test]
+#[ignore = "hybrid workflow delegates lead orchestration to the agent; Rust-side loop removed in PR #118"]
 async fn scenario_lead_reject_non_improvement() {
     let _guard = EnvGuard::lock_clean();
     let repo = ScenarioRepo::new("lead-reject");
@@ -1200,6 +1202,7 @@ async fn scenario_lead_continuous_recovery() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "hybrid workflow delegates lead orchestration to the agent; Rust-side loop removed in PR #118"]
 async fn scenario_lead_closes_conflicting_pr_as_stale() {
     let _guard = EnvGuard::lock_clean();
     let repo = ScenarioRepo::new("lead-conflict");
