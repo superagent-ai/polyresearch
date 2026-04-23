@@ -5536,6 +5536,39 @@ async fn admin_reopen_thesis_reopens_closed_issue() {
 // Category 8: Queue management / generate
 // ===========================================================================
 
+fn make_approved_generate_issue(
+    number: u64,
+    title: &str,
+    lead: &str,
+) -> (Issue, Vec<IssueComment>) {
+    let created_at = chrono::Utc::now();
+    let issue = Issue {
+        number,
+        title: title.to_string(),
+        body: Some("Test thesis body.".to_string()),
+        state: "OPEN".to_string(),
+        labels: vec![Label {
+            name: "thesis".to_string(),
+        }],
+        created_at,
+        closed_at: None,
+        author: Some(Author {
+            login: lead.to_string(),
+        }),
+        url: Some(format!("https://github.com/test/repo/issues/{number}")),
+    };
+    let comments = vec![IssueComment {
+        id: number * 100,
+        body: ProtocolComment::Approval { thesis: number }.render(),
+        user: CommentUser {
+            login: lead.to_string(),
+        },
+        created_at: created_at + chrono::Duration::seconds(1),
+        updated_at: None,
+    }];
+    (issue, comments)
+}
+
 #[tokio::test]
 async fn generate_refuses_at_max_queue_depth() {
     let _guard = NodeIdEnvGuard::lock_clean();
@@ -5572,6 +5605,130 @@ async fn generate_refuses_at_max_queue_depth() {
 }
 
 #[tokio::test]
+async fn generate_rejects_duplicate_title() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("generate-duplicate-title");
+    let (issue, comments) = make_approved_generate_issue(41, "Regex caching optimization", "lead");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(41, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        "lead",
+        true,
+        Commands::Generate(GenerateArgs {
+            title: "Regex caching optimization".to_string(),
+            body: "Body".to_string(),
+        }),
+    );
+
+    let err = commands::generate::run(
+        &ctx,
+        &GenerateArgs {
+            title: "Regex caching optimization".to_string(),
+            body: "Body".to_string(),
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(err.to_string().contains("duplicates existing thesis"));
+    assert!(
+        err.to_string()
+            .contains("#41 (approved): Regex caching optimization")
+    );
+    assert!(
+        mock.created_issues.lock().unwrap().is_empty(),
+        "duplicate title should not create a new issue"
+    );
+}
+
+#[tokio::test]
+async fn generate_rejects_case_insensitive_duplicate() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("generate-case-insensitive-duplicate");
+    let (issue, comments) = make_approved_generate_issue(42, "Regex caching optimization", "lead");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(42, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        "lead",
+        true,
+        Commands::Generate(GenerateArgs {
+            title: "REGEX CACHING OPTIMIZATION".to_string(),
+            body: "Body".to_string(),
+        }),
+    );
+
+    let err = commands::generate::run(
+        &ctx,
+        &GenerateArgs {
+            title: "REGEX CACHING OPTIMIZATION".to_string(),
+            body: "Body".to_string(),
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(err.to_string().contains("duplicates existing thesis"));
+    assert!(
+        mock.created_issues.lock().unwrap().is_empty(),
+        "duplicate title should not create a new issue"
+    );
+}
+
+#[tokio::test]
+async fn generate_rejects_punctuation_variant_duplicate() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("generate-punctuation-duplicate");
+    let (issue, comments) = make_approved_generate_issue(44, "Regex caching optimization", "lead");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(44, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        "lead",
+        true,
+        Commands::Generate(GenerateArgs {
+            title: "regex-caching optimization".to_string(),
+            body: "Body".to_string(),
+        }),
+    );
+
+    let err = commands::generate::run(
+        &ctx,
+        &GenerateArgs {
+            title: "regex-caching optimization".to_string(),
+            body: "Body".to_string(),
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(err.to_string().contains("duplicates existing thesis"));
+    assert!(
+        mock.created_issues.lock().unwrap().is_empty(),
+        "punctuation-only title variation should not create a new issue"
+    );
+}
+
+#[tokio::test]
 async fn generate_succeeds_below_max_queue_depth() {
     let _guard = NodeIdEnvGuard::lock_clean();
     let repo = TestRepo::new("generate-below-max");
@@ -5603,6 +5760,44 @@ async fn generate_succeeds_below_max_queue_depth() {
     )
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn generate_allows_unique_title() {
+    let _guard = NodeIdEnvGuard::lock_clean();
+    let repo = TestRepo::new("generate-unique-title");
+    let (issue, comments) = make_approved_generate_issue(43, "Regex caching optimization", "lead");
+    let mock = Arc::new(MockGitHubClient::new(
+        "lead",
+        vec![issue],
+        HashMap::from([(43, comments)]),
+        vec![],
+        HashMap::new(),
+    ));
+    let ctx = make_ctx(
+        repo.path.clone(),
+        mock.clone(),
+        "lead",
+        false,
+        Commands::Generate(GenerateArgs {
+            title: "SIMD vectorization".to_string(),
+            body: "Body".to_string(),
+        }),
+    );
+
+    commands::generate::run(
+        &ctx,
+        &GenerateArgs {
+            title: "SIMD vectorization".to_string(),
+            body: "Body".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let created = mock.created_issues.lock().unwrap();
+    assert_eq!(created.len(), 1, "unique title should create one issue");
+    assert_eq!(created[0].title, "SIMD vectorization");
 }
 
 #[tokio::test]

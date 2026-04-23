@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use polyresearch::cli::{
-    BootstrapArgs, Cli, Commands, ContributeArgs, IssueArgs, LeadArgs, NodeOverrides, PrArgs,
+    BootstrapArgs, Cli, Commands, ContributeArgs, GenerateArgs, IssueArgs, LeadArgs,
+    NodeOverrides, PrArgs,
 };
 use polyresearch::commands::{self, AppContext};
 use polyresearch::comments::ProtocolComment;
@@ -1021,6 +1022,86 @@ async fn scenario_contribute_agent_failure() {
 // ---------------------------------------------------------------------------
 // Lead scenarios
 // ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn scenario_generate_rejects_duplicate_thesis() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("generate-duplicate");
+    repo.init_git();
+    repo.write_full_setup("lead", "lead-node", "echo noop");
+    repo.commit_all("setup");
+
+    let (issue, comments) = make_approved_thesis(70, "Speed up inference", "lead");
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(70, comments);
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Generate(GenerateArgs {
+            title: "Speed up inference".to_string(),
+            body: "Body".to_string(),
+        }),
+    );
+
+    let err = commands::generate::run(
+        &ctx,
+        &GenerateArgs {
+            title: "Speed up inference".to_string(),
+            body: "Body".to_string(),
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(err.to_string().contains("duplicates existing thesis"));
+    assert!(
+        github.created_issues().is_empty(),
+        "duplicate thesis should not create a new issue"
+    );
+}
+
+#[tokio::test]
+async fn scenario_generate_accepts_unique_thesis() {
+    let _guard = EnvGuard::lock_clean();
+    let repo = ScenarioRepo::new("generate-unique");
+    repo.init_git();
+    repo.write_full_setup("lead", "lead-node", "echo noop");
+    repo.commit_all("setup");
+
+    let (issue, comments) = make_approved_thesis(71, "Speed up inference", "lead");
+    let github = Arc::new(ScenarioGitHub::new("lead"));
+    github.seed_issue(issue);
+    github.seed_issue_comments(71, comments);
+
+    let ctx = make_scenario_ctx(
+        repo.path.clone(),
+        Arc::clone(&github) as Arc<dyn GitHubApi>,
+        "lead",
+        false,
+        Commands::Generate(GenerateArgs {
+            title: "Reduce memory allocation".to_string(),
+            body: "Body".to_string(),
+        }),
+    );
+
+    commands::generate::run(
+        &ctx,
+        &GenerateArgs {
+            title: "Reduce memory allocation".to_string(),
+            body: "Body".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let created = github.created_issues();
+    assert_eq!(created.len(), 1, "unique thesis should create one issue");
+    assert_eq!(created[0].title, "Reduce memory allocation");
+}
 
 #[tokio::test]
 #[ignore = "hybrid workflow delegates lead orchestration to the agent; Rust-side loop removed in PR #118"]
