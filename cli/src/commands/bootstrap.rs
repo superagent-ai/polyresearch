@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -38,13 +39,21 @@ pub async fn run(ctx: &AppContext, args: &BootstrapArgs) -> Result<()> {
         }
     }
 
+    let untracked_before_agent = untracked_files(&repo_root);
+
     spawn_setup_agent(&repo_root, &args.overrides, ctx.cli.verbose, &login)?;
 
     // Post-agent cleanup: re-normalize in case the agent mangled required sections,
     // then commit+push the agent's changes (PROGRAM.md/PREPARE.md with project details).
     normalize_program_md(&repo_root)?;
     normalize_file_endings(&repo_root)?;
-    commit_and_push_setup_files(&repo_root)?;
+    let untracked_after_agent = untracked_files(&repo_root);
+    let mut agent_created_files: Vec<String> = untracked_after_agent
+        .difference(&untracked_before_agent)
+        .cloned()
+        .collect();
+    agent_created_files.sort();
+    commit_and_push_setup_files(&repo_root, &agent_created_files)?;
 
     eprintln!("Bootstrap complete.");
     Ok(())
@@ -386,10 +395,21 @@ fn spawn_setup_agent(
     Ok(())
 }
 
-pub fn commit_and_push_setup_files(repo_root: &Path) -> Result<()> {
+fn untracked_files(repo_root: &Path) -> HashSet<String> {
+    commands::run_git(
+        &repo_root.to_path_buf(),
+        &["status", "--porcelain", "--untracked-files=all"],
+    )
+    .unwrap_or_default()
+    .lines()
+    .filter_map(|line| line.strip_prefix("?? ").map(str::to_string))
+    .collect()
+}
+
+pub fn commit_and_push_setup_files(repo_root: &Path, extra_paths: &[String]) -> Result<()> {
     let repo = repo_root.to_path_buf();
 
-    let setup_paths: Vec<&str> = [
+    let mut setup_paths: Vec<String> = [
         "PROGRAM.md",
         "PREPARE.md",
         "results.tsv",
@@ -398,25 +418,36 @@ pub fn commit_and_push_setup_files(repo_root: &Path) -> Result<()> {
     ]
     .into_iter()
     .filter(|f| repo_root.join(f).exists())
+    .map(str::to_string)
     .collect();
+
+    for path in extra_paths {
+        if repo_root.join(path).exists() && !setup_paths.contains(path) {
+            setup_paths.push(path.clone());
+        }
+    }
+
+    setup_paths.sort();
 
     if setup_paths.is_empty() {
         return Ok(());
     }
 
+    let setup_path_refs: Vec<&str> = setup_paths.iter().map(String::as_str).collect();
+
     let mut reset_args: Vec<&str> = vec!["reset", "--"];
-    reset_args.extend(&setup_paths);
+    reset_args.extend(setup_path_refs.iter().copied());
     let _ = commands::run_git(&repo, &reset_args);
 
     let mut add_args: Vec<&str> = vec!["add", "-f", "--"];
-    add_args.extend(&setup_paths);
+    add_args.extend(setup_path_refs.iter().copied());
     commands::run_git(&repo, &add_args)?;
 
     // Query which of our paths actually have staged changes. This scopes the
     // commit to only setup files (preventing leakage from a dirty index) and
     // avoids "pathspec didn't match" errors on empty directories like .polyresearch/.
     let mut diff_args: Vec<&str> = vec!["diff", "--cached", "--name-only", "--"];
-    diff_args.extend(&setup_paths);
+    diff_args.extend(setup_path_refs.iter().copied());
     let diff_output = commands::run_git(&repo, &diff_args).unwrap_or_default();
     let staged_files: Vec<String> = diff_output
         .lines()
